@@ -33,7 +33,7 @@ mkdir -p "$APP" "$BUILD/Payload"
 
 RUST_LIB=""
 if [ "$EMBED" = "1" ]; then
-  echo "==> [3a/7] 编译 Rust 静态库（$RUST_TARGET）"
+  echo "==> [3a/7] 编译 Rust 静态库（${RUST_TARGET}）"
   [ -d "$SRC/desktop-tauri/src-tauri/server" ] || { echo "找不到上游源码：$SRC"; exit 1; }
   ( cd "$ROOT/ios-ffi" && cargo build --release --target "$RUST_TARGET" )
   RUST_LIB="$ROOT/ios-ffi/target/$RUST_TARGET/release/libagent2api_ios.a"
@@ -43,7 +43,7 @@ else
   echo "==> [3b/7] 纯客户端形态：跳过 Rust"
 fi
 
-echo "==> [4/7] 编译 Swift（arm64 / iOS $MIN_IOS）"
+echo "==> [4/7] 编译 Swift（arm64 / iOS ${MIN_IOS}）"
 SWIFT_FLAGS=(
   -sdk "$SDK"
   -target "arm64-apple-ios$MIN_IOS"
@@ -76,7 +76,7 @@ printf 'APPL????' > "$APP/PkgInfo"
 cp "$ROOT/app/Agent2API/Resources/"*.png "$APP/"
 
 if [ "$EMBED" = "1" ]; then
-  [ -d "$UI_SRC" ] || { echo "找不到面板资源：$UI_SRC（EMBED=1 必填）"; exit 1; }
+  [ -d "$UI_SRC" ] || { echo "找不到面板资源：${UI_SRC}（EMBED=1 必填）"; exit 1; }
   echo "    打入面板 ui/（$(du -sh "$UI_SRC" | cut -f1)）"
   cp -R "$UI_SRC" "$APP/ui"
   # 面板里的 SW 缓存戳按内容算一次，避免 WebView 拿旧缓存
@@ -104,4 +104,4 @@ ls -lh "$BUILD/$APP_NAME.ipa"
 echo
 echo "安装（越狱机）："
 echo "  appinst $BUILD/$APP_NAME.ipa            # AppSync 环境"
-echo "  # 或 TrollStore 里直接点开该 IPA；或 ios-deploy --bundle $APP（开发者证书，7 天）"
+echo "  # 或 TrollStore 里直接点开该 IPA；或 ios-deploy --bundle ${APP}（开发者证书，7 天）"
