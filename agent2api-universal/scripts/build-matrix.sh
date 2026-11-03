@@ -27,7 +27,7 @@ mkdir -p "$OUT"
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-[ -d "$SRC" ] || { echo "找不到上游源码：$SRC（设 SRC=...）"; exit 1; }
+[ -d "$SRC" ] || { echo "找不到上游源码：${SRC}（设 SRC=...）"; exit 1; }
 
 # ── 目标选择 ───────────────────────────────────────────────────────────────
 if [ "$TARGETS" = "auto" ]; then
@@ -124,7 +124,7 @@ build_android_apk() {
 
 # ── 7. iOS · daemon + ipa ──────────────────────────────────────────────────
 build_ios() {
-  log "iOS · daemon(Mach-O) + ipa（$IOS_DIR）"
+  log "iOS · daemon(Mach-O) + ipa（${IOS_DIR}）"
   [ "$(uname -s)" = "Darwin" ] || { echo "  跳过（iOS 只能在 macOS 上编）"; return 0; }
   rustup target add aarch64-apple-ios >/dev/null 2>&1 || true
 
@@ -181,7 +181,7 @@ done
 # Web 静态资源与 docker 总是顺手产出（成本极低，且 Web 端是"零壳"形态）
 case " $TARGETS " in *" web "*) ;; *) build_web ;; esac
 
-log "产物清单（$OUT）"
+log "产物清单（${OUT}）"
 ( cd "$OUT" && find . -maxdepth 2 -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \
    -o -name '*.zip' -o -name '*.apk' -o -name '*.ipa' -o -name 'agent2api-server' \) -exec ls -lh {} \; )
 echo
