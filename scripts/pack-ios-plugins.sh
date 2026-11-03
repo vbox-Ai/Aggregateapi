@@ -54,6 +54,18 @@ mkdir -p "$STAGE" "$OUT"
 echo "==> 解包官方骨架"
 unzip -q "$OFFICIAL" -d "$STAGE"
 
+# 有的包会把内容放在一层目录里（zip 根只有 <id>/pack.json）—— 归一化到 true root
+if [ ! -f "$STAGE/pack.json" ]; then
+  NESTED="$(find "$STAGE" -maxdepth 3 -name pack.json -type f | head -1 || true)"
+  if [ -n "${NESTED}" ]; then
+    STAGE="$(dirname "$NESTED")"
+    echo "    骨架有嵌套目录，实际包根：$STAGE"
+  else
+    echo "❌ 官方包里找不到 pack.json，无法作为骨架" >&2
+    exit 1
+  fi
+fi
+
 echo "==> 改写 pack.json（entry 只留 aarch64-apple-ios，删签名）"
 python3 - "$STAGE/pack.json" "$PACK_ID" "$VERSION" <<'PY'
 import json
