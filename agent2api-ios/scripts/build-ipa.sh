@@ -86,12 +86,16 @@ if [ "$EMBED" = "1" ]; then
   fi
 fi
 
-echo "==> [6/7] 签名（ldid）"
+echo "==> [6/7] 签名"
 if command -v ldid >/dev/null; then
   ldid -S"$ROOT/app/Agent2API/entitlements.plist" "$APP/$APP_NAME"
-  echo "    entitlements 已注入"
+  echo "    ldid 已注入 entitlements（越狱机直接可用）"
+elif command -v codesign >/dev/null; then
+  # CI / 无 ldid 环境：ad-hoc 签名。越狱机（AMFI 被补丁放开）可直接安装运行。
+  codesign --force --timestamp=none --sign - "$APP/$APP_NAME"
+  echo "    ⚠ 无 ldid，已用 codesign ad-hoc 签名（越狱机可用；证书环境请走 xcodebuild）"
 else
-  echo "    ⚠ 没装 ldid：产物是未签名 .app，安装前必须在设备上/用其他工具签"
+  echo "    ⚠ 既无 ldid 也无 codesign：产物未签名，安装前必须自行签名"
 fi
 
 echo "==> [7/7] 打 IPA"
