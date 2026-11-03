@@ -96,19 +96,28 @@ jobs:
         run: |
           set -euo pipefail
           LIB=agent2api-ios/ios-ffi/target/aarch64-apple-ios/release/libagent2api_ios.a
-          EMBED="$EMBED_INPUT"
-          if [ "$EMBED" = "1" ] && [ ! -f "$LIB" ]; then
-            echo "WARN: 静态库缺失，退化为纯客户端壳（EMBED=0）"
-            EMBED=0
-          fi
-          export EMBED
           brew install ldid || true
           chmod +x agent2api-ios/scripts/*.sh
-          ./agent2api-ios/scripts/build-ipa.sh
           mkdir -p "$GITHUB_WORKSPACE/out/ios"
-          # 关键产物必须存在：不再用 `|| echo` 吞失败（前几轮就是被吞成假 success）
+
+          # ── ① 客户端版（EMBED=0）：约 0.13 MB，连本机 daemon 的 127.0.0.1:3065
+          #    这是"装 daemon + 插件"那套架构的界面壳，插件只能在这个架构里跑。
+          echo "=== 构建客户端壳（EMBED=0）==="
+          EMBED=0 ./agent2api-ios/scripts/build-ipa.sh
           test -f agent2api-ios/build/Agent2API.ipa
-          cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/"
+          cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API.ipa"
+
+          # ── ② 独立版（EMBED=1）：约 15 MB，网关跑在 App 进程内，装完即可用、不需要 daemon；
+          #    代价是 App 沙盒不能 exec → 插件不可用。给"只想点开看看"的人用。
+          if [ -f "$LIB" ]; then
+            echo "=== 构建独立版（EMBED=1，网关内嵌）==="
+            EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
+            test -f agent2api-ios/build/Agent2API.ipa
+            cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-standalone.ipa"
+          else
+            echo "WARN: 没有静态库，跳过独立版"
+          fi
+
           cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
           ls -lh "$GITHUB_WORKSPACE/out/ios"
 
@@ -382,6 +391,13 @@ jobs:
           echo "--- main ---"; ls -lh dist/main || true
           echo "--- web ---";  ls -lh dist/web  || true
           test -n "$(ls -A dist/main)" || { echo "main 目录为空：ios/plugins 产物没取到"; exit 1; }
+          # 守护进程安装包（daemon + plist + 安装脚本，手机上 NewTerm 里 bash 一下就行）
+          mkdir -p kit
+          cp dist/main/agent2api-server kit/ 2>/dev/null || true
+          cp dist/main/com.chiyu.agent2api.plist kit/ 2>/dev/null || true
+          cp agent2api-ios/scripts/install-daemon.sh kit/ 2>/dev/null || true
+          ( cd kit && zip -qry ../dist/main/ios-daemon-kit.zip . )
+          ls -lh dist/main
 
       - name: 读取版本号
         id: ver
