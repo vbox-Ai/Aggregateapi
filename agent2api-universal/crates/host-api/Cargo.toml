@@ -1,0 +1,10 @@
+[package]
+name = "host-api"
+version = "0.1.0"
+edition = "2021"
+description = "Agent2API 宿主能力抽象：把 6 个平台的差异压到一张能力表 + 6 个方法"
+license = "MIT"
+
+[dependencies]
+# 刻意零依赖：能力表用手写 JSON，避免把 serde 塞进最底层的 crate
+# （server 侧本来就有 serde_json，需要结构化时在那边做即可）

@@ -1,0 +1,187 @@
+# ── Agent2API · 六端产物矩阵 CI ────────────────────────────────────────────
+# 放在 fork 的仓库根目录： .github/workflows/matrix.yml
+# 仓库布局假设（把本工程两个目录提交进去即可）：
+#   /                 ← 上游 Agent2API 全部内容（含 desktop-tauri/）
+#   /agent2api-universal/   ← 本工程（host-api / ui/host.js / build-matrix.sh）
+#   /agent2api-ios/         ← iOS 兜底壳（daemon plist + Swift 壳 + ipa 脚本）
+#
+# 一次 Run 产出六个 artifact，任一端失败不阻断其它端（fail-fast: false）。
+name: matrix
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # ── Windows：msi + exe ────────────────────────────────────────────────
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - name: 装 tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: 打 msi/exe
+        working-directory: desktop-tauri/src-tauri
+        run: cargo tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
+            desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+
+  # ── macOS：universal dmg + 常驻二进制 ─────────────────────────────────
+  macos:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+      - run: cargo install tauri-cli --version "^2" --locked
+      - name: 打 dmg（universal）
+        working-directory: desktop-tauri/src-tauri
+        run: cargo tauri build --target universal-apple-darwin
+      - name: 常驻二进制
+        working-directory: desktop-tauri/src-tauri
+        run: cargo build -p agent2api-server --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            desktop-tauri/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            desktop-tauri/src-tauri/target/release/agent2api-server
+          if-no-files-found: warn
+
+  # ── Linux：AppImage + deb + 独立二进制 ────────────────────────────────
+  linux:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: 系统依赖（Tauri 2 on Linux）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+                                  patchelf libssl-dev build-essential pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - run: cargo install tauri-cli --version "^2" --locked
+      - name: 打 AppImage/deb
+        working-directory: desktop-tauri/src-tauri
+        run: cargo tauri build
+      - name: headless 二进制
+        working-directory: desktop-tauri/src-tauri
+        run: cargo build -p agent2api-server --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            desktop-tauri/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop-tauri/src-tauri/target/release/bundle/deb/*.deb
+            desktop-tauri/src-tauri/target/release/agent2api-server
+          if-no-files-found: warn
+
+  # ── Android · KSU 模块（root 超集形态）────────────────────────────────
+  android-ksu:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+      - name: 装 NDK r29
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13113456" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> "$GITHUB_ENV"
+      - name: 编 bionic 网关
+        working-directory: desktop-tauri/src-tauri
+        run: |
+          LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER" \
+            cargo build -p agent2api-server --release --target aarch64-linux-android
+      - name: 组模块 zip（替换 bin/agent2api-server）
+        run: |
+          mkdir -p stage && (cd stage && unzip -q ../assets/agent2api-ksu-module.zip)
+          cp desktop-tauri/src-tauri/target/aarch64-linux-android/release/agent2api-server stage/bin/
+          (cd stage && zip -qry ../agent2api-ksu-module-new.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-ksu
+          path: |
+            agent2api-ksu-module-new.zip
+            desktop-tauri/src-tauri/target/aarch64-linux-android/release/agent2api-server
+          if-no-files-found: warn
+
+  # ── iOS：daemon(Mach-O) + IPA ────────────────────────────────────────
+  ios:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: swatinem/rust-cache@v2
+      - name: 编守护进程
+        working-directory: desktop-tauri/src-tauri
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        run: |
+          cargo build -p agent2api-server --release --target aarch64-apple-ios
+          file target/aarch64-apple-ios/release/agent2api-server
+      - name: 编 IPA（兜底壳，EMBED=0 纯客户端 / EMBED=1 内嵌网关）
+        working-directory: agent2api-ios
+        env:
+          EMBED: "0"
+          SRC: ${{ github.workspace }}
+        run: |
+          brew install ldid || true
+          chmod +x scripts/*.sh
+          ./scripts/build-ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: |
+            desktop-tauri/src-tauri/target/aarch64-apple-ios/release/agent2api-server
+            agent2api-ios/build/Agent2API.ipa
+            agent2api-ios/daemon/*.plist
+          if-no-files-found: warn
+
+  # ── Web / Docker：六端里"零壳"的那一端 ───────────────────────────────
+  web-docker:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: 注入宿主能力层到面板
+        run: |
+          cp agent2api-universal/ui/host.js desktop-tauri/src-tauri/ui/host.js
+          for f in desktop-tauri/src-tauri/ui/index.html desktop-tauri/src-tauri/ui/m.html; do
+            [ -f "$f" ] && grep -q 'host.js' "$f" || \
+              sed -i 's|</head>|  <script src="host.js"></script>\n</head>|' "$f"
+          done
+      - name: 打镜像（Web 端后端 + 自托管面板）
+        run: docker build -t agent2api:ci .
+      - name: 导出镜像
+        run: docker save agent2api:ci | gzip > agent2api-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-docker
+          path: |
+            agent2api-image.tar.gz
+            desktop-tauri/src-tauri/ui/host.js
+          if-no-files-found: warn

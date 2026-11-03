@@ -1,0 +1,13 @@
+﻿# 构建产物
+build/
+out/
+target/
+node_modules/
+*.ipa
+*.dmg
+*.msi
+*.AppImage
+*.deb
+Pods/
+.DS_Store
+*.log

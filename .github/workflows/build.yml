@@ -1,0 +1,272 @@
+# ── Aggregateapi · 全平台产物构建 ──────────────────────────────────────────
+# 说明见根目录 README.md。设计取舍：
+#   · 上游（aimod-cc/Agent2API）**不 vendoring**，构建时浅克隆 + 打本仓库的 patch；
+#   · 每个 job 都 continue-on-error：任意一端失败不阻断其它端出包；
+#   · iOS 是主产物（EMBED=1，网关跑在 App 进程内，装上即可用，不依赖 LaunchDaemon）。
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      embed:
+        description: "iOS: 1=内嵌网关(可独立运行) 0=纯客户端壳"
+        default: "1"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  UPSTREAM_REPO: https://github.com/aimod-cc/Agent2API.git
+  IOS_DEPLOY: "15.0"
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════
+  # 1. iOS：网关 Mach-O 守护进程 + 可直接安装的 IPA
+  # ══════════════════════════════════════════════════════════════════════
+  ios:
+    name: iOS (daemon + IPA)
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取上游源码
+        run: git clone --depth 1 "$UPSTREAM_REPO" Agent2API
+
+      - name: 打补丁（插件宿主闸门 + 能力表端点）
+        run: |
+          for p in agent2api-universal/patches/*.diff; do
+            echo "== apply $p"
+            git -C Agent2API apply --3way "$(cd agent2api-universal/patches && pwd)/$(basename "$p")" \
+              || echo "  ⚠ 该补丁未应用（上游已变），继续"
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            Agent2API/desktop-tauri/src-tauri -> target
+            agent2api-ios/ios-ffi -> target
+
+      - name: 编网关守护进程（Mach-O）
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOY }}
+        run: |
+          cargo build -p agent2api-server --release --target aarch64-apple-ios
+          file target/aarch64-apple-ios/release/agent2api-server
+          mkdir -p "$GITHUB_WORKSPACE/out/ios"
+          cp target/aarch64-apple-ios/release/agent2api-server "$GITHUB_WORKSPACE/out/ios/"
+
+      - name: 编 iOS 静态库（供 EMBED=1 的 IPA 使用）
+        working-directory: agent2api-ios/ios-ffi
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOY }}
+        run: cargo build --release --target aarch64-apple-ios
+
+      - name: 打 IPA
+        env:
+          EMBED: ${{ github.event.inputs.embed || '1' }}
+          SRC: ${{ github.workspace }}/Agent2API
+          UI_SRC: ${{ github.workspace }}/Agent2API/desktop-tauri/ui
+        run: |
+          brew install ldid || true
+          chmod +x agent2api-ios/scripts/*.sh
+          ./agent2api-ios/scripts/build-ipa.sh
+          mkdir -p "$GITHUB_WORKSPACE/out/ios"
+          cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/" || true
+          cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
+          ls -lh "$GITHUB_WORKSPACE/out/ios"
+
+      - name: 上传 iOS 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: out/ios/**
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 2. macOS：dmg（Tauri 2，universal）
+  # ══════════════════════════════════════════════════════════════════════
+  macos:
+    name: macOS (dmg)
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 "$UPSTREAM_REPO" Agent2API
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Agent2API/desktop-tauri/src-tauri -> target
+      - run: cargo install tauri-cli --version "^2" --locked
+      - name: 打 dmg
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        run: cargo tauri build --target universal-apple-darwin
+      - name: 常驻二进制
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        run: cargo build -p agent2api-server --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            Agent2API/desktop-tauri/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            Agent2API/desktop-tauri/src-tauri/target/release/agent2api-server
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 3. Windows：msi + exe
+  # ══════════════════════════════════════════════════════════════════════
+  windows:
+    name: Windows (msi/exe)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 $env:UPSTREAM_REPO Agent2API
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Agent2API/desktop-tauri/src-tauri -> target
+      - run: cargo install tauri-cli --version "^2" --locked
+      - name: 打 msi/exe
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        run: cargo tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            Agent2API/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
+            Agent2API/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 4. Linux：AppImage + deb + headless 二进制
+  # ══════════════════════════════════════════════════════════════════════
+  linux:
+    name: Linux (AppImage/deb)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 "$UPSTREAM_REPO" Agent2API
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+                                  patchelf libssl-dev build-essential pkg-config file
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Agent2API/desktop-tauri/src-tauri -> target
+      - run: cargo install tauri-cli --version "^2" --locked
+      - name: 打 AppImage/deb
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        run: cargo tauri build
+      - name: headless 二进制
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        run: cargo build -p agent2api-server --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            Agent2API/desktop-tauri/src-tauri/target/release/bundle/appimage/*.AppImage
+            Agent2API/desktop-tauri/src-tauri/target/release/bundle/deb/*.deb
+            Agent2API/desktop-tauri/src-tauri/target/release/agent2api-server
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 5. Android · KernelSU 模块 zip（root 超集形态：可跑插件）
+  #    用 bionic 二进制替换模块内 glibc 二进制，并把 supervisor 的
+  #    glibc loader 调用改回直接执行（模块早期版本就是 bionic 形态）
+  # ══════════════════════════════════════════════════════════════════════
+  android-ksu:
+    name: Android (KSU zip)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 "$UPSTREAM_REPO" Agent2API
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Agent2API/desktop-tauri/src-tauri -> target
+      - name: 装 NDK r29
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13113456" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> "$GITHUB_ENV"
+      - name: 编 bionic 网关
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        run: |
+          LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER" \
+            cargo build -p agent2api-server --release --target aarch64-linux-android
+      - name: 重打模块 zip
+        run: |
+          set -e
+          mkdir -p stage out/android
+          unzip -q assets/agent2api-ksu-module.zip -d stage
+          cp Agent2API/desktop-tauri/src-tauri/target/aarch64-linux-android/release/agent2api-server stage/bin/agent2api-server
+          chmod 755 stage/bin/agent2api-server
+          # bionic 形态：不再经 glibc loader
+          python3 - <<'PY'
+          import pathlib, re
+          p = pathlib.Path('stage/supervisor.sh')
+          s = p.read_text(encoding='utf-8')
+          s2 = re.sub(r'^\s*"\$LOADER" --argv0 agent2api-server --library-path "\$GLIBC" "\$BIN"',
+                      '  "$BIN"', s, flags=re.M)
+          if s2 == s:
+              print('⚠ supervisor.sh 未匹配到 loader 调用行，请人工确认')
+          p.write_text(s2, encoding='utf-8')
+          print('supervisor.sh 已改为直接执行 bionic 二进制')
+          PY
+          (cd stage && zip -qry ../out/android/agent2api-ksu-module.zip .)
+          ls -lh out/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-ksu
+          path: out/android/**
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 6. Web / Docker：六端里"零壳"的那一端（自托管面板 + PWA）
+  # ══════════════════════════════════════════════════════════════════════
+  web:
+    name: Web (docker + 面板)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 "$UPSTREAM_REPO" Agent2API
+      - name: 注入宿主能力层到面板
+        run: |
+          cp agent2api-universal/ui/host.js Agent2API/desktop-tauri/ui/host.js
+          for f in Agent2API/desktop-tauri/ui/index.html Agent2API/desktop-tauri/ui/m.html; do
+            if [ -f "$f" ] && ! grep -q 'host.js' "$f"; then
+              sed -i 's|</head>|  <script src="host.js"></script>\n</head>|' "$f"
+            fi
+          done
+      - name: 打镜像
+        run: docker build -t agent2api:ci Agent2API
+      - name: 导出
+        run: |
+          mkdir -p out/web
+          docker save agent2api:ci | gzip > out/web/agent2api-image.tar.gz
+          tar -C Agent2API/desktop-tauri -czf out/web/agent2api-ui.tar.gz ui
+          ls -lh out/web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: out/web/**
+          if-no-files-found: warn

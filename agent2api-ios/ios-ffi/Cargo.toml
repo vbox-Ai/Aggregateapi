@@ -1,0 +1,25 @@
+[package]
+name = "agent2api-ios"
+version = "0.1.0"
+edition = "2021"
+description = "Agent2API 网关的 iOS staticlib 封装（形态 A2：进程内跑网关，免 launchd 守护）"
+license-file = "../../LICENSE"
+
+[lib]
+name = "agent2api_ios"
+# 只出 staticlib：iOS 不允许 App exec 外部可执行体，网关必须以库的形式进 App 进程
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# 网关本体：直接依赖上游 workspace 里的独立 crate（不含 tauri / 不含 Windows 分支）
+# 路径按你的 clone 位置改：默认假设本目录位于 agent2api-ios/ios-ffi
+agent2api-server = { path = "../../Agent2API/desktop-tauri/src-tauri/server" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+serde_json = "1"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

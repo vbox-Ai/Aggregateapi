@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ── 这个 plist 承担 Android 模块里三个脚本的全部职责 ────────────
+	     service.sh / boot-completed.sh → RunAtLoad
+	     supervisor.sh（崩溃自恢复 + 退避） → KeepAlive{SuccessfulExit=false} + ThrottleInterval
+	     control.sh status/restart        → launchctl kickstart -k / print
+	     ============================================================ -->
+	<key>Label</key>
+	<string>com.chiyu.agent2api</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/var/jb/usr/local/bin/agent2api-server</string>
+	</array>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- 数据目录：与 App 共享（App 只读面板，不写库） -->
+		<key>AGENT2API_PROXY_HOME</key>
+		<string>/var/mobile/Library/agent2api</string>
+		<key>HOME</key>
+		<string>/var/mobile/Library/agent2api</string>
+		<!-- 面板静态目录：ui/ 整套拷到 /var/jb/usr/local/share/agent2api/ui -->
+		<key>AGENT2API_UI_DIR</key>
+		<string>/var/jb/usr/local/share/agent2api/ui</string>
+		<!-- 只监听回环：面板/API 都从本机 App 或 SSH 隧道访问 -->
+		<key>AGENT2API_HOST</key>
+		<string>127.0.0.1</string>
+		<key>AGENT2API_PROXY_PORT</key>
+		<string>3065</string>
+		<key>AGENT2API_CAPTCHA_ENABLED</key>
+		<string>1</string>
+		<!-- 必须为 0：自更新会下载 glibc ELF 覆盖自身，iOS 上直接砖 -->
+		<key>AGENT2API_SELF_UPDATE</key>
+		<string>0</string>
+		<key>AGENT2API_VERBOSE</key>
+		<string>0</string>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- 崩溃自恢复：只有「非正常退出」才重启，等价 supervisor.sh 的退避循环 -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<!-- 退避下限（launchd 原生节流，取代 supervisor.sh 的 3s→60s 指数退避） -->
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<!-- 以 mobile 身份跑：面板写 SQLite/WAL、account.key、日志后，
+	     App（同为 mobile）能直接读；3065 > 1024 不需要 root 绑端口 -->
+	<key>UserName</key>
+	<string>mobile</string>
+
+	<key>StandardOutPath</key>
+	<string>/var/mobile/Library/agent2api/server.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/mobile/Library/agent2api/server.log</string>
+
+	<key>AbandonProcessGroup</key>
+	<false/>
+
+	<!-- 不做 ResourceUsage 限制：网关要开几十条出站长连接 -->
+	<key>LowPriorityIO</key>
+	<false/>
+</dict>
+</plist>

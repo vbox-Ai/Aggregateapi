@@ -1,0 +1,22 @@
+{
+  "name": "@agent2api/capacitor-a2a-login",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent2API 隔离登录容器（iOS/Android 共用一份接口，iOS 用 nonPersistent WKWebView 实现）",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": ["dist/", "ios/Sources/", "Package.swift", "*.podspec"],
+  "peerDependencies": {
+    "@capacitor/core": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^8.5.3",
+    "typescript": "^5.9.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  }
+}

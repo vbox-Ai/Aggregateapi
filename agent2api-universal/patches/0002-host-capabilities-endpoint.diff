@@ -1,0 +1,219 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/api/host.rs b/desktop-tauri/src-tauri/server/src/server/api/host.rs
+new file mode 100644
+index 0000000..a0b8426
+--- /dev/null
++++ b/desktop-tauri/src-tauri/server/src/server/api/host.rs
+@@ -0,0 +1,184 @@
++//! 宿主能力表：`GET /api/host`（免鉴权）。
++//!
++//! ── 这个端点解决什么问题 ────────────────────────────────────
++//! 同一份面板要跑在六种宿主里：Tauri 桌面壳、Capacitor（Android/iOS）、
++//! KSU WebUI、越狱机的 WKWebView、纯浏览器。它们的**能力不一样**，
++//! 但现在界面只能靠 `navigator.userAgent` / `window.ksu` 之类的猜测去判断，
++//! 于是每加一端就要改一次 UI，且猜错的后果是"点了才报错"。
++//!
++//! 把能力做成一个**后端可查询的端点**之后，界面变成能力驱动：
++//!   · 能力不足的入口**不渲染**（`data-cap-require="plugins"`）；
++//!   · 用户可能点到的入口给一句可行动的话（`A2AHost.guard()`）；
++//!   · 绝不静默假成功（沿用 `web_shim.rs` 的既有原则）。
++//!
++//! ── 为什么挂 public（免鉴权）──
++//! 它只描述"这台机器能做什么"，不含任何账号、Key、路径或版本指纹以外的信息；
++//! 而登录页在**登录之前**就需要它来决定要不要渲染某个入口。挂 protected 会让
++//! 首屏永远拿到 401，进而退回"猜 UA"的老路。
++//!
++//! ── 与 `crates/host-api` 的关系 ─────────────────────────────
++//! 独立 crate 版本（`agent2api-universal/crates/host-api`）是同一份口径的
++//! 类型化实现；本文件刻意不依赖它，好处是这一个补丁**零新增依赖、零模块改动**
++//! 就能合入。等 host-api 进 workspace 后，把 `exec_allowed` / 平台推断换成
++//! `host_api::Capabilities::for_platform(..)` 即可，字段名逐字一致。
++//!
++//! ── 开关口径（与 plugin_host 的闸门严格一致）─────────────────
++//! · `AGENT2API_NO_EXEC=1`     强制"不能 exec"（容器/CI 做无插件演示）
++//! · `AGENT2API_ALLOW_EXEC=1`  强制"能 exec"（iOS 越狱 daemon 必须显式声明）
++//! · 都未设 → 非 iOS/Web 视为可 exec；iOS/Web 视为不可
++//!
++//! 三个读取点必须同一口径，否则会出现"UI 说能用、后端拒了"的割裂：
++//!   1. `core/plugin_host/lifecycle.rs` 的 spawn 闸门（补丁 0001）
++//!   2. 本端点
++//!   3. 壳注入的 `window.__A2A_HOST__`（只做首屏加速，最终以本端点为准）
++
++use axum::extract::State;
++use axum::response::Response;
++use serde_json::{json, Value};
++
++use crate::server::http::ok_json;
++use crate::server::ServerState;
++
++/// GET /api/host —— 本端能力表
++pub async fn get_host(State(_state): State<ServerState>) -> Response {
++    ok_json(host_json())
++}
++
++fn env_flag(key: &str) -> Option<bool> {
++    std::env::var(key)
++        .ok()
++        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
++}
++
++/// 平台标识：显式 env > 编译期 target
++fn platform() -> String {
++    if let Ok(value) = std::env::var("AGENT2API_HOST_PLATFORM") {
++        let trimmed = value.trim();
++        if !trimmed.is_empty() {
++            return trimmed.to_string();
++        }
++    }
++    let detected = if cfg!(target_os = "windows") {
++        "windows"
++    } else if cfg!(target_os = "ios") {
++        "ios"
++    } else if cfg!(target_os = "macos") {
++        "macos"
++    } else if cfg!(target_os = "android") {
++        "android"
++    } else if cfg!(target_arch = "wasm32") {
++        "web"
++    } else {
++        "linux"
++    };
++    detected.to_string()
++}
++
++/// 形态：独立常驻进程 / 壳内嵌 / 纯浏览器
++fn form() -> String {
++    std::env::var("AGENT2API_HOST_FORM")
++        .ok()
++        .map(|value| value.trim().to_string())
++        .filter(|value| !value.is_empty())
++        .unwrap_or_else(|| "daemon".to_string())
++}
++
++/// 能否启动外部进程（插件、sidecar、runtime-info 共用这一个判定）
++fn exec_allowed(platform: &str) -> bool {
++    if env_flag("AGENT2API_NO_EXEC").unwrap_or(false) {
++        return false;
++    }
++    if env_flag("AGENT2API_ALLOW_EXEC").unwrap_or(false) {
++        return true;
++    }
++    !matches!(platform, "ios" | "web")
++}
++
++/// 能力表（字段名与 `ui/host.js`、`mobile/src/host.ts` 逐字一致）
++pub fn host_json() -> Value {
++    let platform = platform();
++    let form = form();
++    let browser = form == "browser" || platform == "web";
++    let desktop = matches!(platform.as_str(), "windows" | "macos" | "linux");
++    let exec = exec_allowed(&platform);
++
++    let secure_store = match platform.as_str() {
++        "windows" => "dpapi",
++        "macos" | "ios" => "keychain",
++        "web" => "browser",
++        "linux" | "android" => "file",
++        _ => "none",
++    };
++
++    json!({
++        "platform": platform,
++        "form": form,
++        "version": env!("CARGO_PKG_VERSION"),
++        "caps": {
++            // 能不能起子进程：插件 / sidecar / runtime-info 的总闸
++            "execHelpers": exec,
++            // 插件（provider pack）可用性：与 exec 同口径，
++            // 是否"装了插件"由 /api/plugins 另行回答，两者不要混为一谈
++            "plugins": exec,
++            // mihomo sidecar 只有桌面三端随附
++            "sidecar": exec && desktop,
++            // 一次性 cookie 罐：移动壳/桌面壳都给，纯浏览器只能新标签 + 轮询
++            "isolatedLogin": !browser,
++            "fileDialogs": !browser,
++            "notifications": !browser,
++            // 原地自更新只在桌面三端成立（iOS/Android 走重装，KSU 走重刷 zip）
++            "selfUpdate": desktop,
++            // iOS 的 system-configuration 不可用；浏览器没有系统代理可跟随
++            "systemProxy": !(browser || platform == "ios"),
++            "portChange": !browser,
++            "loopbackBind": !browser,
++            "secureStore": secure_store,
++        },
++        "ui": {
++            "mobileFirst": !desktop,
++            "defaultRoute": if desktop { "/" } else { "/m" },
++        },
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn ios_defaults_to_no_exec_but_has_login() {
++        std::env::set_var("AGENT2API_HOST_PLATFORM", "ios");
++        std::env::remove_var("AGENT2API_ALLOW_EXEC");
++        std::env::remove_var("AGENT2API_NO_EXEC");
++        let value = host_json();
++        assert_eq!(value["platform"], "ios");
++        assert_eq!(value["caps"]["execHelpers"], false);
++        assert_eq!(value["caps"]["plugins"], false);
++        assert_eq!(value["caps"]["isolatedLogin"], true);
++        assert_eq!(value["caps"]["selfUpdate"], false);
++        std::env::remove_var("AGENT2API_HOST_PLATFORM");
++    }
++
++    #[test]
++    fn allow_exec_flag_reenables_plugins() {
++        std::env::set_var("AGENT2API_HOST_PLATFORM", "ios");
++        std::env::set_var("AGENT2API_ALLOW_EXEC", "1");
++        let value = host_json();
++        assert_eq!(value["caps"]["execHelpers"], true);
++        assert_eq!(value["caps"]["plugins"], true);
++        // sidecar 仍只在桌面三端
++        assert_eq!(value["caps"]["sidecar"], false);
++        std::env::remove_var("AGENT2API_ALLOW_EXEC");
++        std::env::remove_var("AGENT2API_HOST_PLATFORM");
++    }
++
++    #[test]
++    fn browser_cannot_bind_or_exec() {
++        std::env::set_var("AGENT2API_HOST_PLATFORM", "web");
++        let value = host_json();
++        assert_eq!(value["caps"]["loopbackBind"], false);
++        assert_eq!(value["caps"]["plugins"], false);
++        assert_eq!(value["ui"]["defaultRoute"], "/m");
++        std::env::remove_var("AGENT2API_HOST_PLATFORM");
++    }
++}
+diff --git a/desktop-tauri/src-tauri/server/src/server/api/mod.rs b/desktop-tauri/src-tauri/server/src/server/api/mod.rs
+index 0948864..5fc6548 100644
+--- a/desktop-tauri/src-tauri/server/src/server/api/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/mod.rs
+@@ -94,6 +94,8 @@ mod date_range;
+ // 「handler 被 axum 取消时补 408 终态」这一件事的完整封装，见该文件模块头）
+ pub mod disconnect_guard;
+ pub mod health;
++// 宿主能力表（GET /api/host）：界面据此决定渲染什么、灰掉什么，见该文件模块头
++pub mod host;
+ // 「从其他工具导入」的扫描接口（当前来源：cc-switch；存储读取见
+ // `core::import_ccswitch`）
+ pub mod import_sources;
+diff --git a/desktop-tauri/src-tauri/server/src/server/http.rs b/desktop-tauri/src-tauri/server/src/server/http.rs
+index c7bdf69..e69e57e 100644
+--- a/desktop-tauri/src-tauri/server/src/server/http.rs
++++ b/desktop-tauri/src-tauri/server/src/server/http.rs
+@@ -116,6 +116,11 @@ pub fn panel_router(state: ServerState) -> Router {
+         // any 而不是 get：探针要与登录**同动词**（POST）—— 有的中转按方法
+         // 区别对待 Set-Cookie，只测 GET 会误报「cookie 通道完好」
+         .route("/api/panel/cookie-probe", any(api::panel::cookie_probe))
++        // 宿主能力表：界面在**登录之前**就要知道本端能干什么
++        // （要不要渲染插件页、订阅内核、桌面专有入口），因此必须挂 public。
++        // 它只描述能力，不含账号/Key/路径；字段口径与 ui/host.js、
++        // mobile/src/host.ts、core/plugin_host 的 exec 闸门严格一致。
++        .route("/api/host", get(api::host::get_host))
+         // CatPaw 网页登录的回调路由已随实现搬到插件：它的登录是**双通道**
+         // （插件自己 bind 的 loopback 回调 + 上游 poll-token 兜底），回调落在
+         // 插件进程的端口上，不再经过网关的 `/api/session/login/*`。

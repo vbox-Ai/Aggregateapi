@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ldid 签名的 App：这四个是「装得上、跑得起、能被调试」的最小集合 -->
+	<key>application-identifier</key>
+	<string>com.chiyu.agent2api</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>CHIYU000000</string>
+	<key>get-task-allow</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>com.chiyu.agent2api</string>
+	</array>
+
+	<!-- ── 可选（按你的越狱形态取舍）──────────────────────────────
+	     platform-application：只有 CoreTrust / TrollStore 那套签名能生效，
+	     用 AppSync + ldid 装时加了也无害（AMFI 由越狱补丁放开）。
+	     no-sandbox：想直接读 /var/jb 下的 ui/ 或守护进程日志时加；
+	     不开也能用——面板走 HTTP，不碰文件。 -->
+	<key>platform-application</key>
+	<true/>
+	<!--
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<key>com.apple.private.skip-library-validation</key>
+	<true/>
+	-->
+</dict>
+</plist>
