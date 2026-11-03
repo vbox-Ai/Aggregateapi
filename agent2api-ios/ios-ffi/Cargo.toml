@@ -7,8 +7,13 @@ license-file = "../../LICENSE"
 
 [lib]
 name = "agent2api_ios"
-# 只出 staticlib：iOS 不允许 App exec 外部可执行体，网关必须以库的形式进 App 进程
+# staticlib：EMBED=1 时把网关塞进 App 进程（形态 A2）
 crate-type = ["staticlib", "rlib"]
+
+# daemon：形态 A1 的 launchd 常驻入口（无沙盒进程，能 spawn 插件）
+[[bin]]
+name = "agent2api-daemon"
+path = "src/bin/agent2api-daemon.rs"
 
 [dependencies]
 # 网关本体：直接依赖上游 workspace 里的独立 crate（不含 tauri / 不含 Windows 分支）

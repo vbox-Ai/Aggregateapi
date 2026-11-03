@@ -1,0 +1,45 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
+index b39a4ca..63ed764 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
+@@ -231,12 +231,17 @@ impl InstalledTransaction {
+     }
+ 
+     pub fn rollback(self) -> Result<(), String> {
+-        install::remove_dir_retrying(&self.version_dir)
+-            .map_err(|error| format!("移除未能启动的插件文件失败，旧版本备份已保留：{error}"))?;
+-        if let Some(backup) = self.backup {
+-            install::move_dir_retrying(&backup, &self.version_dir)
+-                .map_err(|error| format!("恢复插件文件失败，旧版本备份已保留：{error}"))?;
+-        }
+-        self.previous_registry.save().map_err(|error| format!("恢复插件登记失败：{error}"))
++        // ── 本构建：禁用自动回退（按使用方要求）──────────────────────
++        // 插件启动失败时**保留现场**：不删新版本文件、不还原旧版本登记，
++        // 只把失败原因写进日志。理由：
++        //   · 自动回退会把「失败原因」一起抹掉，排查时看不到版本差异；
++        //   · 现场保留后，重装一个修好的包即可恢复，不需要系统级回滚；
++        //   · 错误原文由 `process::event("error", …)` 与 stderr 抓取负责，
++        //     这里只补一条"为什么不回退"的说明。
++        crate::server::logging::log(
++            "[Plugin]",
++            "插件启动失败：已禁用自动回退，保留当前版本与文件，请查看日志中的错误原文",
++        );
++        Ok(())
+     }
+ }
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
+index 40db6e7..fce12a8 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
+@@ -12,8 +12,9 @@ use crate::server::core::update::client::{
+ };
+ use crate::server::core::update::{compare_versions, is_prerelease_version, source};
+ 
+-pub const INDEX_REPO: &str = "Agent2plugin/Agent2plugin";
+-pub const FALLBACK_REPO: &str = "Agent2Builder/agent2api-providers-releases";
++// 本构建：索引与发布都指向我们自己的仓库（index.json 放仓库根，资产发 Release）
++pub const INDEX_REPO: &str = "vbox-Ai/Aggregateapi";
++pub const FALLBACK_REPO: &str = "vbox-Ai/Aggregateapi";
+ const GITHUB_API: &str = "https://api.github.com";
+ const QUERY_TIMEOUT_MS: u64 = 30_000;
+ 

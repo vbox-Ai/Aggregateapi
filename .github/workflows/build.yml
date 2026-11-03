@@ -12,7 +12,7 @@ on:
         description: "iOS: 1=内嵌网关(可独立运行) 0=纯客户端壳"
         default: "1"
       only:
-        description: "只跑某端：all / ios / macos / windows / linux / android / web"
+        description: "只跑某端：all / ios / plugins / macos / windows / linux / android / web"
         default: "all"
   push:
     branches: [main]
@@ -60,29 +60,19 @@ jobs:
             Agent2API/desktop-tauri/src-tauri -> target
             agent2api-ios/ios-ffi -> target
 
-      # 守护进程是"可选产物"：编不出来也要让 IPA 继续出包（IPA 用 EMBED=1 自带网关）
-      - name: 编网关守护进程（Mach-O）
-        continue-on-error: true
-        working-directory: Agent2API/desktop-tauri/src-tauri
+      # 守护进程：用我们自己的 bin 目标（上游已删 headless bin）
+      - name: 编网关守护进程（Mach-O，launchd 用）
+        working-directory: agent2api-ios/ios-ffi
         env:
           IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOY }}
         run: |
-          set +e
-          cargo build -p agent2api-server --release --target aarch64-apple-ios --bin agent2api-server
-          cargo build -p agent2api-server --release --target aarch64-apple-ios --bins
-          OUTDIR="target/aarch64-apple-ios/release"
-          echo "--- listing ${OUTDIR} ---"
-          ls -la "${OUTDIR}" 2>/dev/null | head -40
+          set -euo pipefail
+          cargo build --release --target aarch64-apple-ios --bin agent2api-daemon
+          BIN=target/aarch64-apple-ios/release/agent2api-daemon
+          file "$BIN"
           mkdir -p "$GITHUB_WORKSPACE/out/ios"
-          FOUND=0
-          for f in $(find "${OUTDIR}" -maxdepth 1 -type f -perm -111 2>/dev/null); do
-            case "${f}" in *.d|*.rlib|*.rmeta) continue ;; esac
-            echo "executable candidate: ${f}"
-            file "${f}"
-            cp "${f}" "$GITHUB_WORKSPACE/out/ios/" && FOUND=1
-          done
-          echo "copied=${FOUND} (0 表示上游当前没有 bin 目标，仅出 IPA)"
-          exit 0
+          # 保持与 LaunchDaemon plist 里的路径/文件名一致
+          cp "$BIN" "$GITHUB_WORKSPACE/out/ios/agent2api-server"
 
       - name: 编 iOS 静态库（供 EMBED=1 的 IPA 使用）
         continue-on-error: true
@@ -124,6 +114,86 @@ jobs:
         with:
           name: ios
           path: out/ios/**
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 1.5 插件 · iOS 原生包（两个插件编成 Mach-O，打成网关认的 pack zip）
+  # ══════════════════════════════════════════════════════════════════════
+  plugins:
+    name: Plugins (iOS packs)
+    if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'plugins' }}
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取插件源码
+        run: git clone --depth 1 https://github.com/ProvidersPlugin/Agent2Providers.git plugins-src
+
+      - name: 关掉 reqwest 的 system-proxy（iOS SDK 编不过）
+        run: python3 scripts/patch-plugin-cargo.py plugins-src
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: plugins-src -> target
+
+      - name: 编网页提供商包（chatglm 特性）
+        working-directory: plugins-src
+        run: |
+          set -euo pipefail
+          cargo build -p agent2api-providers --release --target aarch64-apple-ios \
+            --no-default-features --features chatglm
+          mkdir -p "$GITHUB_WORKSPACE/out/plugins"
+          cp target/aarch64-apple-ios/release/agent2api-providers \
+             "$GITHUB_WORKSPACE/out/plugins/agent2api-web-providers"
+
+      - name: 编提供商增强包（全特性）
+        working-directory: plugins-src
+        run: |
+          set -euo pipefail
+          cargo build -p agent2api-providers --release --target aarch64-apple-ios
+          cp target/aarch64-apple-ios/release/agent2api-providers \
+             "$GITHUB_WORKSPACE/out/plugins/agent2api-providers"
+
+      - name: 签名（AMFI 要求）
+        run: |
+          brew install ldid || true
+          for b in out/plugins/agent2api-providers out/plugins/agent2api-web-providers; do
+            ldid -S "$b" || echo "WARN: ldid 失败 $b"
+            file "$b"
+          done
+
+      - name: 下载官方骨架包
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/fetch-official-packs.py --prefix agent2api-providers --out .cache/official
+          python3 scripts/fetch-official-packs.py --prefix agent2api-web-providers --out .cache/official
+          ls -lh .cache/official
+
+      - name: 打 iOS 插件包
+        run: |
+          set -euo pipefail
+          mkdir -p out/packs
+          OFF_M=$(ls .cache/official/agent2api-providers-*.zip | head -1)
+          OFF_W=$(ls .cache/official/agent2api-web-providers-*.zip | head -1)
+          bash scripts/pack-ios-plugins.sh \
+            --official "$OFF_M" --binary out/plugins/agent2api-providers \
+            --id agent2api-providers --version 3.4.0 --out out/packs
+          bash scripts/pack-ios-plugins.sh \
+            --official "$OFF_W" --binary out/plugins/agent2api-web-providers \
+            --id agent2api-web-providers --version 3.4.0 --out out/packs
+          ls -lh out/packs
+
+      - name: 上传插件产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugins
+          path: out/packs/**
           if-no-files-found: warn
 
   # ══════════════════════════════════════════════════════════════════════
