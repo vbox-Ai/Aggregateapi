@@ -33,12 +33,17 @@ mkdir -p "$APP" "$BUILD/Payload"
 
 RUST_LIB=""
 if [ "$EMBED" = "1" ]; then
-  echo "==> [3a/7] 编译 Rust 静态库（${RUST_TARGET}）"
-  [ -d "$SRC/desktop-tauri/src-tauri/server" ] || { echo "找不到上游源码：$SRC"; exit 1; }
-  ( cd "$ROOT/ios-ffi" && cargo build --release --target "$RUST_TARGET" )
-  RUST_LIB="$ROOT/ios-ffi/target/$RUST_TARGET/release/libagent2api_ios.a"
+  RUST_LIB="$ROOT/ios-ffi/target/${RUST_TARGET}/release/libagent2api_ios.a"
+  if [ -f "$RUST_LIB" ]; then
+    # CI 里上一步已经编好了：直接用，别再花 2~5 分钟重编一遍
+    echo "==> [3a/7] 复用已有 Rust 静态库"
+  else
+    echo "==> [3a/7] 编译 Rust 静态库（${RUST_TARGET}）"
+    [ -d "$SRC/desktop-tauri/src-tauri/server" ] || { echo "找不到上游源码：$SRC"; exit 1; }
+    ( cd "$ROOT/ios-ffi" && cargo build --release --target "$RUST_TARGET" )
+  fi
   [ -f "$RUST_LIB" ] || { echo "静态库没产出：$RUST_LIB"; exit 1; }
-  echo "    $RUST_LIB"
+  echo "    $RUST_LIB ($(du -h "$RUST_LIB" | cut -f1))"
 else
   echo "==> [3b/7] 纯客户端形态：跳过 Rust"
 fi
