@@ -101,11 +101,11 @@ jobs:
           SRC: ${{ github.workspace }}/Agent2API
           UI_SRC: ${{ github.workspace }}/Agent2API/desktop-tauri/ui
         run: |
-          set +e
+          set -euo pipefail
           LIB=agent2api-ios/ios-ffi/target/aarch64-apple-ios/release/libagent2api_ios.a
           EMBED="$EMBED_INPUT"
           if [ "$EMBED" = "1" ] && [ ! -f "$LIB" ]; then
-            echo "WARN: 静态库缺失 → 退化为纯客户端壳（EMBED=0）"
+            echo "WARN: 静态库缺失，退化为纯客户端壳（EMBED=0）"
             EMBED=0
           fi
           export EMBED
@@ -113,10 +113,11 @@ jobs:
           chmod +x agent2api-ios/scripts/*.sh
           ./agent2api-ios/scripts/build-ipa.sh
           mkdir -p "$GITHUB_WORKSPACE/out/ios"
-          cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/" || echo "WARN: IPA 未产出"
+          # 关键产物必须存在：不再用 `|| echo` 吞失败（前几轮就是被吞成假 success）
+          test -f agent2api-ios/build/Agent2API.ipa
+          cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/"
           cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
           ls -lh "$GITHUB_WORKSPACE/out/ios"
-          exit 0
 
       - name: 上传 iOS 产物
         uses: actions/upload-artifact@v4
