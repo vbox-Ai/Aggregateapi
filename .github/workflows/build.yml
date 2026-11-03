@@ -68,19 +68,20 @@ jobs:
           IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOY }}
         run: |
           set +e
-          # --bins 显式点名 bin 目标：单独 -p 时实测只编了 lib（见 run #2 日志）
+          cargo build -p agent2api-server --release --target aarch64-apple-ios --bin agent2api-server
           cargo build -p agent2api-server --release --target aarch64-apple-ios --bins
-          echo "--- release 目录 ---"
-          ls -la target/aarch64-apple-ios/release/ 2>/dev/null | head -40
-          BIN=target/aarch64-apple-ios/release/agent2api-server
-          if [ -f "$BIN" ]; then
-            file "$BIN"
-            mkdir -p "$GITHUB_WORKSPACE/out/ios"
-            cp "$BIN" "$GITHUB_WORKSPACE/out/ios/"
-            echo "OK: 守护进程已产出"
-          else
-            echo "WARN: 未产出 agent2api-server（bin 目标可能被上游 feature 门控），跳过 daemon 产物"
-          fi
+          OUTDIR="target/aarch64-apple-ios/release"
+          echo "--- listing ${OUTDIR} ---"
+          ls -la "${OUTDIR}" 2>/dev/null | head -40
+          mkdir -p "$GITHUB_WORKSPACE/out/ios"
+          FOUND=0
+          for f in $(find "${OUTDIR}" -maxdepth 1 -type f -perm -111 2>/dev/null); do
+            case "${f}" in *.d|*.rlib|*.rmeta) continue ;; esac
+            echo "executable candidate: ${f}"
+            file "${f}"
+            cp "${f}" "$GITHUB_WORKSPACE/out/ios/" && FOUND=1
+          done
+          echo "copied=${FOUND} (0 表示上游当前没有 bin 目标，仅出 IPA)"
           exit 0
 
       - name: 编 iOS 静态库（供 EMBED=1 的 IPA 使用）
