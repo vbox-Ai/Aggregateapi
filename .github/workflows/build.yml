@@ -395,7 +395,7 @@ jobs:
           mkdir -p kit
           cp dist/main/agent2api-server kit/ 2>/dev/null || true
           cp dist/main/com.chiyu.agent2api.plist kit/ 2>/dev/null || true
-          cp agent2api-ios/scripts/install-daemon.sh kit/ 2>/dev/null || true
+          cp scripts/install-daemon-kit.sh kit/ 2>/dev/null || true
           ( cd kit && zip -qry ../dist/main/ios-daemon-kit.zip . )
           ls -lh dist/main
 
