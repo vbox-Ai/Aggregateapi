@@ -53,6 +53,13 @@ SWIFT_FLAGS=(
   -framework UIKit
   -framework WebKit
   -framework Foundation
+  # Rust 侧 #[link(kind="framework")] 不会随 staticlib 传递链接参数，必须显式补：
+  #   Security       — getrandom 的 Apple 后端用 SecRandomCopyBytes
+  #   CoreFoundation — iana-time-zone 读本地时区
+  #   CFNetwork      — reqwest 走 URLSession 时用到的系统网络栈
+  -framework Security
+  -framework CoreFoundation
+  -framework CFNetwork
   -Xlinker -rpath -Xlinker /usr/lib/swift
 )
 if [ "$EMBED" = "1" ]; then
