@@ -189,13 +189,17 @@ final class PanelViewController: UIViewController {
     func openLoginContainer(url: URL, state: String) {
         let vc = LoginContainer(gateway: baseURL, loginURL: url, state: state)
         vc.onFinished = { [weak self] summary in
-            self?.navigationController?.dismiss(animated: true)
-            self?.webView.evaluateJavaScript(
-                "window.dispatchEvent(new CustomEvent('a2a-login-finished',{detail:\(jsonLiteral(summary))}))",
+            // 闭包里调实例方法必须显式 self（Swift 逃逸闭包语义），
+            // 先 guard 拿到强引用，避免一连串 self? 把 Optional 插进 JS 字符串
+            guard let self else { return }
+            self.navigationController?.dismiss(animated: true)
+            let detail = self.jsonLiteral(summary)
+            self.webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('a2a-login-finished',{detail:\(detail)}))",
                 completionHandler: nil
             )
             // 面板侧有轮询（等待账号登录完成…），这里只做一次即时刷新让状态尽快回去
-            self?.webView.reload()
+            self.webView.reload()
         }
         let nav = UINavigationController(rootViewController: vc)
         nav.modalPresentationStyle = .fullScreen
