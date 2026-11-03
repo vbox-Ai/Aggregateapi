@@ -107,17 +107,34 @@ cp "$BINARY" "$STAGE/$ENTRY_NAME"
 chmod 755 "$STAGE/$ENTRY_NAME"
 file "$STAGE/$ENTRY_NAME" | head -1
 
-# 官方骨架里可能的其他平台二进制：留着无意义，删掉省体积
+# ── 只保留入口二进制 ────────────────────────────────────────────
+# 官方骨架里通常并列放着各平台的二进制（例如 ELF 的 `bin/agent2api-providers`
+# 和 exe 的 `bin/agent2api-providers.exe`）。我们只换掉了 entry 指向的那个，
+# 其余留着既费体积又容易混淆（有人会把它当成 iOS 版），这里清掉。
+ENTRY_BASE="$(basename "$ENTRY_NAME")"
+ENTRY_DIR="$(dirname "$ENTRY_NAME")"
+[ "$ENTRY_DIR" = "." ] && ENTRY_DIR=""
+
 for stale in "$STAGE"/*; do
+  [ -f "$stale" ] || continue
   base="$(basename "$stale")"
   case "$base" in
-    pack.json|ui|assets|icons|*.md|*.json) continue ;;
+    pack.json|*.json|*.md|*.txt) continue ;;
   esac
-  if [ -f "$stale" ] && [ "$base" != "$ENTRY_NAME" ]; then
-    echo "    移除其它平台二进制：$base"
-    rm -f "$stale"
-  fi
+  [ "$base" = "$ENTRY_BASE" ] && continue
+  echo "    移除多余文件：$base"
+  rm -f "$stale"
 done
+
+if [ -n "$ENTRY_DIR" ] && [ -d "$STAGE/$ENTRY_DIR" ]; then
+  for stale in "$STAGE/$ENTRY_DIR"/*; do
+    [ -f "$stale" ] || continue
+    base="$(basename "$stale")"
+    [ "$base" = "$ENTRY_BASE" ] && continue
+    echo "    移除其它平台二进制：${ENTRY_DIR}/${base}"
+    rm -f "$stale"
+  done
+fi
 
 ASSET="$OUT/${PACK_ID}-${VERSION}-${ASSET_TARGET}.zip"
 rm -f "$ASSET"
