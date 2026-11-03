@@ -48,8 +48,12 @@ done
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$OUT"
+# 后面会 cd 进包目录再 zip，$OUT 必须先转成绝对路径，
+# 否则相对路径会在临时目录里被解析 → zip 报 "Could not create output file"
+OUT="$(cd "$OUT" && pwd)"
 STAGE="$WORK/pkg"
-mkdir -p "$STAGE" "$OUT"
+mkdir -p "$STAGE"
 
 echo "==> 解包官方骨架"
 unzip -q "$OFFICIAL" -d "$STAGE"

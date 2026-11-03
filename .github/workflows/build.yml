@@ -12,13 +12,16 @@ on:
         description: "iOS: 1=内嵌网关(可独立运行) 0=纯客户端壳"
         default: "1"
       only:
-        description: "只跑某端：all / ios / plugins / macos / windows / linux / android / web"
+        description: "只跑某端：all / ios / plugins / store / macos / windows / linux / android / web"
         default: "all"
+      publish:
+        description: "true = 构建完自动发布到 Releases（IPA + 两个插件 zip）"
+        default: "false"
   push:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -32,7 +35,7 @@ jobs:
   # ══════════════════════════════════════════════════════════════════════
   ios:
     name: iOS (daemon + IPA)
-    if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'ios' }}
+    if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'ios' || inputs.only == 'store' }}
     runs-on: macos-14
     continue-on-error: true
     steps:
@@ -121,7 +124,7 @@ jobs:
   # ══════════════════════════════════════════════════════════════════════
   plugins:
     name: Plugins (iOS packs)
-    if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'plugins' }}
+    if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'plugins' || inputs.only == 'store' }}
     runs-on: macos-14
     continue-on-error: true
     steps:
@@ -346,3 +349,74 @@ jobs:
           name: web
           path: out/web/**
           if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # 7. 发布到 Releases（IPA + daemon + 两个插件 zip，一次点完直接下载）
+  #    触发：workflow_dispatch 勾 publish=true（建议 only=store）
+  #    发布两个 tag（与插件 manifest 的 tag 规则一致）：
+  #      v{version}      → Agent2API.ipa + agent2api-server + plist + 主插件包
+  #      web-v{version}  → 网页插件包
+  # ══════════════════════════════════════════════════════════════════════
+  release:
+    name: Publish Release
+    needs: [ios, plugins]
+    if: ${{ always() && inputs.publish == 'true' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取回构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 归类文件
+        run: |
+          set -euo pipefail
+          mkdir -p dist/main dist/web
+          find artifacts -name '*.ipa' -exec cp -v {} dist/main/ \;
+          find artifacts -name 'agent2api-server' -exec cp -v {} dist/main/ \;
+          find artifacts -name 'com.chiyu.agent2api.plist' -exec cp -v {} dist/main/ \;
+          find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/main/ \;
+          find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/web/ \;
+          echo "--- main ---"; ls -lh dist/main || true
+          echo "--- web ---";  ls -lh dist/web  || true
+          test -n "$(ls -A dist/main)" || { echo "main 目录为空：ios/plugins 产物没取到"; exit 1; }
+
+      - name: 读取版本号
+        id: ver
+        run: |
+          set -euo pipefail
+          M=$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")
+          W=$(python3 -c "import json;print(json.load(open('plugins/agent2api-web-providers.json'))['version'])")
+          echo "main=${M}" >> "$GITHUB_OUTPUT"
+          echo "web=${W}" >> "$GITHUB_OUTPUT"
+          echo "主包版本 ${M} / 网页包版本 ${W}"
+
+      - name: 发布主包
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.main }}
+          name: Agent2API iOS v${{ steps.ver.outputs.main }}
+          body: |
+            iOS 越狱安装包与网关守护进程。
+
+            - `Agent2API.ipa`：客户端壳（EMBED=0，连本机 daemon 的 127.0.0.1:3065）
+            - `agent2api-server`：网关守护进程（Mach-O，放 /var/jb/usr/local/bin）
+            - `com.chiyu.agent2api.plist`：LaunchDaemon 配置（含 AGENT2API_ALLOW_EXEC=1）
+            - `agent2api-providers-*.zip`：提供商增强插件（iOS 原生包，供网关"网关插件"页安装）
+          files: dist/main/*
+          fail_on_unmatched_files: false
+          overwrite: true
+
+      - name: 发布网页插件包
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: web-v${{ steps.ver.outputs.web }}
+          name: Agent2API web-providers v${{ steps.ver.outputs.web }}
+          body: |
+            网页提供商插件（智谱清言 / DeepSeek 网页版，iOS 原生包）。
+            在网关面板「网关插件」页点下载安装即可。
+          files: dist/web/*
+          fail_on_unmatched_files: false
+          overwrite: true
