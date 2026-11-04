@@ -375,8 +375,8 @@ final class PanelViewController: UIViewController {
             let ok = (error == nil) && (data?.range(of: Data("\"ok\"".utf8)) != nil)
             DispatchQueue.main.async {
                 guard let self else { return }
-                // 永远显示状态条（内容随健康状态变化），保证界面上总有可读信息
-                self.statusBar.isHidden = false
+                // 网关正常就收起状态条（它只是排障用的），异常或页面报错时才显示
+                self.statusBar.isHidden = ok && self.jsErrors.isEmpty
                 if ok {
                     self.statusLabel.text = self.summary.isEmpty
                         ? "网关 OK \u{00B7} 127.0.0.1:\(self.port)\n" + self.diag
