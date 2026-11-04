@@ -174,6 +174,9 @@ final class PanelViewController: UIViewController {
             }
             self.diag = text
 
+            // 把自检结果先写进状态条（无论成功失败都能看到 /m 的真实响应）
+            self.statusLabel.text = "127.0.0.1:\(self.port)\n" + self.diag
+
             // /m 正常（200 且 >200 字节）就认为是面板页，交给 WebView 渲染
             if let body = results["/m"], body.contains("HTTP 200"), !body.contains("· 0 B") {
                 let bytes = Int(body.split(separator: " ") .dropFirst(2).first ?? "0") ?? 0
@@ -324,7 +327,11 @@ final class PanelViewController: UIViewController {
             let ok = (error == nil) && (data?.range(of: Data("\"ok\"".utf8)) != nil)
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.statusBar.isHidden = ok
+                // 永远显示状态条（内容随健康状态变化），保证界面上总有可读信息
+                self.statusBar.isHidden = false
+                if ok {
+                    self.statusLabel.text = "网关 OK \u{00B7} 127.0.0.1:\(self.port)\n" + self.diag
+                }
                 if !ok {
                     // 把诊断信息直接印在界面上（无需终端）：模式、启动返回码、数据目录、ui 是否存在
                     var text = "网关未响应 127.0.0.1:\(self.port)\n构建 \(Self.buildStamp)"
