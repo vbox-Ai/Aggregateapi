@@ -47,13 +47,18 @@ trap 'rm -rf "$ROOT"' EXIT
 
 echo "==> 组装 App（/Applications）"
 mkdir -p "$ROOT/Applications"
-cp -R "$APP" "$ROOT/Applications/Agent2API.app"
+cp -R "$APP" "$ROOT/Applications/Agent2API.app" || { echo "❌ 拷贝 App 失败"; exit 1; }
+echo "    App 已拷贝：$(du -sh "$ROOT/Applications/Agent2API.app" | cut -f1)"
 APP_BIN="$ROOT/Applications/Agent2API.app/Agent2API"
 [ -f "$APP_BIN" ] || { echo "App 主二进制缺失：$APP_BIN"; exit 1; }
 
 echo "==> 组装守护进程"
-install -Dm755 "$BIN"   "$ROOT/var/jb/usr/local/bin/agent2api-server"
-install -Dm644 "$PLIST" "$ROOT/var/jb/Library/LaunchDaemons/${PKG}.plist"
+mkdir -p "$ROOT/var/jb/usr/local/bin"
+cp "$BIN" "$ROOT/var/jb/usr/local/bin/agent2api-server"
+chmod 755 "$ROOT/var/jb/usr/local/bin/agent2api-server"
+mkdir -p "$ROOT/var/jb/Library/LaunchDaemons"
+cp "$PLIST" "$ROOT/var/jb/Library/LaunchDaemons/${PKG}.plist"
+chmod 644 "$ROOT/var/jb/Library/LaunchDaemons/${PKG}.plist"
 
 echo "==> 签名（App 用 platform-application，daemon 用最小签名）"
 if command -v ldid >/dev/null 2>&1; then
@@ -64,7 +69,8 @@ else
 fi
 
 mkdir -p "$ROOT/DEBIAN"
-SIZE=$(( ($(du -sk "$ROOT/Applications" | cut -f1)) + ($(du -sk "$ROOT/var" | cut -f1)) ))
+SIZE=$(( $(du -sk "$ROOT/Applications" | cut -f1) + $(du -sk "$ROOT/var" | cut -f1) ))
+echo "    估算安装体积：${SIZE} KB"
 cat > "$ROOT/DEBIAN/control" <<EOF
 Package: ${PKG}
 Name: Agent2API

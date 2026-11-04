@@ -145,13 +145,13 @@ jobs:
             # STAMP 是在 build-ipa.sh 内部定义的，这里要自己算一次（原来直接引用导致 unbound variable）
             STAMP="${BUILD_NUMBER:-$(date +%y%m%d%H%M)}"
             STAMP_VER="${VER}.${STAMP}"
-            bash scripts/build-allinone-deb.sh \
+            bash -x scripts/build-allinone-deb.sh \
               --app agent2api-ios/build/Payload/Agent2API.app \
               --binary "$GITHUB_WORKSPACE/out/ios/agent2api-server" \
               --plist "$GITHUB_WORKSPACE/out/ios/com.chiyu.agent2api.plist" \
               --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
               --version "$STAMP_VER" --out "$GITHUB_WORKSPACE/out/ios" \
-              || echo "WARN: all-in-one deb 打包失败"
+              || { echo "❌ all-in-one deb 打包失败（上面有 -x 的失败命令）"; exit 1; }
           else
             echo "WARN: 没有 dpkg-deb，跳过 all-in-one deb"
           fi
