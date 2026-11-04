@@ -20,5 +20,11 @@
 	</array>
 	<key>platform-application</key>
 	<true/>
+
+	<!-- /var/jb/Applications 里的 App 默认被当成"系统应用"（无沙盒），
+	     而 WKWebView 需要沙盒宿主才能启动网页渲染子进程（否则黑屏、无 JS）。
+	     显式声明"必须有容器/沙盒"，让内核按沙盒进程对待，WebKit 才能工作。 -->
+	<key>com.apple.private.security.container-required</key>
+	<true/>
 </dict>
 </plist>
