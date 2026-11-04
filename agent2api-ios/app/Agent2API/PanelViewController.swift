@@ -49,6 +49,8 @@ final class PanelViewController: UIViewController {
     private var embeddedRC: Int32?
     /// 显示在黄条上的诊断串：模式、返回码、数据目录、ui 是否存在
     private var diag: String = ""
+    /// 状态条上优先显示的摘要（/m 在最前，其次是 /health、rc、home）
+    private var summary: String = ""
 
     // MARK: - 生命周期
 
@@ -116,7 +118,7 @@ final class PanelViewController: UIViewController {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = .systemFont(ofSize: 10, weight: .regular)
         // 诊断信息可能有多行（mode/port/home/ui/原因），给到 6 行，别被裁掉
-        statusLabel.numberOfLines = 6
+        statusLabel.numberOfLines = 12
         statusLabel.textColor = .black
         statusBar.addSubview(statusLabel)
 
@@ -130,7 +132,7 @@ final class PanelViewController: UIViewController {
             statusBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            statusBar.heightAnchor.constraint(equalToConstant: 104),
+            statusBar.heightAnchor.constraint(equalToConstant: 170),
 
             statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 14),
             statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
@@ -174,8 +176,16 @@ final class PanelViewController: UIViewController {
             }
             self.diag = text
 
-            // 把自检结果先写进状态条（无论成功失败都能看到 /m 的真实响应）
-            self.statusLabel.text = "127.0.0.1:\(self.port)\n" + self.diag
+            // 摘要：把最关键的 /m 与 /health 放在最前面（之前被 numberOfLines 截掉的正是它们）
+            var summaryLines: [String] = []
+            if let body = results["/m"] { summaryLines.append("/m → " + body) }
+            if let health = results["/health"] { summaryLines.append("/health → " + health) }
+            summaryLines.append("rc=\(self.embeddedRC.map(String.init) ?? "?")  port=\(self.port)  ui存在=\(self.diag.contains("ui存在=true"))")
+            if let home = self.diag.split(separator: "\n").first(where: { $0.hasPrefix("home=") }) {
+                summaryLines.append(String(home))
+            }
+            self.summary = summaryLines.joined(separator: "\n")
+            self.statusLabel.text = self.summary
 
             // /m 正常（200 且 >200 字节）就认为是面板页，交给 WebView 渲染
             if let body = results["/m"], body.contains("HTTP 200"), !body.contains("· 0 B") {
@@ -330,7 +340,9 @@ final class PanelViewController: UIViewController {
                 // 永远显示状态条（内容随健康状态变化），保证界面上总有可读信息
                 self.statusBar.isHidden = false
                 if ok {
-                    self.statusLabel.text = "网关 OK \u{00B7} 127.0.0.1:\(self.port)\n" + self.diag
+                    self.statusLabel.text = self.summary.isEmpty
+                        ? "网关 OK \u{00B7} 127.0.0.1:\(self.port)\n" + self.diag
+                        : self.summary
                 }
                 if !ok {
                     // 把诊断信息直接印在界面上（无需终端）：模式、启动返回码、数据目录、ui 是否存在
