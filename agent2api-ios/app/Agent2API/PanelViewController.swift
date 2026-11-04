@@ -83,8 +83,15 @@ final class PanelViewController: UIViewController {
     private func buildWebView() {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
-        // 与系统 PWA 一致：允许内联媒体、允许 localStorage 持久（面板双令牌就存这儿）
+        // 与系统 PWA 一致：允许内联媒体
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
+
+        // —— 关键：无沙盒 App 的 WKWebView 数据目录不可写 ——
+        // WebKit 默认把 website data（localStorage/IndexedDB/缓存）写到 App 容器里；
+        // TrollStore + no-sandbox 之后容器不可写（诊断页已证实 [513]），
+        // WebKit 初始化失败会让页面白屏且不报错。改用「非持久」数据存储（纯内存），
+        // 代价是重启 App 后需要重新登录面板（令牌不再落在磁盘）。
+        config.websiteDataStore = .nonPersistent()
 
         // ① 登录器接管：把 window.A2A_LOGIN_OPEN 锁成 getter，
         //    页面里那句 `window.A2A_LOGIN_OPEN = function(){}` 会静默失败，
