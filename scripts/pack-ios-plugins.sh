@@ -90,7 +90,14 @@ entry_name = names[0]
 
 data["id"] = pack_id
 data["version"] = version
-data["entry"] = {"aarch64-apple-ios": entry_name}
+# 关键：网关在 iOS 上把 host_target() 判成 aarch64-unknown-linux-gnu，
+# 而 packages.rs 里的入口查找是 **严格 get(target)**（不走宽松匹配），
+# 所以 entry 的键必须写成这个三元组，值指向我们的 iOS Mach-O。
+# 同时保留 aarch64-apple-ios 便于人工阅读与将来平台识别。
+data["entry"] = {
+    "aarch64-unknown-linux-gnu": entry_name,
+    "aarch64-apple-ios": entry_name,
+}
 data.pop("signature", None)
 
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
