@@ -149,6 +149,7 @@ jobs:
               --app agent2api-ios/build/Payload/Agent2API.app \
               --binary "$GITHUB_WORKSPACE/out/ios/agent2api-server" \
               --plist "$GITHUB_WORKSPACE/out/ios/com.chiyu.agent2api.plist" \
+              --ui Agent2API/desktop-tauri/ui \
               --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
               --version "$STAMP_VER" --out "$GITHUB_WORKSPACE/out/ios" \
               || { echo "❌ all-in-one deb 打包失败（上面有 -x 的失败命令）"; exit 1; }
@@ -445,7 +446,7 @@ jobs:
             bash scripts/build-deb.sh \
               --binary dist/app/agent2api-server \
               --plist dist/app/com.chiyu.agent2api.plist \
-              --version "$VER" --out dist/app || echo "WARN: deb 打包失败（不影响其它资产）"
+              --version "$VER" --out dist/app --ui Agent2API/desktop-tauri/ui || echo "WARN: deb 打包失败（不影响其它资产）"
           fi
 
           echo "--- app ---"; ls -lh dist/app || true

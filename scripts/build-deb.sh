@@ -13,6 +13,7 @@ BIN=""
 PLIST=""
 VERSION="3.4.0"
 OUT="out/deb"
+UI_SRC=""
 PKG="com.chiyu.agent2api"
 LABEL="com.chiyu.agent2api"
 
@@ -22,6 +23,7 @@ while [ $# -gt 0 ]; do
     --plist)   PLIST="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     --out)     OUT="$2"; shift 2 ;;
+    --ui)      UI_SRC="$2"; shift 2 ;;
     *) echo "未知参数：$1"; exit 2 ;;
   esac
 done
@@ -108,6 +110,13 @@ exit 0
 EOF
 
 chmod 755 "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm"
+
+if [ -n "$UI_SRC" ] && [ -d "$UI_SRC" ]; then
+  install_dir="$ROOT/var/jb/usr/local/share/agent2api/ui"
+  mkdir -p "$install_dir"
+  cp -R "$UI_SRC"/. "$install_dir"/
+  echo "面板文件数：$(find "$install_dir" -type f | wc -l | tr -d ' ')"
+fi
 
 mkdir -p "$OUT"
 DEB="$OUT/${PKG}_${VERSION}_iphoneos-arm64.deb"
