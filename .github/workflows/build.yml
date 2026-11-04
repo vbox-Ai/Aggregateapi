@@ -142,6 +142,8 @@ jobs:
           brew install dpkg ldid >/dev/null 2>&1 || true
           if command -v dpkg-deb >/dev/null 2>&1; then
             VER=$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")
+            # STAMP 是在 build-ipa.sh 内部定义的，这里要自己算一次（原来直接引用导致 unbound variable）
+            STAMP="${BUILD_NUMBER:-$(date +%y%m%d%H%M)}"
             STAMP_VER="${VER}.${STAMP}"
             bash scripts/build-allinone-deb.sh \
               --app agent2api-ios/build/Payload/Agent2API.app \
