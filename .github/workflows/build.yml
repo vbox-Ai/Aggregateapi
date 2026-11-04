@@ -141,7 +141,7 @@ jobs:
           echo "=== 打包 all-in-one deb ==="
           brew install dpkg ldid >/dev/null 2>&1 || true
           if command -v dpkg-deb >/dev/null 2>&1; then
-            VER=$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")
+            VER=$(python3 -c "import json;v=json.load(open('plugins/agent2api-providers.json'))['version'];print('.'.join(v.split('.')[:2]))")
             # STAMP 是在 build-ipa.sh 内部定义的，这里要自己算一次（原来直接引用导致 unbound variable）
             STAMP="${BUILD_NUMBER:-$(date +%y%m%d%H%M)}"
             STAMP_VER="${VER}.${STAMP}"
@@ -421,38 +421,20 @@ jobs:
       - name: 归类文件
         run: |
           set -euo pipefail
-          mkdir -p dist/main dist/web dist/app
-          find artifacts -name '*.ipa' -exec cp -v {} dist/app/ \;
-          find artifacts -name 'agent2api-server' -exec cp -v {} dist/app/ \;
-          find artifacts -name 'com.chiyu.agent2api.plist' -exec cp -v {} dist/app/ \;
-          find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/main/ \;
-          find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/app/ \;
-          find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/web/ \;
-          # all-in-one deb（App + daemon）在 ios job 里产出，必须一起收进来
+          mkdir -p dist/app dist/main dist/web
+
+          # 只发布三样东西，避免用户分不清：
+          #   ① all-in-one deb（App + 网关 + 面板资源）—— 用户只需装这一个
+          #   ② 两个插件 zip —— 由面板内下载，不用手动装
           find artifacts -name '*.deb' -exec cp -v {} dist/app/ \;
+          find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/app/ \;
           find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/app/ \;
 
-          # 守护进程安装包（daemon + plist + 安装脚本）
-          mkdir -p kit
-          cp dist/app/agent2api-server kit/ 2>/dev/null || true
-          cp dist/app/com.chiyu.agent2api.plist kit/ 2>/dev/null || true
-          cp scripts/install-daemon-kit.sh kit/ 2>/dev/null || true
-          ( cd kit && zip -qry ../dist/app/ios-daemon-kit.zip . )
+          cp dist/app/agent2api-providers-*.zip dist/main/ 2>/dev/null || true
+          cp dist/app/agent2api-web-providers-*.zip dist/web/ 2>/dev/null || true
 
-          # 同时出一个 rootless .deb：手机上用 Sileo/Zebra/Filza 点装即可，
-          # postinst 会自动 ldid 签名 + bootstrap + /health 自检（不用终端）
-          if command -v dpkg-deb >/dev/null 2>&1; then
-            VER=$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")
-            bash scripts/build-deb.sh \
-              --binary dist/app/agent2api-server \
-              --plist dist/app/com.chiyu.agent2api.plist \
-              --version "$VER" --out dist/app --ui Agent2API/desktop-tauri/ui || echo "WARN: deb 打包失败（不影响其它资产）"
-          fi
-
-          echo "--- app ---"; ls -lh dist/app || true
-          echo "--- main ---"; ls -lh dist/main || true
-          echo "--- web ---";  ls -lh dist/web  || true
-          test -n "$(ls -A dist/app)" || { echo "app 目录为空：ios 产物没取到"; exit 1; }
+          echo "--- 将发布到快照的资产 ---"; ls -lh dist/app
+          test -n "$(ls -A dist/app)" || { echo "dist/app 为空：ios 产物没取到"; exit 1; }
 
       - name: 读取版本号与构建号
         id: ver
