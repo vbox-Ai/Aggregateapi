@@ -51,6 +51,8 @@ final class PanelViewController: UIViewController {
     private var diag: String = ""
     /// 状态条上优先显示的摘要（/m 在最前，其次是 /health、rc、home）
     private var summary: String = ""
+    /// 页面 JS 报错（显示在状态条最后几行，白屏时靠它定位）
+    private var jsErrors: [String] = []
 
     // MARK: - 生命周期
 
@@ -98,6 +100,27 @@ final class PanelViewController: UIViewController {
         //    于是「打开官方授权页」永远走原生隔离容器（等价 patch-ui.sh，但不用改文件）。
         config.userContentController.addUserScript(Bridge.loginOpenScript())
         config.userContentController.add(self, name: Bridge.messageName)
+
+        // 把页面里的 JS 报错/未处理 Promise 抓出来显示在状态条上。
+        // 面板白屏最常见的真相就是"某个模块 404 或 JS 抛错"，而在 App 里看不到控制台。
+        let errorHook = """
+        (function(){
+          function send(text){ try { window.webkit.messageHandlers.a2aDiag.postMessage(String(text)); } catch (e) {} }
+          window.addEventListener('error', function(e){
+            var t = e.target;
+            if (t && t.tagName) { send('资源加载失败: ' + t.tagName + ' ' + (t.src || t.href || '')); return; }
+            send('JS错误: ' + (e.message || '') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0));
+          }, true);
+          window.addEventListener('unhandledrejection', function(e){
+            var r = e.reason;
+            send('Promise拒绝: ' + ((r && (r.message || r.stack)) || r));
+          });
+        })();
+        """
+        config.userContentController.addUserScript(
+            WKUserScript(source: errorHook, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        )
+        config.userContentController.add(self, name: "a2aDiag")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
@@ -459,6 +482,14 @@ extension PanelViewController: WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
+        if message.name == "a2aDiag" {
+            let text = String(describing: message.body)
+            jsErrors.append(text)
+            if jsErrors.count > 6 { jsErrors.removeFirst() }
+            statusBar.isHidden = false
+            statusLabel.text = summary + "\n— JS —\n" + jsErrors.joined(separator: "\n")
+            return
+        }
         guard message.name == Bridge.messageName,
               let body = message.body as? [String: Any],
               let raw = body["url"] as? String,
