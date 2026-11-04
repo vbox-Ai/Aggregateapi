@@ -32,6 +32,16 @@ final class PanelViewController: UIViewController {
     private let statusLabel = UILabel()
     private let retryButton = UIButton(type: .system)
 
+    /// 构建戳：v3.4.<构建号> (sha) — 由 build-ipa.sh 写进 Info.plist
+    static var buildStamp: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["A2ABuildNumber"] as? String ?? info["CFBundleVersion"] as? String ?? "?"
+        let sha = info["A2AGitSha"] as? String ?? "?"
+        let time = info["A2ABuildTime"] as? String ?? ""
+        return "v\(short) (\(sha)) \(time)"
+    }
+
     private var healthTimer: Timer?
     private var startedEmbedded = false
 
@@ -44,7 +54,8 @@ final class PanelViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Agent2API"
+        // 标题直接显示构建戳，方便确认"装的是不是这一版"
+        title = "Agent2API \(Self.buildStamp)"
         view.backgroundColor = .systemBackground
         buildWebView()
         buildStatusBar()
@@ -215,7 +226,7 @@ final class PanelViewController: UIViewController {
                 self.statusBar.isHidden = ok
                 if !ok {
                     // 把诊断信息直接印在界面上（无需终端）：模式、启动返回码、数据目录、ui 是否存在
-                    var text = "网关未响应 127.0.0.1:\(self.port)"
+                    var text = "网关未响应 127.0.0.1:\(self.port)\n构建 \(Self.buildStamp)"
                     if !self.diag.isEmpty { text += "\n" + self.diag }
                     if let err = error { text += "\n错误：\(err.localizedDescription)" }
                     text += "\nA1 形态：launchctl kickstart -k system/com.chiyu.agent2api"

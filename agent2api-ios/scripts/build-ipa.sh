@@ -84,6 +84,22 @@ xcrun -sdk iphoneos swiftc "${SWIFT_FLAGS[@]}" \
 
 echo "==> [5/7] 组装 App 包"
 cp "$ROOT/app/Agent2API/Info.plist" "$APP/Info.plist"
+
+# ── 构建戳：版本号随每次构建递增，直接写进 Info.plist（App 里能看到）
+#    BUILD_NUMBER 由 CI 传（github.run_number）；本地构建时用时间戳兜底。
+STAMP="${BUILD_NUMBER:-$(date +%y%m%d%H%M)}"
+GIT_SHA="${GIT_SHA:-local}"
+BUILD_TIME="$(date -u '+%Y-%m-%d %H:%M:%SZ')"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $STAMP" "$APP/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $STAMP" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 3.4.$STAMP" "$APP/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 3.4.$STAMP" "$APP/Info.plist"
+for kv in "A2ABuildNumber:$STAMP" "A2AGitSha:$GIT_SHA" "A2ABuildTime:$BUILD_TIME"; do
+  key="${kv%%:*}"; val="${kv#*:}"
+  /usr/libexec/PlistBuddy -c "Add :$key string $val" "$APP/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :$key $val" "$APP/Info.plist"
+done
+echo "    构建戳：3.4.$STAMP  sha=${GIT_SHA}  ${BUILD_TIME}"
 printf 'APPL????' > "$APP/PkgInfo"
 cp "$ROOT/app/Agent2API/Resources/"*.png "$APP/"
 
