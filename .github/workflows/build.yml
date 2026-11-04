@@ -406,6 +406,16 @@ jobs:
           cp scripts/install-daemon-kit.sh kit/ 2>/dev/null || true
           ( cd kit && zip -qry ../dist/app/ios-daemon-kit.zip . )
 
+          # 同时出一个 rootless .deb：手机上用 Sileo/Zebra/Filza 点装即可，
+          # postinst 会自动 ldid 签名 + bootstrap + /health 自检（不用终端）
+          if command -v dpkg-deb >/dev/null 2>&1; then
+            VER=$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")
+            bash scripts/build-deb.sh \
+              --binary dist/app/agent2api-server \
+              --plist dist/app/com.chiyu.agent2api.plist \
+              --version "$VER" --out dist/app || echo "WARN: deb 打包失败（不影响其它资产）"
+          fi
+
           echo "--- app ---"; ls -lh dist/app || true
           echo "--- main ---"; ls -lh dist/main || true
           echo "--- web ---";  ls -lh dist/web  || true
