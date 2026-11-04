@@ -81,12 +81,46 @@ fn main() -> ExitCode {
         );
     }
 
-    // ── 面板静态目录（ui/ 由安装脚本放到 /var/jb/usr/local/share/agent2api/ui）──
-    if let Ok(dir) = std::env::var("AGENT2API_UI_DIR") {
-        let dir = dir.trim();
-        if !dir.is_empty() {
-            state.set_ui_dir(dir.into());
+    // ── 面板静态目录 ────────────────────────────────────────────
+    // 优先读环境变量；但 launchd 的 EnvironmentVariables 只在**首次加载 plist** 时生效，
+    // 旧 job 被 KeepAlive 重新拉起时会沿用旧环境（表现为：ui 文件明明在磁盘上，
+    // /m 却一直 404）。所以这里再做两条路径兜底：rootless 标准位置 + 可执行文件同级。
+    let mut ui_dir = std::env::var("AGENT2API_UI_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+
+    if ui_dir.as_ref().map(|dir| !dir.is_dir()).unwrap_or(false) {
+        ui_dir = None;
+    }
+    if ui_dir.is_none() {
+        let candidates = [
+            std::path::PathBuf::from("/var/jb/usr/local/share/agent2api/ui"),
+            std::path::PathBuf::from("/usr/local/share/agent2api/ui"),
+        ];
+        ui_dir = candidates.into_iter().find(|dir| dir.is_dir());
+    }
+    if ui_dir.is_none() {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                let guess = parent.join("../share/agent2api/ui");
+                if guess.is_dir() {
+                    ui_dir = Some(guess);
+                }
+            }
         }
+    }
+
+    match ui_dir {
+        Some(dir) => {
+            logging::log("[UI]", &format!("面板静态目录: {}", dir.display()));
+            state.set_ui_dir(dir);
+        }
+        None => logging::log(
+            "[UI]",
+            "⚠ 找不到面板静态目录（/m 会 404）：请确认 /var/jb/usr/local/share/agent2api/ui 存在",
+        ),
     }
 
     // ── 起服务 ────────────────────────────────────────────────
