@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ── 实验版：安全版 + 只加 no-sandbox（不加 platform-application）──
+	     目的：验证"去沙盒"能否让 App 内网关 exec 插件。
+	     与安全版的唯一差别就是这一行 —— 如果这一版秒退，说明你的越狱环境
+	     连 no-sandbox 都不接受，那就只能走 LaunchDaemon（ios-daemon-kit.zip）。
+	     如果这一版能开、但插件仍报 spawn 失败，则说明沙盒已去但内核仍拒绝
+	     exec（AMFI/进程策略），同样回退 daemon。 -->
+	<key>application-identifier</key>
+	<string>com.chiyu.agent2api</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>CHIYU000000</string>
+	<key>get-task-allow</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>com.chiyu.agent2api</string>
+	</array>
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+</dict>
+</plist>

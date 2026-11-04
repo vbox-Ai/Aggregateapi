@@ -107,15 +107,21 @@ jobs:
           test -f agent2api-ios/build/Agent2API.ipa
           cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API.ipa"
 
-          # ── ② 独立版（EMBED=1）：约 15 MB，网关跑在 App 进程内，装完即可用、不需要 daemon；
-          #    代价是 App 沙盒不能 exec → 插件不可用。给"只想点开看看"的人用。
+          # ── ② 独立版（EMBED=1，最小权限）：约 15 MB，网关跑在 App 进程内，
+          #    装完即用、不需要 daemon。这一版已验证"能装能开"。
           if [ -f "$LIB" ]; then
-            echo "=== 构建独立版（EMBED=1，网关内嵌）==="
+            echo "=== 构建独立版（EMBED=1，最小权限）==="
             EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
-            test -f agent2api-ios/build/Agent2API.ipa
             cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-standalone.ipa"
+
+            # ── ③ 实验版（EMBED=1 + 仅 no-sandbox）：验证 App 内能否 exec 插件。
+            #    刻意不带 platform-application / cs.debugger —— 那两个是"秒退"的主要嫌疑。
+            echo "=== 构建实验版（EMBED=1 + no-sandbox）==="
+            ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-nosandbox.plist" \
+              EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
+            cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-nosandbox.ipa"
           else
-            echo "WARN: 没有静态库，跳过独立版"
+            echo "WARN: 没有静态库，跳过独立版/实验版"
           fi
 
           cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true

@@ -100,8 +100,9 @@ fi
 
 echo "==> [6/7] 签名"
 if command -v ldid >/dev/null; then
-  ldid -S"$ROOT/app/Agent2API/entitlements.plist" "$APP/$APP_NAME"
-  echo "    ldid 已注入 entitlements（越狱机直接可用）"
+  ENT_FILE="${ENTITLEMENTS:-$ROOT/app/Agent2API/entitlements.plist}"
+  ldid -S"$ENT_FILE" "$APP/$APP_NAME"
+  echo "    ldid 已注入 $(basename "$ENT_FILE")"
 elif command -v codesign >/dev/null; then
   # CI / 无 ldid 环境：ad-hoc 签名。越狱机（AMFI 被补丁放开）可直接安装运行。
   codesign --force --timestamp=none --sign - "$APP/$APP_NAME"

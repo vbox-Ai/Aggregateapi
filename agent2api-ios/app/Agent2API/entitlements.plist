@@ -2,7 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- ldid 签名的 App：这四个是「装得上、跑得起、能被调试」的最小集合 -->
+	<!-- ── 安全版（默认）：只带最小必要权限 ──────────────────────────
+	     这一版在真机上已验证「能装、能开」。
+	     带 platform-application / no-sandbox / cs.debugger 这类特权时，
+	     部分越狱环境（rootless + AppSync）会在 exec 阶段被内核直接杀掉，
+	     表现就是"秒退、无弹窗、无 crash log"——所以默认不发这些。 -->
 	<key>application-identifier</key>
 	<string>com.chiyu.agent2api</string>
 	<key>com.apple.developer.team-identifier</key>
@@ -13,25 +17,5 @@
 	<array>
 		<string>com.chiyu.agent2api</string>
 	</array>
-
-	<!-- platform-application：CoreTrust / TrollStore / AppSync+ldid 环境下都建议带上 -->
-	<key>platform-application</key>
-	<true/>
-
-	<!-- ── 关键：去掉 App 沙盒 ──────────────────────────────────────
-	     为什么必须开：
-	       · App 沙盒禁止 `process-exec`（posix_spawn 子进程），即使内嵌了网关，
-	         插件也永远起不来（用户实测就是「该提供商需要安装插件」）；
-	       · 关掉沙盒后，App 进程与桌面程序同权，可以 exec App 容器里
-	         ldid 签名过的插件 Mach-O —— 这是"一个 IPA 里跑插件"的唯一路径。
-	     代价：App 失去沙盒保护（越狱机上本就没有安全边界，可接受）。
-	     需要的签名条件：ldid -S（越狱机的 AMFI 已放开签名校验）。 -->
-	<key>com.apple.private.security.no-sandbox</key>
-	<true/>
-	<key>com.apple.private.skip-library-validation</key>
-	<true/>
-	<!-- 允许个人证书/自签二进制的动态库与子进程加载 -->
-	<key>com.apple.private.cs.debugger</key>
-	<true/>
 </dict>
 </plist>
