@@ -27,6 +27,16 @@ use tokio::sync::oneshot;
 /// 停机信号发送端：`start()` 返回后由主线程持有，`a2a_stop` 里 send 触发优雅停机。
 static SHUTDOWN: Mutex<Option<oneshot::Sender<()>>> = Mutex::new(None);
 
+/// 最近一次失败原因。Swift 侧通过 `a2a_last_error()` 取走并显示在界面上，
+/// 这样没有终端也能看到"为什么没起来"（返回码只有 -1/-2，不足以定位）。
+static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+fn set_last_error(message: impl Into<String>) {
+    if let Ok(mut slot) = LAST_ERROR.lock() {
+        *slot = Some(message.into());
+    }
+}
+
 fn c_path(p: *const c_char) -> Option<PathBuf> {
     if p.is_null() {
         return None;
@@ -93,7 +103,9 @@ pub extern "C" fn a2a_start(home: *const c_char, ui_dir: *const c_char, port: u1
     let mut state = match ServerState::bootstrap(port, host) {
         Ok(state) => state,
         Err(reason) => {
-            log("[iOS]", &format!("网关初始化失败: {reason}"));
+            let message = format!("bootstrap 失败: {reason}");
+            log("[iOS]", &message);
+            set_last_error(message);
             return -1;
         }
     };
@@ -183,6 +195,20 @@ pub extern "C" fn a2a_db_path() -> *mut c_char {
 }
 
 /// 释放 `a2a_db_path` 返回的字符串。
+#[no_mangle]
+/// 取走并清空最近一次失败原因；调用方负责 `a2a_free_string` 释放。
+pub extern "C" fn a2a_last_error() -> *mut c_char {
+    let text = LAST_ERROR
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .unwrap_or_default();
+    match std::ffi::CString::new(text) {
+        Ok(value) => value.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn a2a_free_string(p: *mut c_char) {
     if !p.is_null() {

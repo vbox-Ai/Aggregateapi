@@ -169,8 +169,15 @@ final class PanelViewController: UIViewController {
             return last
         }()
         embeddedRC = rc
+        // rc != 0 时向 Rust 侧取"为什么失败"（bootstrap 的具体 reason），直接显示在黄条上
+        var reason = ""
+        if rc != 0, let cstr = a2a_last_error() {
+            reason = String(cString: cstr)
+            a2a_free_string(cstr)
+        }
         // 把关键事实直接写到界面上：没有终端也能定位（模式/返回码/端口/数据目录/ui 是否打包）
         diag = "mode=embedded rc=\(rc)\nport=\(port)\nhome=\(home.path)\nui存在=\(uiExists)"
+        if !reason.isEmpty { diag += "\n原因=\(reason)" }
         NSLog("[Agent2API] a2a_start -> \(rc)  port=\(port) home=\(home.path) uiExists=\(uiExists)")
         #else
         diag = "mode=daemon（本构建未链接 agent2api_ios）"

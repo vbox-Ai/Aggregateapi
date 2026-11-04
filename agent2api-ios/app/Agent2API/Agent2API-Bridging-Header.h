@@ -25,4 +25,7 @@ char *a2a_db_path(void);
 /// 释放 a2a_db_path 返回的内存。
 void a2a_free_string(char *p);
 
+// 取走最近一次失败原因（内部是 CString，需用 a2a_free_string 释放）
+char *a2a_last_error(void);
+
 #endif /* AGENT2API_BRIDGING_HEADER_H */
