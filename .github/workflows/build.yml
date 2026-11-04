@@ -494,6 +494,7 @@ jobs:
 
       # ── ② 插件稳定通道：tag 固定（网关按 v{版本} 查找），覆盖更新
       - name: 发布插件稳定通道（providers）
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.main }}
@@ -507,6 +508,7 @@ jobs:
           make_latest: false
 
       - name: 发布插件稳定通道（web）
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: web-v${{ steps.ver.outputs.web }}
