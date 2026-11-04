@@ -238,10 +238,10 @@ jobs:
           OFF_W=$(ls .cache/official/agent2api-web-providers-*.zip | head -1)
           bash scripts/pack-ios-plugins.sh \
             --official "$OFF_M" --binary out/plugins/agent2api-providers \
-            --id agent2api-providers --version 3.4.0 --out out/packs
+            --id agent2api-providers --version "$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")" --out out/packs
           bash scripts/pack-ios-plugins.sh \
             --official "$OFF_W" --binary out/plugins/agent2api-web-providers \
-            --id agent2api-web-providers --version 3.4.0 --out out/packs
+            --id agent2api-web-providers --version "$(python3 -c "import json;print(json.load(open('plugins/agent2api-web-providers.json'))['version'])")" --out out/packs
           ls -lh out/packs
 
       - name: 上传插件产物
