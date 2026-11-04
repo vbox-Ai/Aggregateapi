@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ── /Applications 安装版（deb 里打包的 App 用这份）──────────────
+	     为什么用 platform-application 而不用 no-sandbox：
+	       · deb 把 App 放进 /Applications，系统按"平台应用"对待，
+	         WKWebView 的 WebContent 子进程才能正常启动（面板能显示，已实测）；
+	       · 不要 no-sandbox：那会让 WebKit 起不来（我们踩过，白屏无报错）；
+	       · 插件不在 App 里跑 —— 由同一个 deb 安装的 LaunchDaemon 负责 exec。 -->
+	<key>application-identifier</key>
+	<string>com.chiyu.agent2api</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>CHIYU000000</string>
+	<key>get-task-allow</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>com.chiyu.agent2api</string>
+	</array>
+	<key>platform-application</key>
+	<true/>
+</dict>
+</plist>

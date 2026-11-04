@@ -135,6 +135,24 @@ jobs:
           fi
 
           cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
+
+          # ── ⑤ 一次装完的 rootless .deb：App（/Applications） + daemon + LaunchDaemon
+          #    用户只需在 Sileo/Zebra/Filza 里点一个文件：桌面出现 App，网关自动常驻
+          echo "=== 打包 all-in-one deb ==="
+          brew install dpkg ldid >/dev/null 2>&1 || true
+          if command -v dpkg-deb >/dev/null 2>&1; then
+            VER=$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")
+            STAMP_VER="${VER}.${STAMP}"
+            bash scripts/build-allinone-deb.sh \
+              --app agent2api-ios/build/Payload/Agent2API.app \
+              --binary "$GITHUB_WORKSPACE/out/ios/agent2api-server" \
+              --plist "$GITHUB_WORKSPACE/out/ios/com.chiyu.agent2api.plist" \
+              --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
+              --version "$STAMP_VER" --out "$GITHUB_WORKSPACE/out/ios" \
+              || echo "WARN: all-in-one deb 打包失败"
+          else
+            echo "WARN: 没有 dpkg-deb，跳过 all-in-one deb"
+          fi
           ls -lh "$GITHUB_WORKSPACE/out/ios"
 
       - name: 上传 iOS 产物
