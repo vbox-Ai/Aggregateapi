@@ -73,6 +73,19 @@ pub extern "C" fn a2a_start(home: *const c_char, ui_dir: *const c_char, port: u1
     std::env::set_var("AGENT2API_SELF_UPDATE", "0"); // iOS 上原地自更新 = 砖
     std::env::set_var("AGENT2API_DEPLOY", "ios");
 
+    // ── 允许 spawn 插件进程 ───────────────────────────────────────
+    // App 本体的 entitlements 里已经打开 `com.apple.private.security.no-sandbox`
+    // （去沙盒），所以进程内网关与桌面端同权，可以 exec App 容器里 ldid 签名过的
+    // 插件 Mach-O。没有这个 env，网关的 spawn 闸门会先一步拒绝并提示
+    // 「iOS 形态未声明 AGENT2API_ALLOW_EXEC=1」——用户实测就是这条。
+    // 如果安装环境（例如没成功注入 no-sandbox）导致 exec 仍被拒，错误会变成
+    // spawn 失败并写入日志，届时回退到"LaunchDaemon + 客户端 IPA"方案。
+    if std::env::var("AGENT2API_NO_EXEC").map(|v| v.trim() == "1").unwrap_or(false) {
+        std::env::remove_var("AGENT2API_ALLOW_EXEC");
+    } else {
+        std::env::set_var("AGENT2API_ALLOW_EXEC", "1");
+    }
+
     let port = if port == 0 { 3065 } else { port };
     let host = IpAddr::from(Ipv4Addr::LOCALHOST);
 
