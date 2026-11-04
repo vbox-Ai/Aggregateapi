@@ -48,10 +48,12 @@ ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
 echo "==> 组装 App（/Applications）"
-mkdir -p "$ROOT/Applications"
-cp -R "$APP" "$ROOT/Applications/Agent2API.app" || { echo "❌ 拷贝 App 失败"; exit 1; }
-echo "    App 已拷贝：$(du -sh "$ROOT/Applications/Agent2API.app" | cut -f1)"
-APP_BIN="$ROOT/Applications/Agent2API.app/Agent2API"
+# rootless 布局：/Applications 位于只读系统卷（SSV），写它必然 Operation not permitted；
+# 正确位置是 /var/jb/Applications（rootless 的应用目录，uicache 也认这里）
+mkdir -p "$ROOT/var/jb/Applications"
+cp -R "$APP" "$ROOT/var/jb/Applications/Agent2API.app" || { echo "❌ 拷贝 App 失败"; exit 1; }
+echo "    App 已拷贝：$(du -sh "$ROOT/var/jb/Applications/Agent2API.app" | cut -f1)"
+APP_BIN="$ROOT/var/jb/Applications/Agent2API.app/Agent2API"
 [ -f "$APP_BIN" ] || { echo "App 主二进制缺失：$APP_BIN"; exit 1; }
 
 echo "==> 组装守护进程"
@@ -80,7 +82,7 @@ else
 fi
 
 mkdir -p "$ROOT/DEBIAN"
-SIZE=$(( $(du -sk "$ROOT/Applications" | cut -f1) + $(du -sk "$ROOT/var" | cut -f1) ))
+SIZE=$(( $(du -sk "$ROOT/var" | cut -f1) ))
 echo "    估算安装体积：${SIZE} KB"
 cat > "$ROOT/DEBIAN/control" <<EOF
 Package: ${PKG}
@@ -99,7 +101,7 @@ cat > "$ROOT/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -u
 PKG="com.chiyu.agent2api"
-APP="/Applications/Agent2API.app"
+APP="/var/jb/Applications/Agent2API.app"
 BIN="/var/jb/usr/local/bin/agent2api-server"
 PLIST="/var/jb/Library/LaunchDaemons/${PKG}.plist"
 DATA="/var/mobile/Library/agent2api"
