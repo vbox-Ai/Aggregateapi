@@ -108,7 +108,7 @@ PKG="com.chiyu.agent2api"
 APP="/var/jb/Applications/Agent2API.app"
 BIN="/var/jb/usr/local/bin/agent2api-server"
 PLIST="/var/jb/Library/LaunchDaemons/${PKG}.plist"
-DATA="/var/mobile/Library/agent2api"
+DATA="/var/jb/usr/local/var/agent2api"
 
 echo "[agent2api] 数据目录"
 mkdir -p "$DATA"

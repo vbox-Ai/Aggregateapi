@@ -218,7 +218,7 @@ jobs:
         run: |
           brew install ldid || true
           for b in out/plugins/agent2api-providers out/plugins/agent2api-web-providers; do
-            ldid -S "$b" || echo "WARN: ldid 失败 $b"
+            ldid -S"$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/plugin-entitlements.plist" "$b" || echo "WARN: ldid 失败 $b"
             file "$b"
           done
 

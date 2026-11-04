@@ -19,9 +19,9 @@
 	<dict>
 		<!-- 数据目录：与 App 共享（App 只读面板，不写库） -->
 		<key>AGENT2API_PROXY_HOME</key>
-		<string>/var/mobile/Library/agent2api</string>
+		<string>/var/jb/usr/local/var/agent2api</string>
 		<key>HOME</key>
-		<string>/var/mobile/Library/agent2api</string>
+		<string>/var/jb/usr/local/var/agent2api</string>
 		<!-- 面板静态目录：ui/ 整套拷到 /var/jb/usr/local/share/agent2api/ui -->
 		<key>AGENT2API_UI_DIR</key>
 		<string>/var/jb/usr/local/share/agent2api/ui</string>
@@ -65,9 +65,9 @@
 	<string>mobile</string>
 
 	<key>StandardOutPath</key>
-	<string>/var/mobile/Library/agent2api/server.log</string>
+	<string>/var/jb/usr/local/var/agent2api/server.log</string>
 	<key>StandardErrorPath</key>
-	<string>/var/mobile/Library/agent2api/server.log</string>
+	<string>/var/jb/usr/local/var/agent2api/server.log</string>
 
 	<key>AbandonProcessGroup</key>
 	<false/>
