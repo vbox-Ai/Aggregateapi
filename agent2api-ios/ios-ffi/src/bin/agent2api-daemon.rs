@@ -48,6 +48,13 @@ fn main() -> ExitCode {
         .and_then(|value| value.parse().ok())
         .unwrap_or(IpAddr::from(Ipv4Addr::LOCALHOST));
 
+    // 插件进程：iOS 上由本 daemon（无沙盒）spawn；网关闸门要求显式声明。
+    // plist 里也写了同一个变量，这里兜底，保证旧 plist 也能拉起插件。
+    if std::env::var("AGENT2API_NO_EXEC").map(|v| v.trim() == "1").unwrap_or(false) {
+        std::env::remove_var("AGENT2API_ALLOW_EXEC");
+    } else {
+        std::env::set_var("AGENT2API_ALLOW_EXEC", "1");
+    }
     // ── bootstrap：开库、迁移、读配置、装日志后端 ──────────────
     let mut state = match ServerState::bootstrap(port, host) {
         Ok(state) => state,

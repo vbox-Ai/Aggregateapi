@@ -35,6 +35,9 @@
 		<!-- 必须为 0：自更新会下载 glibc ELF 覆盖自身，iOS 上直接砖 -->
 		<key>AGENT2API_SELF_UPDATE</key>
 		<string>0</string>
+		<!-- iOS 上插件以独立进程运行：必须显式声明允许 spawn（网关闸门检查这项） -->
+		<key>AGENT2API_ALLOW_EXEC</key>
+		<string>1</string>
 		<key>AGENT2API_VERBOSE</key>
 		<string>0</string>
 	</dict>
