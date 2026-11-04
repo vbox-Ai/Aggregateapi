@@ -120,6 +120,14 @@ jobs:
             ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-nosandbox.plist" \
               EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
             cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-nosandbox.ipa"
+
+            # ── ④ TrollStore 专用版（EMBED=1 + platform-application + no-sandbox）
+            #    只有 TrollStore（CoreTrust）安装时这些特权才会被内核接受；
+            #    用 appinst/AppSync 装它会秒退，别混用。
+            echo "=== 构建 TrollStore 版 ==="
+            ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-trollstore.plist" \
+              EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
+            cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-trollstore.ipa"
           else
             echo "WARN: 没有静态库，跳过独立版/实验版"
           fi

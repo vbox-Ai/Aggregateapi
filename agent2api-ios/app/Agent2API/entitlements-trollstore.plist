@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ── TrollStore 专用版 ───────────────────────────────────────
+	     为什么要单独一份：
+	       · 用 appinst / AppSync 安装时，内核把我们的 ldid 签名当作"非平台签名"，
+	         一旦声明 platform-application 或 no-sandbox 就在 exec 阶段被 kill
+	         （表现为秒退、无 crash log——已实测两次）；
+	       · TrollStore 走 CoreTrust 漏洞装上后，签名被系统视为"平台级"，
+	         platform-application + no-sandbox 才可能真正生效，
+	         这也是 Filza 这类"无沙盒 App"能跑的机制。
+	     因此：这份 entitlements **只用于 TrollStore 安装**，
+	     appinst / Sideloadly / AppSync 装它仍然会秒退，别混用。 -->
+	<key>application-identifier</key>
+	<string>com.chiyu.agent2api</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>CHIYU000000</string>
+	<key>get-task-allow</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>com.chiyu.agent2api</string>
+	</array>
+
+	<!-- 平台级标记：TrollStore 会保留它，从而获得"系统应用"待遇 -->
+	<key>platform-application</key>
+	<true/>
+	<!-- 去掉 App 沙盒：这是插件能在 App 进程内被 exec 的前提 -->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<!-- 允许加载非 Apple 签名的库（越狱环境常见） -->
+	<key>com.apple.private.skip-library-validation</key>
+	<true/>
+</dict>
+</plist>
