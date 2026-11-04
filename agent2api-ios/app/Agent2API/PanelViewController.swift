@@ -142,6 +142,48 @@ final class PanelViewController: UIViewController {
         view.bringSubviewToFront(statusBar)
     }
 
+    // MARK: - 面板自检（网关起来了但页面空白时，告诉我们是 404 还是空响应）
+
+    /// 依次请求 /health /m /，把"状态码 + 字节数 + 前 160 字节"附到 diag。
+    /// 只有 /m 不是 200 或响应太小才把诊断页顶上来，避免正常时挡住面板。
+    private func selfCheckPanel() {
+        let targets: [String] = ["health", "m", ""]
+        let group = DispatchGroup()
+        var results: [String: String] = [:]
+
+        for target in targets {
+            group.enter()
+            let key = target.isEmpty ? "/" : "/" + target
+            var request = URLRequest(url: baseURL.appendingPathComponent(target))
+            request.timeoutInterval = 4
+            URLSession.shared.dataTask(with: request) { data, response, _ in
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                let bytes = data?.count ?? 0
+                let head = String(data: (data ?? Data()).prefix(160), encoding: .utf8) ?? ""
+                let flat = head.replacingOccurrences(of: "\n", with: " ")
+                results[key] = "HTTP \(code) · \(bytes) B · \(flat)"
+                group.leave()
+            }.resume()
+        }
+
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            var text = self.diag
+            for key in ["/health", "/m", "/"] {
+                if let value = results[key] { text += "\n\(key) → \(value)" }
+            }
+            self.diag = text
+
+            // /m 正常（200 且 >200 字节）就认为是面板页，交给 WebView 渲染
+            if let body = results["/m"], body.contains("HTTP 200"), !body.contains("· 0 B") {
+                let bytes = Int(body.split(separator: " ") .dropFirst(2).first ?? "0") ?? 0
+                if bytes > 200 { return }
+            }
+            self.statusBar.isHidden = false
+            self.showDiagnosticsPage()
+        }
+    }
+
     // MARK: - 诊断页（把失败原因铺满整屏，避免被状态栏裁掉）
 
     private func showDiagnosticsPage() {
@@ -244,7 +286,11 @@ final class PanelViewController: UIViewController {
         if !notes.isEmpty { diag += "\n其它候选失败：" + notes.joined(separator: " | ") }
         if !reason.isEmpty { diag += "\n原因=\(reason)" }
         NSLog("[Agent2API] a2a_start -> \(rc)  port=\(port) home=\(home.path) uiExists=\(uiExists)")
-        if rc != 0 { showDiagnosticsPage() }
+        if rc != 0 {
+            showDiagnosticsPage()
+        } else {
+            selfCheckPanel()
+        }
         #else
         diag = "mode=daemon（本构建未链接 agent2api_ios）"
         NSLog("[Agent2API] 本次构建未链接 agent2api_ios（纯客户端形态），请确认守护进程在跑")
