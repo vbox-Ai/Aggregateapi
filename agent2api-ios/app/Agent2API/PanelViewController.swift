@@ -142,6 +142,30 @@ final class PanelViewController: UIViewController {
         view.bringSubviewToFront(statusBar)
     }
 
+    // MARK: - 诊断页（把失败原因铺满整屏，避免被状态栏裁掉）
+
+    private func showDiagnosticsPage() {
+        guard !diag.isEmpty else { return }
+        let escaped = diag
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        let html = """
+        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>
+          body{font:15px -apple-system,Menlo;padding:18px;line-height:1.55;white-space:pre-wrap;word-break:break-all;
+               background:#111;color:#eee}
+          h3{margin:0 0 12px;font-size:17px;color:#ffd166}
+          code{color:#7ee787}
+        </style></head><body>
+        <h3>网关启动失败（构建 \(Self.buildStamp)）</h3>
+        <div>\(escaped)</div>
+        <p style="color:#888;margin-top:22px">把这一页截图发给开发者即可定位；点右上角「重试」会重新启动网关。</p>
+        </body></html>
+        """
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+
     // MARK: - 网关启停
 
     /// 形态 A2：进程内起网关。ui 目录取自 bundle，数据目录取 App 容器。
@@ -151,15 +175,34 @@ final class PanelViewController: UIViewController {
 
         #if A2A_EMBEDDED
         let fm = FileManager.default
-        guard let lib = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            diag = "拿不到 ApplicationSupport 目录"
-            return
+        // 数据目录候选：有沙盒/无沙盒、TrollStore/appinst 下可写位置各不相同，
+        // 逐个"建目录 + 写探针文件"实测，取第一个真正可写的；失败原因全部记录并显示。
+        var candidates: [URL] = []
+        if let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
+            candidates.append(docs.appendingPathComponent("agent2api", isDirectory: true))
         }
-        let home = lib.appendingPathComponent("agent2api", isDirectory: true)
-        do {
-            try fm.createDirectory(at: home, withIntermediateDirectories: true)
-        } catch {
-            diag = "建数据目录失败：\(error.localizedDescription)"
+        if let lib = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            candidates.append(lib.appendingPathComponent("agent2api", isDirectory: true))
+        }
+        candidates.append(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("agent2api", isDirectory: true))
+
+        var notes: [String] = []
+        var picked: URL?
+        for candidate in candidates {
+            do {
+                try fm.createDirectory(at: candidate, withIntermediateDirectories: true)
+                let probe = candidate.appendingPathComponent(".a2a_write_probe")
+                try Data("ok".utf8).write(to: probe, options: .atomic)
+                try? fm.removeItem(at: probe)
+                picked = candidate
+                break
+            } catch {
+                notes.append("\(candidate.path) → \(error.localizedDescription)")
+            }
+        }
+        guard let home = picked else {
+            diag = "没有可写的数据目录：\n" + notes.joined(separator: "\n")
+            return
         }
         let ui = Bundle.main.resourceURL?.appendingPathComponent("ui", isDirectory: true)
         let uiExists = ui.map { fm.fileExists(atPath: $0.path) } ?? false
@@ -189,8 +232,10 @@ final class PanelViewController: UIViewController {
         }
         // 把关键事实直接写到界面上：没有终端也能定位（模式/返回码/端口/数据目录/ui 是否打包）
         diag = "mode=embedded rc=\(rc)\nport=\(port)\nhome=\(home.path)\nui存在=\(uiExists)"
+        if !notes.isEmpty { diag += "\n其它候选失败：" + notes.joined(separator: " | ") }
         if !reason.isEmpty { diag += "\n原因=\(reason)" }
         NSLog("[Agent2API] a2a_start -> \(rc)  port=\(port) home=\(home.path) uiExists=\(uiExists)")
+        if rc != 0 { showDiagnosticsPage() }
         #else
         diag = "mode=daemon（本构建未链接 agent2api_ios）"
         NSLog("[Agent2API] 本次构建未链接 agent2api_ios（纯客户端形态），请确认守护进程在跑")
