@@ -427,6 +427,8 @@ jobs:
           find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/main/ \;
           find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/app/ \;
           find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/web/ \;
+          # all-in-one deb（App + daemon）在 ios job 里产出，必须一起收进来
+          find artifacts -name '*.deb' -exec cp -v {} dist/app/ \;
           find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/app/ \;
 
           # 守护进程安装包（daemon + plist + 安装脚本）
