@@ -11,8 +11,13 @@
         "type": "github-release",
         "repo": "vbox-Ai/Aggregateapi"
       },
-      "official": true,
-      "tags": ["official", "providers"]
+      "official": false,
+      "tags": [
+        "official",
+        "providers"
+      ],
+      "requireSigned": false,
+      "require_signed": false
     },
     {
       "id": "agent2api-web-providers",
@@ -23,8 +28,17 @@
         "type": "github-release",
         "repo": "vbox-Ai/Aggregateapi"
       },
-      "official": true,
-      "tags": ["official", "providers", "web"]
+      "official": false,
+      "tags": [
+        "official",
+        "providers",
+        "web"
+      ],
+      "requireSigned": false,
+      "require_signed": false
     }
-  ]
+  ],
+  "official": false,
+  "requireSigned": false,
+  "require_signed": false
 }
