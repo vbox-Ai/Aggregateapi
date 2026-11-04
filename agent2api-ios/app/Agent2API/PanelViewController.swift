@@ -55,6 +55,8 @@ final class PanelViewController: UIViewController {
     private var jsErrors: [String] = []
     /// /m 404 时是否已尝试回退到 "/"
     private var triedRootFallback = false
+    /// 当前是否显示桌面面板（/）而不是手机面板（/m）
+    private var showingDesktop = false
 
     // MARK: - 生命周期
 
@@ -66,6 +68,12 @@ final class PanelViewController: UIViewController {
         buildWebView()
         buildStatusBar()
         if PanelViewController.backend == .embedded { startEmbeddedGateway() }
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "桌面面板",
+            style: .plain,
+            target: self,
+            action: #selector(toggleDesktopPanel)
+        )
         reload()
         scheduleHealthPolling()
     }
@@ -346,6 +354,15 @@ final class PanelViewController: UIViewController {
         diag = "mode=daemon（本构建未链接 agent2api_ios）"
         NSLog("[Agent2API] 本次构建未链接 agent2api_ios（纯客户端形态），请确认守护进程在跑")
         #endif
+    }
+
+    /// 在「手机面板 /m」与「桌面面板 /」之间切换。
+    /// 手机面板的「网关 Key」页是只读的（上游设计），桌面面板才有完整的
+    /// Key 新建、可用范围（提供商/模型白名单）等管理能力。
+    @objc private func toggleDesktopPanel() {
+        showingDesktop.toggle()
+        navigationItem.rightBarButtonItem?.title = showingDesktop ? "手机面板" : "桌面面板"
+        webView.load(URLRequest(url: showingDesktop ? baseURL : baseURL.appendingPathComponent("m")))
     }
 
     private func reload() {
