@@ -373,6 +373,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 发布说明里要跑 git log，需要完整历史
 
       - name: 取回构建产物
         uses: actions/download-artifact@v4
@@ -382,57 +384,99 @@ jobs:
       - name: 归类文件
         run: |
           set -euo pipefail
-          mkdir -p dist/main dist/web
-          find artifacts -name '*.ipa' -exec cp -v {} dist/main/ \;
-          find artifacts -name 'agent2api-server' -exec cp -v {} dist/main/ \;
-          find artifacts -name 'com.chiyu.agent2api.plist' -exec cp -v {} dist/main/ \;
+          mkdir -p dist/main dist/web dist/app
+          find artifacts -name '*.ipa' -exec cp -v {} dist/app/ \;
+          find artifacts -name 'agent2api-server' -exec cp -v {} dist/app/ \;
+          find artifacts -name 'com.chiyu.agent2api.plist' -exec cp -v {} dist/app/ \;
           find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/main/ \;
+          find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/app/ \;
           find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/web/ \;
+          find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/app/ \;
+
+          # 守护进程安装包（daemon + plist + 安装脚本）
+          mkdir -p kit
+          cp dist/app/agent2api-server kit/ 2>/dev/null || true
+          cp dist/app/com.chiyu.agent2api.plist kit/ 2>/dev/null || true
+          cp scripts/install-daemon-kit.sh kit/ 2>/dev/null || true
+          ( cd kit && zip -qry ../dist/app/ios-daemon-kit.zip . )
+
+          echo "--- app ---"; ls -lh dist/app || true
           echo "--- main ---"; ls -lh dist/main || true
           echo "--- web ---";  ls -lh dist/web  || true
-          test -n "$(ls -A dist/main)" || { echo "main 目录为空：ios/plugins 产物没取到"; exit 1; }
-          # 守护进程安装包（daemon + plist + 安装脚本，手机上 NewTerm 里 bash 一下就行）
-          mkdir -p kit
-          cp dist/main/agent2api-server kit/ 2>/dev/null || true
-          cp dist/main/com.chiyu.agent2api.plist kit/ 2>/dev/null || true
-          cp scripts/install-daemon-kit.sh kit/ 2>/dev/null || true
-          ( cd kit && zip -qry ../dist/main/ios-daemon-kit.zip . )
-          ls -lh dist/main
+          test -n "$(ls -A dist/app)" || { echo "app 目录为空：ios 产物没取到"; exit 1; }
 
-      - name: 读取版本号
+      - name: 读取版本号与构建号
         id: ver
         run: |
           set -euo pipefail
           M=$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")
           W=$(python3 -c "import json;print(json.load(open('plugins/agent2api-web-providers.json'))['version'])")
+          STAMP=$(date -u +%Y%m%d)
           echo "main=${M}" >> "$GITHUB_OUTPUT"
           echo "web=${W}" >> "$GITHUB_OUTPUT"
-          echo "主包版本 ${M} / 网页包版本 ${W}"
+          echo "app_tag=ios-${STAMP}-b${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "主包 ${M} / 网页包 ${W} / 应用快照 ios-${STAMP}-b${{ github.run_number }}"
 
-      - name: 发布主包
+      - name: 生成发布说明
+        run: |
+          set -euo pipefail
+          {
+            echo "## 构建信息"
+            echo ""
+            echo "- 构建号：\`${{ github.run_number }}\`"
+            echo "- 提交：\`${{ github.sha }}\`"
+            echo "- 时间：$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "- 插件版本：providers \`${{ steps.ver.outputs.main }}\` / web \`${{ steps.ver.outputs.web }}\`"
+            echo ""
+            echo "## 本次包含"
+            echo ""
+            echo "| 文件 | 说明 |"
+            echo "|---|---|"
+            echo "| \`Agent2API-standalone.ipa\` | 网关内嵌 + 去沙盒：装完即用，插件可在 App 内执行 |"
+            echo "| \`Agent2API.ipa\` | 纯客户端壳：配 LaunchDaemon 使用（0.13 MB） |"
+            echo "| \`ios-daemon-kit.zip\` | daemon + plist + 一键安装脚本 |"
+            echo "| \`agent2api-providers-*.zip\` | 提供商增强插件（iOS 原生） |"
+            echo "| \`agent2api-web-providers-*.zip\` | 网页提供商插件（iOS 原生） |"
+            echo ""
+            echo "## 最近的提交"
+            echo ""
+            git log -8 --pretty='- `%h` %s (%an, %ad)' --date=short
+          } > notes.md
+          cat notes.md
+
+      # ── ① 应用快照：每次构建一个全新 tag，历史版本永久保留（你要的"能看到旧版本"）
+      - name: 发布应用快照（新 tag，保留历史）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.app_tag }}
+          name: Agent2API iOS ${{ steps.ver.outputs.main }} · build ${{ github.run_number }}
+          body_path: notes.md
+          files: dist/app/*
+          fail_on_unmatched_files: false
+          make_latest: true
+
+      # ── ② 插件稳定通道：tag 固定（网关按 v{版本} 查找），覆盖更新
+      - name: 发布插件稳定通道（providers）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.main }}
-          name: Agent2API iOS v${{ steps.ver.outputs.main }}
+          name: Agent2API providers v${{ steps.ver.outputs.main }}（插件通道）
           body: |
-            iOS 越狱安装包与网关守护进程。
-
-            - `Agent2API.ipa`：客户端壳（EMBED=0，连本机 daemon 的 127.0.0.1:3065）
-            - `agent2api-server`：网关守护进程（Mach-O，放 /var/jb/usr/local/bin）
-            - `com.chiyu.agent2api.plist`：LaunchDaemon 配置（含 AGENT2API_ALLOW_EXEC=1）
-            - `agent2api-providers-*.zip`：提供商增强插件（iOS 原生包，供网关"网关插件"页安装）
+            这是**插件稳定通道**：网关按 `v{版本}` 查这个 tag 来下载插件包。
+            每次构建会覆盖资产，历史版本请看 `ios-*` 开头的应用快照。
           files: dist/main/*
           fail_on_unmatched_files: false
           overwrite: true
+          make_latest: false
 
-      - name: 发布网页插件包
+      - name: 发布插件稳定通道（web）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: web-v${{ steps.ver.outputs.web }}
-          name: Agent2API web-providers v${{ steps.ver.outputs.web }}
+          name: Agent2API web-providers v${{ steps.ver.outputs.web }}（插件通道）
           body: |
-            网页提供商插件（智谱清言 / DeepSeek 网页版，iOS 原生包）。
-            在网关面板「网关插件」页点下载安装即可。
+            网页插件稳定通道（网关据此下载）。历史版本见 `ios-*` 应用快照。
           files: dist/web/*
           fail_on_unmatched_files: false
           overwrite: true
+          make_latest: false
