@@ -114,8 +114,9 @@ final class PanelViewController: UIViewController {
         view.addSubview(statusBar)
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        statusLabel.numberOfLines = 2
+        statusLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        // 诊断信息可能有多行（mode/port/home/ui/原因），给到 6 行，别被裁掉
+        statusLabel.numberOfLines = 6
         statusLabel.textColor = .black
         statusBar.addSubview(statusLabel)
 
@@ -129,7 +130,7 @@ final class PanelViewController: UIViewController {
             statusBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            statusBar.heightAnchor.constraint(equalToConstant: 44),
+            statusBar.heightAnchor.constraint(equalToConstant: 104),
 
             statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 14),
             statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
