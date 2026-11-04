@@ -178,6 +178,7 @@ final class PanelViewController: UIViewController {
         // 数据目录候选：有沙盒/无沙盒、TrollStore/appinst 下可写位置各不相同，
         // 逐个"建目录 + 写探针文件"实测，取第一个真正可写的；失败原因全部记录并显示。
         var candidates: [URL] = []
+        // ① 先试容器内的常规位置（有沙盒/正常安装时走这里）
         if let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
             candidates.append(docs.appendingPathComponent("agent2api", isDirectory: true))
         }
@@ -186,18 +187,26 @@ final class PanelViewController: UIViewController {
         }
         candidates.append(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("agent2api", isDirectory: true))
 
+        // ② 再去沙盒 App 的真实路径：带 `no-sandbox` 后进程会**失去对本容器的沙盒授权**，
+        //    容器目录反而写不进去（你截图里 Documents 报"没有权限"就是这个），
+        //    而 /var/mobile 下的真实目录是 mobile 用户可写的（Filza 就写这里）。
+        candidates.append(URL(fileURLWithPath: "/var/mobile/Library/agent2api", isDirectory: true))
+        candidates.append(URL(fileURLWithPath: "/var/mobile/Documents/agent2api", isDirectory: true))
+        candidates.append(URL(fileURLWithPath: "/var/tmp/agent2api", isDirectory: true))
+
         var notes: [String] = []
         var picked: URL?
         for candidate in candidates {
             do {
                 try fm.createDirectory(at: candidate, withIntermediateDirectories: true)
                 let probe = candidate.appendingPathComponent(".a2a_write_probe")
-                try Data("ok".utf8).write(to: probe, options: .atomic)
+                try Data("ok".utf8).write(to: probe)
                 try? fm.removeItem(at: probe)
                 picked = candidate
                 break
             } catch {
-                notes.append("\(candidate.path) → \(error.localizedDescription)")
+                let short = (error as NSError).code
+                notes.append("\(candidate.path) [\(short)]")
             }
         }
         guard let home = picked else {
