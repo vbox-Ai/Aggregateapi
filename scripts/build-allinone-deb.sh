@@ -123,11 +123,25 @@ else
   echo "[agent2api] WARN: 没有 uicache，请手动 respring"
 fi
 
-echo "[agent2api] 加载守护进程"
+echo "[agent2api] 停止旧进程（否则新装的面板资源不会被加载）"
 launchctl bootout system/"$PKG" 2>/dev/null || true
 launchctl unload "$PLIST" 2>/dev/null || true
+killall -9 agent2api-server 2>/dev/null || true
+sleep 1
+
+echo "[agent2api] 面板资源检查"
+UI_DIR="/var/jb/usr/local/share/agent2api/ui"
+if [ -d "$UI_DIR" ]; then
+  echo "[agent2api]    ui 文件数：$(find "$UI_DIR" -type f | wc -l | tr -d ' ')（期望 256）"
+else
+  echo "[agent2api]   ⚠ 缺少 $UI_DIR，/m 会 404"
+fi
+
+echo "[agent2api] 加载守护进程"
+launchctl enable system/"$PKG" 2>/dev/null || true
 if ! launchctl bootstrap system "$PLIST" 2>/dev/null; then
-  launchctl load -w "$PLIST" 2>/dev/null || true
+  echo "[agent2api]   bootstrap 失败，尝试 kickstart 已注册的 job"
+  launchctl kickstart -k system/"$PKG" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || true
 fi
 
 echo "[agent2api] 健康检查"

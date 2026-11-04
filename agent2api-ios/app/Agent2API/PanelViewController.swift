@@ -53,6 +53,8 @@ final class PanelViewController: UIViewController {
     private var summary: String = ""
     /// 页面 JS 报错（显示在状态条最后几行，白屏时靠它定位）
     private var jsErrors: [String] = []
+    /// /m 404 时是否已尝试回退到 "/"
+    private var triedRootFallback = false
 
     // MARK: - 生命周期
 
@@ -216,6 +218,12 @@ final class PanelViewController: UIViewController {
             }
             self.summary = summaryLines.joined(separator: "\n")
             self.statusLabel.text = self.summary
+
+            // /m 打不开时，回退到站点根（有些网关把面板挂在 / 上）
+            if let body = results["/m"], !body.contains("HTTP 200"), !self.triedRootFallback {
+                self.triedRootFallback = true
+                self.webView.load(URLRequest(url: self.baseURL))
+            }
 
             // /m 正常（200 且 >200 字节）就认为是面板页，交给 WebView 渲染
             if let body = results["/m"], body.contains("HTTP 200"), !body.contains("· 0 B") {
