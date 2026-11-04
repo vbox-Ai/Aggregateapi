@@ -21,8 +21,10 @@ final class PanelViewController: UIViewController {
     static var backend: Backend = .daemon
     #endif
 
-    /// 网关端口，与 daemon/com.chiyu.agent2api.plist 里的 AGENT2API_PROXY_PORT 保持一致
-    private let port: UInt16 = 3065
+    /// 网关端口首选值（与 daemon plist 的 AGENT2API_PROXY_PORT 一致）；
+    /// 若被占用（例如上一次的实例还没退干净），会依次尝试后面的端口。
+    private var port: UInt16 = 3065
+    private let portCandidates: [UInt16] = [3065, 3066, 3067]
     private var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
 
     private var webView: WKWebView!
@@ -150,15 +152,26 @@ final class PanelViewController: UIViewController {
         let ui = Bundle.main.resourceURL?.appendingPathComponent("ui", isDirectory: true)
         let uiExists = ui.map { fm.fileExists(atPath: $0.path) } ?? false
 
-        let rc = home.path.withCString { homePtr in
-            (ui?.path ?? "").withCString { uiPtr in
-                a2a_start(homePtr, uiPtr, port)
+        let rc: Int32 = {
+            // 端口可能被上一次实例或 daemon 占着：依次试 3065 → 3066 → 3067
+            var last: Int32 = -1
+            for candidate in portCandidates {
+                last = home.path.withCString { homePtr in
+                    (ui?.path ?? "").withCString { uiPtr in
+                        a2a_start(homePtr, uiPtr, candidate)
+                    }
+                }
+                if last == 0 {
+                    port = candidate
+                    break
+                }
             }
-        }
+            return last
+        }()
         embeddedRC = rc
-        // 把关键事实直接写到界面上：没有终端也能定位（数据目录 / ui 是否存在 / 启动返回码）
-        diag = "mode=embedded rc=\(rc)\nhome=\(home.path)\nui存在=\(uiExists) port=\(port)"
-        NSLog("[Agent2API] a2a_start -> \(rc)  home=\(home.path) uiExists=\(uiExists)")
+        // 把关键事实直接写到界面上：没有终端也能定位（模式/返回码/端口/数据目录/ui 是否打包）
+        diag = "mode=embedded rc=\(rc)\nport=\(port)\nhome=\(home.path)\nui存在=\(uiExists)"
+        NSLog("[Agent2API] a2a_start -> \(rc)  port=\(port) home=\(home.path) uiExists=\(uiExists)")
         #else
         diag = "mode=daemon（本构建未链接 agent2api_ios）"
         NSLog("[Agent2API] 本次构建未链接 agent2api_ios（纯客户端形态），请确认守护进程在跑")
