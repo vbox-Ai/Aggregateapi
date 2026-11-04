@@ -33,6 +33,11 @@ final class PanelViewController: UIViewController {
     private var healthTimer: Timer?
     private var startedEmbedded = false
 
+    /// 内嵌网关 `a2a_start` 的返回码（0 成功 / -1 初始化失败 / -2 端口占用）
+    private var embeddedRC: Int32?
+    /// 显示在黄条上的诊断串：模式、返回码、数据目录、ui 是否存在
+    private var diag: String = ""
+
     // MARK: - 生命周期
 
     override func viewDidLoad() {
@@ -132,18 +137,30 @@ final class PanelViewController: UIViewController {
 
         #if A2A_EMBEDDED
         let fm = FileManager.default
-        guard let lib = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        guard let lib = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            diag = "拿不到 ApplicationSupport 目录"
+            return
+        }
         let home = lib.appendingPathComponent("agent2api", isDirectory: true)
-        try? fm.createDirectory(at: home, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: home, withIntermediateDirectories: true)
+        } catch {
+            diag = "建数据目录失败：\(error.localizedDescription)"
+        }
         let ui = Bundle.main.resourceURL?.appendingPathComponent("ui", isDirectory: true)
+        let uiExists = ui.map { fm.fileExists(atPath: $0.path) } ?? false
 
         let rc = home.path.withCString { homePtr in
             (ui?.path ?? "").withCString { uiPtr in
                 a2a_start(homePtr, uiPtr, port)
             }
         }
-        NSLog("[Agent2API] a2a_start -> \(rc)")
+        embeddedRC = rc
+        // 把关键事实直接写到界面上：没有终端也能定位（数据目录 / ui 是否存在 / 启动返回码）
+        diag = "mode=embedded rc=\(rc)\nhome=\(home.path)\nui存在=\(uiExists) port=\(port)"
+        NSLog("[Agent2API] a2a_start -> \(rc)  home=\(home.path) uiExists=\(uiExists)")
         #else
+        diag = "mode=daemon（本构建未链接 agent2api_ios）"
         NSLog("[Agent2API] 本次构建未链接 agent2api_ios（纯客户端形态），请确认守护进程在跑")
         #endif
     }
@@ -177,7 +194,12 @@ final class PanelViewController: UIViewController {
                 guard let self else { return }
                 self.statusBar.isHidden = ok
                 if !ok {
-                    self.statusLabel.text = "网关未响应 127.0.0.1:\(self.port)\n检查 LaunchDaemon：launchctl kickstart -k system/com.chiyu.agent2api"
+                    // 把诊断信息直接印在界面上（无需终端）：模式、启动返回码、数据目录、ui 是否存在
+                    var text = "网关未响应 127.0.0.1:\(self.port)"
+                    if !self.diag.isEmpty { text += "\n" + self.diag }
+                    if let err = error { text += "\n错误：\(err.localizedDescription)" }
+                    text += "\nA1 形态：launchctl kickstart -k system/com.chiyu.agent2api"
+                    self.statusLabel.text = text
                 }
             }
         }.resume()
