@@ -99,7 +99,10 @@ for kv in "A2ABuildNumber:$STAMP" "A2AGitSha:$GIT_SHA" "A2ABuildTime:$BUILD_TIME
   /usr/libexec/PlistBuddy -c "Add :$key string $val" "$APP/Info.plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Set :$key $val" "$APP/Info.plist"
 done
-echo "    构建戳：3.4.$STAMP  sha=${GIT_SHA}  ${BUILD_TIME}"
+# 桌面图标名带构建号：一眼看出装的是哪一版（调试期非常有用）
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName A2A $STAMP" "$APP/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string A2A $STAMP" "$APP/Info.plist"
+echo "    构建戳：3.4.$STAMP  sha=${GIT_SHA}  ${BUILD_TIME}  图标名=A2A $STAMP"
 printf 'APPL????' > "$APP/PkgInfo"
 cp "$ROOT/app/Agent2API/Resources/"*.png "$APP/"
 

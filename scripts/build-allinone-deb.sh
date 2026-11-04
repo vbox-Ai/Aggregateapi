@@ -158,7 +158,8 @@ EOF
 chmod 755 "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm"
 
 mkdir -p "$OUT"
-DEB="$OUT/${PKG}_${VERSION}_iphoneos-arm64.deb"
+# 文件名做得一眼可辨：Agent2API-3.4.83.deb（dpkg 只看 control 里的 Package/Version）
+DEB="$OUT/Agent2API-${VERSION}.deb"
 dpkg-deb -b --root-owner-group "$ROOT" "$DEB" >/dev/null
 echo "==> 产出：$DEB ($(du -h "$DEB" | cut -f1))"
 dpkg-deb -c "$DEB" | sed -n '1,12p'
