@@ -68,6 +68,10 @@ if [ -n "$UI_SRC" ] && [ -d "$UI_SRC" ]; then
   echo "==> 安装面板资源（$UI_SRC → /var/jb/usr/local/share/agent2api/ui）"
   mkdir -p "$ROOT/var/jb/usr/local/share/agent2api/ui"
   cp -R "$UI_SRC"/. "$ROOT/var/jb/usr/local/share/agent2api/ui"/
+  # 再放一份到守护进程同级：上游 resolve_ui_dir() 默认就是 <exe_dir>/ui，
+  # 这样 launchd 不传 AGENT2API_UI_DIR 也能找到面板（双保险）
+  mkdir -p "$ROOT/var/jb/usr/local/bin/ui"
+  cp -R "$UI_SRC"/. "$ROOT/var/jb/usr/local/bin/ui"/
   echo "    面板文件数：$(find "$ROOT/var/jb/usr/local/share/agent2api/ui" -type f | wc -l | tr -d ' ')"
 else
   echo "WARN: 没有提供 --ui，守护进程将没有面板（/m 会 404）"

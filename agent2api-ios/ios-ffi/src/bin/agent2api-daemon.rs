@@ -104,9 +104,11 @@ fn main() -> ExitCode {
     if ui_dir.is_none() {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(parent) = exe.parent() {
-                let guess = parent.join("../share/agent2api/ui");
-                if guess.is_dir() {
-                    ui_dir = Some(guess);
+                for guess in [parent.join("ui"), parent.join("../share/agent2api/ui")] {
+                    if guess.is_dir() {
+                        ui_dir = Some(guess);
+                        break;
+                    }
                 }
             }
         }
