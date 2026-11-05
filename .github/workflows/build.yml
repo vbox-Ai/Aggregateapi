@@ -68,7 +68,7 @@ jobs:
           if [ -n "$TAG" ]; then
             if git -C Agent2API fetch --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 \
                && git -C Agent2API checkout -q "refs/tags/$TAG" 2>/dev/null; then
-              echo "== 上游版本：$TAG（$(git -C Agent2API rev-parse --short HEAD)）"
+              echo "== 上游版本：${TAG}（$(git -C Agent2API rev-parse --short HEAD)）"
             else
               echo "== 拉取 tag $TAG 失败，继续用 main：$(git -C Agent2API rev-parse --short HEAD)"
             fi
@@ -83,7 +83,7 @@ jobs:
           for p in agent2api-universal/patches/*.diff; do
             echo "== apply $p"
             if ! git -C Agent2API apply --3way "$(pwd)/$p"; then
-              echo "❌ 补丁未应用：$p（上游已变，需要重新生成这个补丁）"
+              echo "❌ 补丁未应用：${p}（上游已变，需要重新生成这个补丁）"
               exit 1
             fi
             echo "   ✅ 已应用"
