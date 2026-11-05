@@ -71,10 +71,31 @@ fn main() -> ExitCode {
     // 数据目录兜底：launchd 会传 AGENT2API_PROXY_HOME，但 postinst 的
     // "直接后台启动" 没有环境变量，daemon 就会用相对路径 ./.agent2api，
     // 结果数据库/插件落到 cwd 下的隐藏目录里（排查时非常容易踩坑）。
-    if std::env::var("AGENT2API_PROXY_HOME").map(|v| v.trim().is_empty()).unwrap_or(true) {
-        for candidate in ["/var/jb/usr/local/var/agent2api", "/var/mobile/Library/agent2api"] {
-            if std::path::Path::new(candidate).is_dir() {
-                std::env::set_var("AGENT2API_PROXY_HOME", candidate);
+    // 注意：rootHide / roothide 环境下 /var/jb 可能根本不存在（真实前缀是
+    // …/.jbroot-XXXX/）。所以这里不写死任何前缀，而是"跟着自身二进制找"：
+    //   <root>/usr/local/bin/agent2api-server → 数据在 <root>/usr/local/var/agent2api
+    let install_root = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+        .and_then(|bin| bin.parent().and_then(|local| local.parent()).map(|p| p.to_path_buf()));
+
+    // plist 里可能写着 /var/jb/... 而 rootHide 下这个前缀不存在 ——
+    // 环境变量指向不存在的目录时同样视为未设置，交给下面的推导逻辑。
+    let env_home = std::env::var("AGENT2API_PROXY_HOME").ok();
+    let env_home_valid = env_home
+        .as_deref()
+        .map(|v| !v.trim().is_empty() && std::path::Path::new(v).is_dir())
+        .unwrap_or(false);
+    if !env_home_valid {
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(root) = &install_root {
+            candidates.push(root.join("usr/local/var/agent2api"));
+        }
+        candidates.push(std::path::PathBuf::from("/var/jb/usr/local/var/agent2api"));
+        candidates.push(std::path::PathBuf::from("/var/mobile/Library/agent2api"));
+        for candidate in candidates {
+            if candidate.is_dir() {
+                std::env::set_var("AGENT2API_PROXY_HOME", &candidate);
                 break;
             }
         }
@@ -134,10 +155,12 @@ fn main() -> ExitCode {
         ui_dir = None;
     }
     if ui_dir.is_none() {
-        let candidates = [
-            std::path::PathBuf::from("/var/jb/usr/local/share/agent2api/ui"),
-            std::path::PathBuf::from("/usr/local/share/agent2api/ui"),
-        ];
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(root) = &install_root {
+            candidates.push(root.join("usr/local/share/agent2api/ui"));
+        }
+        candidates.push(std::path::PathBuf::from("/var/jb/usr/local/share/agent2api/ui"));
+        candidates.push(std::path::PathBuf::from("/usr/local/share/agent2api/ui"));
         ui_dir = candidates.into_iter().find(|dir| dir.is_dir());
     }
     if ui_dir.is_none() {
