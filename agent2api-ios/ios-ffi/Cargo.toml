@@ -16,6 +16,8 @@ name = "agent2api-daemon"
 path = "src/bin/agent2api-daemon.rs"
 
 [dependencies]
+# 内嵌 provider（C 方案）：由 CI 在 out/packlib/pack_host 生成，本地没有就关掉该 feature
+pack_host = { path = "../../out/packlib/pack_host", optional = true }
 # 网关本体：直接依赖上游 workspace 里的独立 crate（不含 tauri / 不含 Windows 分支）
 # 路径按你的 clone 位置改：默认假设本目录位于 agent2api-ios/ios-ffi
 agent2api-server = { path = "../../Agent2API/desktop-tauri/src-tauri/server" }
@@ -31,4 +33,4 @@ strip = true
 
 [features]
 # 链接内嵌 provider 静态库（CI 传 A2A_PACK_LIB_DIR 时启用）
-pack_host = []
+pack_host = ["dep:pack_host"]

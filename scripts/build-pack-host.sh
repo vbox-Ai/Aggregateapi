@@ -30,11 +30,13 @@ echo "==> 生成 pack_host crate"
 python3 "$ROOT/scripts/gen-pack-host.py" "$CRATE" "$HOST" "$FEATURES"
 
 cat > "$HOST/src/lib.rs" <<'EOF'
-//! 内嵌宿主：把 provider 注册表暴露成一个 C ABI 函数，供 daemon 的
-//! `--serve-pack` 模式调用（协议仍是 SDK 标准的 stdin/stdout JSON 行）。
+//! 内嵌宿主：daemon 的 `--serve-pack` 模式直接调用 `serve()`。
+//!
+//! 用 rlib（不是 staticlib）：staticlib 会各自带一份 std，
+//! 链进 daemon 时出现 `duplicate symbol _rust_eh_personality`。
 
-#[no_mangle]
-pub extern "C" fn pack_host_serve() {
+/// 走 SDK 标准的 stdin/stdout JSON 行协议，直到连接断开。
+pub fn serve() {
     agent2api_provider_sdk::serve_blocking(pack_inner::registry_all());
 }
 EOF
@@ -42,7 +44,6 @@ EOF
 echo "==> 编 pack_host 静态库（aarch64-apple-ios）"
 ( cd "$HOST" && cargo build --release --target aarch64-apple-ios )
 
-LIB="$HOST/target/aarch64-apple-ios/release/libpack_host.a"
+LIB="$HOST/target/aarch64-apple-ios/release/libpack_host.rlib"
 [ -f "$LIB" ] || { echo "❌ 没编出 $LIB"; exit 1; }
-cp "$LIB" "$OUT/libpack_host.a"
-echo "==> 产出：$OUT/libpack_host.a ($(du -h "$OUT/libpack_host.a" | cut -f1))"
+echo "==> 产出：$LIB ($(du -h "$LIB" | cut -f1))"

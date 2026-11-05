@@ -26,17 +26,14 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::ExitCode;
 
-#[cfg(all(target_os = "ios", feature = "pack_host"))]
-extern "C" {
-    /// 由 libpack_host.a 提供：合并后的 provider 注册表，走 SDK 的标准协议。
-    fn pack_host_serve();
-}
+
 
 /// `--serve-pack`：作为"插件进程"运行（由网关 spawn 自身二进制，不加载外部文件）。
 fn serve_embedded_pack() -> ExitCode {
     #[cfg(all(target_os = "ios", feature = "pack_host"))]
-    unsafe {
-        pack_host_serve();
+    {
+        // 进程内跑 provider：走 SDK 的 stdin/stdout 协议，不再 exec 任何外部文件。
+        pack_host::serve();
     }
     #[cfg(not(all(target_os = "ios", feature = "pack_host")))]
     {

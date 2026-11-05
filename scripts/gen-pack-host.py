@@ -63,7 +63,7 @@ edition = "2021"
 
 [lib]
 name = "pack_host"
-crate-type = ["staticlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 {prov_dep}
