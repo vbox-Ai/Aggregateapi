@@ -256,6 +256,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build -p agent2api-providers --release --target aarch64-apple-ios
+          mkdir -p "$GITHUB_WORKSPACE/out/plugins"
           cp target/aarch64-apple-ios/release/agent2api-providers \
              "$GITHUB_WORKSPACE/out/plugins/agent2api-providers"
 
