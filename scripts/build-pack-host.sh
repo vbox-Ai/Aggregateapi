@@ -15,6 +15,8 @@ FEATURES="${3:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CRATE="$REPO/crates/providers"
 [ -d "$CRATE" ] || { echo "找不到 providers crate：$CRATE"; exit 1; }
+# Cargo 的 path 依赖按"清单所在目录"解析，必须传绝对路径
+CRATE="$(cd "$CRATE" && pwd)"
 
 HOST="$OUT/pack_host"
 mkdir -p "$OUT"
