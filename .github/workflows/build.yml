@@ -52,6 +52,8 @@ jobs:
               echo "WARN: $p 未应用（上游已变），继续"
             fi
           done
+          echo "== C 方案：插件进程改为 daemon 自身 --serve-pack"
+          python3 scripts/patch-inproc.py Agent2API || echo "WARN: inproc 补丁未应用"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,14 +65,24 @@ jobs:
             Agent2API/desktop-tauri/src-tauri -> target
             agent2api-ios/ios-ffi -> target
 
+      - name: 编内嵌 provider 静态库（C 方案）
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/ProvidersPlugin/Agent2Providers.git plugins-src
+          python3 scripts/patch-plugin-cargo.py plugins-src
+          chmod +x scripts/*.sh
+          bash scripts/build-pack-host.sh plugins-src out/packlib
+          ls -lh out/packlib/libpack_host.a
+
       # 守护进程：用我们自己的 bin 目标（上游已删 headless bin）
       - name: 编网关守护进程（Mach-O，launchd 用）
         working-directory: agent2api-ios/ios-ffi
         env:
           IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOY }}
+          A2A_PACK_LIB_DIR: ${{ github.workspace }}/out/packlib
         run: |
           set -euo pipefail
-          cargo build --release --target aarch64-apple-ios --bin agent2api-daemon
+          cargo build --release --target aarch64-apple-ios --features pack_host --bin agent2api-daemon
           BIN=target/aarch64-apple-ios/release/agent2api-daemon
           file "$BIN"
           mkdir -p "$GITHUB_WORKSPACE/out/ios"

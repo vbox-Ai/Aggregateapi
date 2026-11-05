@@ -28,3 +28,7 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+[features]
+# 链接内嵌 provider 静态库（CI 传 A2A_PACK_LIB_DIR 时启用）
+pack_host = []

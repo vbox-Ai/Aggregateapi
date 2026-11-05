@@ -23,7 +23,26 @@
 //!   AGENT2API_NO_EXEC      置 1 强制禁止 spawn 插件
 //!   AGENT2API_ALLOW_NO_KEY 置 1 关闭全部闸门（纯本机自用）
 
-use std::net::{IpAddr, Ipv4Addr};
+'use std::net::{IpAddr, Ipv4Addr};
+
+#[cfg(all(target_os = "ios", feature = "pack_host"))]
+extern "C" {
+    /// 由 libpack_host.a 提供：合并后的 provider 注册表，走 SDK 的标准协议。
+    fn pack_host_serve();
+}
+
+/// `--serve-pack`：作为"插件进程"运行（由网关 spawn 自身二进制，不加载外部文件）。
+fn serve_embedded_pack() -> ExitCode {
+    #[cfg(all(target_os = "ios", feature = "pack_host"))]
+    unsafe {
+        pack_host_serve();
+    }
+    #[cfg(not(all(target_os = "ios", feature = "pack_host")))]
+    {
+        eprintln!("[serve-pack] 本构建没有内嵌 provider（未链接 libpack_host.a）");
+    }
+    ExitCode::SUCCESS
+}'
 use std::process::ExitCode;
 
 use agent2api_server::server::{access, config, logging, start, ServerState};
@@ -36,7 +55,11 @@ fn env_port(key: &str) -> Option<u16> {
         .and_then(|value| value.parse().ok())
 }
 
-fn main() -> ExitCode {
+'fn main() -> ExitCode {
+    // 插件形态：网关把自身二进制以 --serve-pack 拉起来，走 stdin/stdout 协议。
+    if std::env::args().any(|arg| arg == "--serve-pack") {
+        return serve_embedded_pack();
+    }'
     let port = env_port("AGENT2API_PROXY_PORT")
         .or_else(|| env_port("WORKBUDDY_PROXY_PORT"))
         .unwrap_or(3065);
