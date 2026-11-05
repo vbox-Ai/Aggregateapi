@@ -42,16 +42,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 取上游源码
-        run: git clone --depth 1 "$UPSTREAM_REPO" Agent2API
+        run: git clone --depth 64 "$UPSTREAM_REPO" Agent2API
 
       - name: 打补丁（插件宿主闸门 + 能力表端点）
         run: |
+          set -euo pipefail
           for p in agent2api-universal/patches/*.diff; do
             echo "== apply $p"
             if ! git -C Agent2API apply --3way "$(pwd)/$p"; then
-              echo "WARN: $p 未应用（上游已变），继续"
+              echo "❌ 补丁未应用：$p（上游已变，需要重新生成这个补丁）"
+              exit 1
             fi
+            echo "   ✅ 已应用"
           done
+          # 复核关键改动确实落地（不靠"看起来成功"）
+          grep -R "vbox-Ai/Aggregateapi" Agent2API/desktop-tauri/src-tauri/server/src | head -5
           echo "== C 方案：插件进程改为 daemon 自身 --serve-pack"
           python3 scripts/patch-inproc.py Agent2API || echo "WARN: inproc 补丁未应用"
 
