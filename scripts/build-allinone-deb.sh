@@ -154,7 +154,16 @@ while [ \$i -lt 20 ]; do
 done
 echo "[agent2api] launchd 没拉起来，改为直接后台启动（本次开机内有效）"
 if [ -x "\$BIN" ]; then
-  ( nohup "\$BIN" >>"\$DATA/server.log" 2>&1 & ) 2>/dev/null || true
+  # 必须显式带环境：否则 daemon 会把数据写到 cwd 下的 ./.agent2api
+  (
+    AGENT2API_PROXY_HOME="\$DATA" \
+    AGENT2API_UI_DIR="\${PREFIX}/usr/local/share/agent2api/ui" \
+    AGENT2API_HOST=127.0.0.1 \
+    AGENT2API_PROXY_PORT=3065 \
+    AGENT2API_ALLOW_EXEC=1 \
+    AGENT2API_SELF_UPDATE=0 \
+    nohup "\$BIN" >>"\$DATA/server.log" 2>&1 &
+  ) 2>/dev/null || true
   sleep 4
   if curl -s --max-time 2 http://127.0.0.1:3065/health 2>/dev/null | grep -q '"ok"'; then
     echo "[agent2api] OK gateway ready (direct start)"

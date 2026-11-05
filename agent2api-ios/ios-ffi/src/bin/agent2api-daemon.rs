@@ -68,6 +68,18 @@ fn main() -> ExitCode {
         .and_then(|value| value.parse().ok())
         .unwrap_or(IpAddr::from(Ipv4Addr::LOCALHOST));
 
+    // 数据目录兜底：launchd 会传 AGENT2API_PROXY_HOME，但 postinst 的
+    // "直接后台启动" 没有环境变量，daemon 就会用相对路径 ./.agent2api，
+    // 结果数据库/插件落到 cwd 下的隐藏目录里（排查时非常容易踩坑）。
+    if std::env::var("AGENT2API_PROXY_HOME").map(|v| v.trim().is_empty()).unwrap_or(true) {
+        for candidate in ["/var/jb/usr/local/var/agent2api", "/var/mobile/Library/agent2api"] {
+            if std::path::Path::new(candidate).is_dir() {
+                std::env::set_var("AGENT2API_PROXY_HOME", candidate);
+                break;
+            }
+        }
+    }
+
     // 插件进程：iOS 上由本 daemon（无沙盒）spawn；网关闸门要求显式声明。
     // plist 里也写了同一个变量，这里兜底，保证旧 plist 也能拉起插件。
     if std::env::var("AGENT2API_NO_EXEC").map(|v| v.trim() == "1").unwrap_or(false) {
