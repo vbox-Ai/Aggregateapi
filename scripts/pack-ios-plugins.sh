@@ -94,9 +94,12 @@ data["version"] = version
 # 而 packages.rs 里的入口查找是 **严格 get(target)**（不走宽松匹配），
 # 所以 entry 的键必须写成这个三元组，值指向我们的 iOS Mach-O。
 # 同时保留 aarch64-apple-ios 便于人工阅读与将来平台识别。
+# 入口统一放到包根、用裸文件名：网关 spawn 时按 entry 值拼路径，
+# 目录层级越少越不容易出现 "No such file or directory"。
+root_name = entry_name.rsplit("/", 1)[-1]
 data["entry"] = {
-    "aarch64-unknown-linux-gnu": entry_name,
-    "aarch64-apple-ios": entry_name,
+    "aarch64-unknown-linux-gnu": root_name,
+    "aarch64-apple-ios": root_name,
 }
 data.pop("signature", None)
 
@@ -109,10 +112,12 @@ ENTRY_NAME="$(cat "$STAGE/.entry-name")"
 rm -f "$STAGE/.entry-name"
 
 echo "==> 替换入口二进制：$ENTRY_NAME"
-rm -f "$STAGE/$ENTRY_NAME"
+ROOT_ENTRY="$(basename "$ENTRY_NAME")"
+mkdir -p "$STAGE"
+cp "$BINARY" "$STAGE/$ROOT_ENTRY"
 cp "$BINARY" "$STAGE/$ENTRY_NAME"
-chmod 755 "$STAGE/$ENTRY_NAME"
-file "$STAGE/$ENTRY_NAME" | head -1
+chmod 755 "$STAGE/$ROOT_ENTRY" "$STAGE/$ENTRY_NAME"
+file "$STAGE/$ROOT_ENTRY" | head -1
 
 # ── 只保留入口二进制 ────────────────────────────────────────────
 # 官方骨架里通常并列放着各平台的二进制（例如 ELF 的 `bin/agent2api-providers`
@@ -129,6 +134,7 @@ for stale in "$STAGE"/*; do
     pack.json|*.json|*.md|*.txt) continue ;;
   esac
   [ "$base" = "$ENTRY_BASE" ] && continue
+  [ "$base" = "$ROOT_ENTRY" ] && continue
   echo "    移除多余文件：$base"
   rm -f "$stale"
 done
@@ -138,6 +144,7 @@ if [ -n "$ENTRY_DIR" ] && [ -d "$STAGE/$ENTRY_DIR" ]; then
     [ -f "$stale" ] || continue
     base="$(basename "$stale")"
     [ "$base" = "$ENTRY_BASE" ] && continue
+  [ "$base" = "$ROOT_ENTRY" ] && continue
     echo "    移除其它平台二进制：${ENTRY_DIR}/${base}"
     rm -f "$stale"
   done
