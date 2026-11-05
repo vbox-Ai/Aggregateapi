@@ -100,6 +100,8 @@ jobs:
           brew install ldid dpkg >/dev/null 2>&1 || true
           chmod +x agent2api-ios/scripts/*.sh
           mkdir -p "$GITHUB_WORKSPACE/out/ios"
+          # plist 必须在 deb 打包之前就位（deb 要把 plist 一起装进去）
+          cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
 
           # ① 客户端壳（EMBED=0）：panel-only，配 daemon
           echo "=== 客户端壳 ==="
