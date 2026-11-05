@@ -101,6 +101,9 @@ data["entry"] = {
     "aarch64-unknown-linux-gnu": root_name,
     "aarch64-apple-ios": root_name,
 }
+# 平台声明必须包含网关在 iOS 上使用的 target，否则目录会判定
+# "当前网关平台暂无插件包"（提供商增强一直灰掉就是这个原因）。
+data["platforms"] = ["aarch64-unknown-linux-gnu", "aarch64-apple-ios"]
 data.pop("signature", None)
 
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
