@@ -38,7 +38,7 @@ command -v dpkg-deb >/dev/null || { echo "缺少 dpkg-deb（brew install dpkg）
 
 PREFIX="${PREFIX%/}"
 case "$PREFIX" in "/"|".") PREFIX="" ;; esac
-if [ -n "$PREFIX" ]; then echo "==> 目标布局：rootless（$PREFIX）"; else echo "==> 目标布局：rootful（/）"; fi
+if [ -n "$PREFIX" ]; then echo "==> 目标布局：rootless（${PREFIX}）"; else echo "==> 目标布局：rootful（/）"; fi
 
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
