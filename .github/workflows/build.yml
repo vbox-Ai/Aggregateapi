@@ -133,6 +133,7 @@ jobs:
                 --plist "$GITHUB_WORKSPACE/out/ios/com.chiyu.agent2api.plist" \
                 --ui Agent2API/desktop-tauri/ui \
                 --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
+                --daemon-entitlements agent2api-ios/app/Agent2API/plugin-entitlements.plist \
                 --prefix "$PREFIX" \
                 --version "$STAMP_VER" --out "$GITHUB_WORKSPACE/out/ios"
             done

@@ -11,6 +11,7 @@ UI_SRC=""
 BIN=""
 PLIST=""
 ENTS=""
+DAEMON_ENTS=""
 PREFIX="/var/jb"
 VERSION="0.0.0"
 OUT="out/deb"
@@ -22,6 +23,7 @@ while [ $# -gt 0 ]; do
     --binary)       BIN="$2"; shift 2 ;;
     --plist)        PLIST="$2"; shift 2 ;;
     --entitlements) ENTS="$2"; shift 2 ;;
+    --daemon-entitlements) DAEMON_ENTS="$2"; shift 2 ;;
     --ui)           UI_SRC="$2"; shift 2 ;;
     --prefix)       PREFIX="$2"; shift 2 ;;
     --version)      VERSION="$2"; shift 2 ;;
@@ -71,7 +73,13 @@ fi
 echo "==> 签名"
 if command -v ldid >/dev/null 2>&1; then
   ldid -S"$ENTS" "$APP_BIN"
-  ldid -S "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+  # 守护进程同样带上 platform-application：RootHide / 部分越狱要求
+  # 二进制有平台级签名，launchd 才肯 exec 它（否则进程起不来、health 永远失败）。
+  if [ -n "$DAEMON_ENTS" ] && [ -f "$DAEMON_ENTS" ]; then
+    ldid -S"$DAEMON_ENTS" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+  else
+    ldid -S "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+  fi
 else
   echo "WARN: 没有 ldid，跳过签名"
 fi
