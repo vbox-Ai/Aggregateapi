@@ -38,6 +38,8 @@ jobs:
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'ios' || inputs.only == 'store' }}
     runs-on: macos-14
     continue-on-error: true
+    # deb 里要预置插件包，所以先等插件作业出包；插件作业挂了也不会挡住 iOS
+    needs: [plugins]
     steps:
       - uses: actions/checkout@v4
 
@@ -93,6 +95,16 @@ jobs:
           echo "== C 方案：插件进程改为 daemon 自身 --serve-pack"
           python3 scripts/patch-inproc.py Agent2API || echo "WARN: inproc 补丁未应用"
 
+      # deb 里预置的插件包版本必须 >= 网关版本，否则网关拒绝加载/安装。
+      - name: 对齐插件版本（>= 网关版本）
+        run: |
+          set -euo pipefail
+          TAG=$(git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' \
+                | sed 's#.*refs/tags/##' \
+                | python3 scripts/latest-tag.py || true)
+          echo "上游最新 tag：${TAG:-（未取到）}"
+          python3 scripts/align-plugin-version.py --min-version "${TAG:-v0.0.0}"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
@@ -144,6 +156,22 @@ jobs:
           ls -la target/aarch64-apple-ios/release/*.a 2>/dev/null || echo "WARN: 静态库未产出"
           exit 0
 
+      - name: 取回插件包（预置进 deb）
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: plugins
+          path: out/packs
+
+      - name: 摊开插件目录（deb 预置用）
+        run: |
+          set -euo pipefail
+          if compgen -G "out/packs/*.zip" > /dev/null; then
+            python3 scripts/stage-plugin-packs.py --out out/stage-packs out/packs/*.zip
+          else
+            echo "WARN: 没取到插件包，这次 deb 不带预置插件"
+          fi
+
       - name: 打 IPA + 打包 deb（rootless / rootful 两版）
         env:
           EMBED_INPUT: ${{ inputs.embed || '1' }}
@@ -190,7 +218,9 @@ jobs:
                 --ui Agent2API/desktop-tauri/ui \
                 --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
                 --daemon-entitlements agent2api-ios/app/Agent2API/plugin-entitlements.plist \
+                --packs "$GITHUB_WORKSPACE/out/stage-packs" \
                 --prefix "$PREFIX" \
+                --arch both \
                 --version "$STAMP_VER" --out "$GITHUB_WORKSPACE/out/ios"
             done
           else
@@ -243,6 +273,17 @@ jobs:
       - name: 关掉 reqwest 的 system-proxy（iOS SDK 编不过）
         run: python3 scripts/patch-plugin-cargo.py plugins-src
 
+      # 插件包版本必须 >= 网关自身版本，否则网关连加载带安装一起拒
+      # （面板：「需要补齐插件」「已加载 0 家」）。下限取上游最新 v* tag。
+      - name: 对齐插件版本（>= 网关版本）
+        run: |
+          set -euo pipefail
+          TAG=$(git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' \
+                | sed 's#.*refs/tags/##' \
+                | python3 scripts/latest-tag.py || true)
+          echo "上游最新 tag：${TAG:-（未取到）}"
+          python3 scripts/align-plugin-version.py --min-version "${TAG:-v0.0.0}"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
@@ -284,6 +325,55 @@ jobs:
           bash scripts/pack-ios-plugins.sh \
             --official "$OFF_M" --binary out/plugins/agent2api-providers \
             --id agent2api-providers --version "$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")" --out out/packs
+          ls -lh out/packs
+
+      # ── 网页提供商：同一套路，只是仓库与 crate 名不同 ──────────────
+      - name: 取网页插件源码
+        run: |
+          set -euo pipefail
+          clone_upstream() {
+            local repo="$1" dir="$2" depth="${3:-1}"
+            for base in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+              rm -rf "$dir"
+              if git clone --depth "$depth" "${base}${repo}" "$dir" 2>&1 | tail -2; then
+                if [ -d "$dir/.git" ]; then
+                  echo "   clone ok: ${base:-直连}"
+                  return 0
+                fi
+              fi
+              echo "   clone 失败，换下一个源：${base:-直连}"
+            done
+            echo "❌ 所有源都克隆失败：$repo"
+            return 1
+          }
+          clone_upstream https://github.com/ProvidersPlugin/Agent2WebProviders.git plugins-web 1
+          python3 scripts/patch-plugin-cargo.py plugins-web
+
+      - name: 编网页提供商包
+        working-directory: plugins-web
+        run: |
+          set -euo pipefail
+          cargo build -p agent2api-web-providers --release --target aarch64-apple-ios
+          mkdir -p "$GITHUB_WORKSPACE/out/plugins"
+          cp target/aarch64-apple-ios/release/agent2api-web-providers \
+             "$GITHUB_WORKSPACE/out/plugins/agent2api-web-providers"
+
+      - name: 签名（网页包）
+        run: |
+          ldid -S"$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/plugin-entitlements.plist" \
+            out/plugins/agent2api-web-providers || echo "WARN: ldid 失败"
+          file out/plugins/agent2api-web-providers
+
+      - name: 下载网页包骨架 + 打 iOS 网页插件包
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/fetch-official-packs.py --prefix agent2api-web-providers --out .cache/official
+          OFF_W=$(ls .cache/official/agent2api-web-providers-*.zip | head -1)
+          bash scripts/pack-ios-plugins.sh \
+            --official "$OFF_W" --binary out/plugins/agent2api-web-providers \
+            --id agent2api-web-providers --version "$(python3 -c "import json;print(json.load(open('plugins/agent2api-web-providers.json'))['version'])")" --out out/packs
           ls -lh out/packs
 
       - name: 上传插件产物
@@ -484,6 +574,14 @@ jobs:
           echo "--- 将发布到快照的资产 ---"; ls -lh dist/app
           test -n "$(ls -A dist/app)" || { echo "dist/app 为空：ios 产物没取到"; exit 1; }
 
+      - name: 读插件版本前先对齐（与 ios/plugins 作业同一规则）
+        run: |
+          set -euo pipefail
+          TAG=$(git ls-remote --tags --refs "https://github.com/aimod-cc/Agent2API.git" 'v*' \
+                | sed 's#.*refs/tags/##' \
+                | python3 scripts/latest-tag.py || true)
+          python3 scripts/align-plugin-version.py --min-version "${TAG:-v0.0.0}"
+
       - name: 读取版本号与构建号
         id: ver
         run: |
@@ -524,6 +622,9 @@ jobs:
           cat notes.md
 
       # ── ① 应用快照：每次构建一个全新 tag，历史版本永久保留（你要的"能看到旧版本"）
+      #    注意：这里必须 make_latest: false。网关的插件目录在 stable 通道下走
+      #    `/releases/latest`，latest 一旦被 ios-* 快照占住，tag 模板 `v{version}`
+      #    解析失败，面板就显示「当前网关平台暂无插件包」（提供商增强永远灰）。
       - name: 发布应用快照（新 tag，保留历史）
         uses: softprops/action-gh-release@v2
         with:
@@ -532,9 +633,10 @@ jobs:
           body_path: notes.md
           files: dist/app/*
           fail_on_unmatched_files: false
-          make_latest: true
+          make_latest: false
 
       # ── ② 插件稳定通道：tag 固定（网关按 v{版本} 查找），覆盖更新
+      #    这里才是 latest：stable 通道的 `/releases/latest` 必须解析到 v{版本}。
       - name: 发布插件稳定通道（providers）
         continue-on-error: true
         uses: softprops/action-gh-release@v2
@@ -547,7 +649,7 @@ jobs:
           files: dist/main/*
           fail_on_unmatched_files: false
           overwrite: true
-          make_latest: false
+          make_latest: true
 
       - name: 发布插件稳定通道（web）
         continue-on-error: true

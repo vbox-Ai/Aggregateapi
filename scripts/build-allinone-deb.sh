@@ -4,6 +4,12 @@
 # 支持两种越狱布局（用 --prefix 选择）：
 #   rootless（Dopamine / palera1n rootless）: --prefix /var/jb
 #   rootful （Relaxin / unc0ver / checkra1n）: --prefix ""（装到根 /）
+#
+# 架构（--arch）：
+#   iphoneos-arm64（默认）/ iphoneos-arm64e / both
+#   arm64e 机器的 dpkg 认 iphoneos-arm64e；同一份 Mach-O（arm64 ABI）在
+#   arm64e 设备上原生可跑，所以这里只换 control 的 Architecture 字段，
+#   一次编译直接出两种包，不用事后手工转换。
 set -euo pipefail
 
 APP=""
@@ -12,8 +18,10 @@ BIN=""
 PLIST=""
 ENTS=""
 DAEMON_ENTS=""
+PACKS=""
 PREFIX="/var/jb"
 VERSION="0.0.0"
+ARCH="iphoneos-arm64"
 OUT="out/deb"
 PKG="com.chiyu.agent2api"
 
@@ -25,7 +33,9 @@ while [ $# -gt 0 ]; do
     --entitlements) ENTS="$2"; shift 2 ;;
     --daemon-entitlements) DAEMON_ENTS="$2"; shift 2 ;;
     --ui)           UI_SRC="$2"; shift 2 ;;
+    --packs)        PACKS="$2"; shift 2 ;;
     --prefix)       PREFIX="$2"; shift 2 ;;
+    --arch)         ARCH="$2"; shift 2 ;;
     --version)      VERSION="$2"; shift 2 ;;
     --out)          OUT="$2"; shift 2 ;;
     *) echo "未知参数：$1"; exit 2 ;;
@@ -56,7 +66,13 @@ mkdir -p "$ROOT$PREFIX/usr/local/bin"
 cp "$BIN" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
 chmod 755 "$ROOT$PREFIX/usr/local/bin/agent2api-server"
 mkdir -p "$ROOT$PREFIX/Library/LaunchDaemons"
-cp "$PLIST" "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
+if [ -n "$PREFIX" ]; then
+  cp "$PLIST" "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
+else
+  # rootful：plist 里的 ProgramArguments / 数据目录都写着 /var/jb/...，
+  # 直接照抄会让 launchd 去 exec 一个不存在的路径（装完 daemon 起不来）。
+  sed 's#/var/jb##g' "$PLIST" > "$ROOT/Library/LaunchDaemons/${PKG}.plist"
+fi
 chmod 644 "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
 
 if [ -n "$UI_SRC" ] && [ -d "$UI_SRC" ]; then
@@ -68,6 +84,20 @@ if [ -n "$UI_SRC" ] && [ -d "$UI_SRC" ]; then
   echo "    面板文件数：$(find "$ROOT$PREFIX/usr/local/share/agent2api/ui" -type f | wc -l | tr -d ' ')"
 else
   echo "WARN: 没有提供 --ui，/m 会 404"
+fi
+
+# ── 预置插件包 ──────────────────────────────────────────────────────────
+# 面板里的"网关插件"是走 GitHub 下载 + ed25519 验签的；自建包没有官方签名，
+# 在国内网络下又只能走加速镜像（镜像通道强制验签），所以点下载必然爆红。
+# 把已编译好的插件目录直接装进 deb，postinst 落到网关的 plugins/ 目录并写
+# 注册表 —— 装上就有，不依赖网络，也不碰签名那条路径。
+if [ -n "$PACKS" ] && [ -d "$PACKS" ]; then
+  echo "==> 预置插件包"
+  mkdir -p "$ROOT$PREFIX/usr/local/share/agent2api/packs"
+  cp -R "$PACKS"/. "$ROOT$PREFIX/usr/local/share/agent2api/packs"/
+  echo "    插件包数：$(find "$ROOT$PREFIX/usr/local/share/agent2api/packs" -name pack.json -maxdepth 3 | wc -l | tr -d ' ')"
+else
+  if [ -n "$PACKS" ]; then echo "WARN: --packs 目录不存在：$PACKS"; fi
 fi
 
 echo "==> 签名"
@@ -86,11 +116,14 @@ fi
 
 mkdir -p "$ROOT/DEBIAN"
 SIZE=$(( $(du -sk "$ROOT" | cut -f1) ))
-cat > "$ROOT/DEBIAN/control" <<EOF
+
+# control 里唯一的架构差异就是 Architecture，逐架构重写一次
+write_control() {
+  cat > "$ROOT/DEBIAN/control" <<EOF
 Package: ${PKG}
 Name: Agent2API
 Version: ${VERSION}
-Architecture: iphoneos-arm64
+Architecture: $1
 Description: Agent2API gateway + panel (app + launchd daemon)
 Maintainer: vbox-Ai
 Author: vbox-Ai
@@ -98,6 +131,7 @@ Section: Applications
 Depends: firmware (>= 15.0), ldid
 Installed-Size: ${SIZE}
 EOF
+}
 
 cat > "$ROOT/DEBIAN/postinst" <<EOF
 #!/bin/sh
@@ -113,6 +147,29 @@ echo "[agent2api] layout: \${PREFIX:-/ (rootful)}"
 mkdir -p "\$DATA"
 chown mobile:mobile "\$DATA" 2>/dev/null || true
 chmod 700 "\$DATA" 2>/dev/null || true
+
+# 预置插件：把 deb 里带的插件目录放进网关的 plugins/，并写注册表。
+# 注册表是"装了哪些包"的唯一来源（网关不会自己扫目录），所以必须带 plugins.json。
+PACKDIR="\${PREFIX}/usr/local/share/agent2api/packs"
+if [ -d "\$PACKDIR" ]; then
+  echo "[agent2api] 预置插件"
+  mkdir -p "\$DATA/plugins"
+  for one in "\$PACKDIR"/*; do
+    [ -d "\$one" ] || continue
+    id="\$(basename "\$one")"
+    rm -rf "\$DATA/plugins/\$id"
+    cp -R "\$one" "\$DATA/plugins/\$id"
+    echo "[agent2api]   pack: \$id"
+  done
+  if [ -f "\$PACKDIR/plugins.json" ]; then
+    if [ -f "\$DATA/plugins/plugins.json" ]; then
+      cp "\$DATA/plugins/plugins.json" "\$DATA/plugins/plugins.json.bak.\$(date +%s)"
+    fi
+    cp "\$PACKDIR/plugins.json" "\$DATA/plugins/plugins.json"
+  fi
+  chown -R mobile:mobile "\$DATA/plugins" 2>/dev/null || true
+  chmod -R 755 "\$DATA/plugins" 2>/dev/null || true
+fi
 
 chmod -R 755 "\$APP" 2>/dev/null || true
 chown -R root:wheel "\$APP" 2>/dev/null || true
@@ -191,6 +248,16 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 SUFFIX=rootful
 [ -n "$PREFIX" ] && SUFFIX=rootless
-DEB="$OUT/Agent2API-${VERSION}-${SUFFIX}.deb"
-dpkg-deb -b --root-owner-group "$ROOT" "$DEB" >/dev/null
-echo "==> 产出：$DEB"
+
+case "$ARCH" in
+  both|all|"") ARCH_LIST="iphoneos-arm64 iphoneos-arm64e" ;;
+  *) ARCH_LIST="$(printf '%s' "$ARCH" | tr ',' ' ')" ;;
+esac
+
+for A in $ARCH_LIST; do
+  write_control "$A"
+  DEB="$OUT/Agent2API-${VERSION}-${SUFFIX}-${A}.deb"
+  rm -f "$DEB"
+  dpkg-deb -b --root-owner-group "$ROOT" "$DEB" >/dev/null
+  echo "==> 产出：$DEB ($(du -h "$DEB" | cut -f1))"
+done
