@@ -50,8 +50,12 @@ jobs:
           git -C Agent2API fetch --tags --depth 64 >/dev/null 2>&1 || true
           TAG="$(git -C Agent2API tag -l 'v*' --sort=-v:refname | head -1)"
           if [ -n "$TAG" ]; then
-            git -C Agent2API checkout -q "$TAG"
-            echo "== 上游版本：$TAG（$(git -C Agent2API rev-parse --short HEAD)）"
+            if git -C Agent2API fetch --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 \
+               && git -C Agent2API checkout -q "refs/tags/$TAG" 2>/dev/null; then
+              echo "== 上游版本：$TAG（$(git -C Agent2API rev-parse --short HEAD)）"
+            else
+              echo "== 拉取 tag $TAG 失败，继续用 main：$(git -C Agent2API rev-parse --short HEAD)"
+            fi
           else
             echo "== 上游无 v* 标签，使用 main：$(git -C Agent2API rev-parse --short HEAD)"
           fi
@@ -206,15 +210,6 @@ jobs:
         with:
           workspaces: plugins-src -> target
 
-      - name: 编网页提供商包（chatglm 特性）
-        working-directory: plugins-src
-        run: |
-          set -euo pipefail
-          cargo build -p agent2api-providers --release --target aarch64-apple-ios \
-            --no-default-features --features chatglm
-          mkdir -p "$GITHUB_WORKSPACE/out/plugins"
-          cp target/aarch64-apple-ios/release/agent2api-providers \
-             "$GITHUB_WORKSPACE/out/plugins/agent2api-web-providers"
 
       - name: 编提供商增强包（全特性）
         working-directory: plugins-src
@@ -227,7 +222,7 @@ jobs:
       - name: 签名（AMFI 要求）
         run: |
           brew install ldid || true
-          for b in out/plugins/agent2api-providers out/plugins/agent2api-web-providers; do
+          for b in out/plugins/agent2api-providers; do
             ldid -S"$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/plugin-entitlements.plist" "$b" || echo "WARN: ldid 失败 $b"
             file "$b"
           done
@@ -237,7 +232,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/fetch-official-packs.py --prefix agent2api-providers --out .cache/official
-          python3 scripts/fetch-official-packs.py --prefix agent2api-web-providers --out .cache/official
           ls -lh .cache/official
 
       - name: 打 iOS 插件包
@@ -245,13 +239,9 @@ jobs:
           set -euo pipefail
           mkdir -p out/packs
           OFF_M=$(ls .cache/official/agent2api-providers-*.zip | head -1)
-          OFF_W=$(ls .cache/official/agent2api-web-providers-*.zip | head -1)
           bash scripts/pack-ios-plugins.sh \
             --official "$OFF_M" --binary out/plugins/agent2api-providers \
             --id agent2api-providers --version "$(python3 -c "import json;print(json.load(open('plugins/agent2api-providers.json'))['version'])")" --out out/packs
-          bash scripts/pack-ios-plugins.sh \
-            --official "$OFF_W" --binary out/plugins/agent2api-web-providers \
-            --id agent2api-web-providers --version "$(python3 -c "import json;print(json.load(open('plugins/agent2api-web-providers.json'))['version'])")" --out out/packs
           ls -lh out/packs
 
       - name: 上传插件产物
