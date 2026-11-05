@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """生成 pack_host crate 的 Cargo.toml。
 
-pack_host 需要：
-  · provider crate（path 依赖，绝对路径）
-  · agent2api-provider-sdk（版本与 provider crate 保持一致，避免两份 SDK）
+要点：
+  · provider crate 用**绝对路径**依赖（Cargo 按清单所在目录解析 path）；
+  · SDK 依赖从 provider crate 抄一行，但其中的相对 path 必须就地解析成
+    绝对路径 —— 否则 Cargo 会去 pack_host 目录下找 "../provider-sdk"。
 """
 import pathlib
 import re
@@ -21,19 +22,36 @@ m = re.search(r'(?m)^name\s*=\s*"([^"]+)"', text)
 if m:
     name = m.group(1)
 
-# provider crate 里 SDK 的依赖声明（保留版本/特性写法）
 sdk_dep = None
 for line in text.splitlines():
-    stripped = line.strip()
-    if stripped.startswith("agent2api-provider-sdk"):
-        sdk_dep = stripped
+    if line.strip().startswith("agent2api-provider-sdk"):
+        sdk_dep = line.strip()
         break
 if sdk_dep is None:
     sdk_dep = 'agent2api-provider-sdk = "*"'
 
+
+def absolutize(dep_line):
+    """把依赖行里的相对 path 解析成相对 provider crate 的绝对路径。"""
+
+    def repl(match):
+        raw = match.group(1)
+        p = pathlib.Path(raw)
+        if p.is_absolute():
+            return match.group(0)
+        return 'path = "%s"' % (crate / p).resolve().as_posix()
+
+    return re.sub(r'path\s*=\s*"([^"]+)"', repl, dep_line)
+
+
+sdk_dep = absolutize(sdk_dep)
+
 if features:
     prov_dep = '%s = { path = "%s", default-features = false, features = [%s] }' % (
-        name, crate.as_posix(), ", ".join('"%s"' % f for f in features))
+        name,
+        crate.as_posix(),
+        ", ".join('"%s"' % f for f in features),
+    )
 else:
     prov_dep = '%s = { path = "%s" }' % (name, crate.as_posix())
 
