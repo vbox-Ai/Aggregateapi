@@ -44,7 +44,23 @@ jobs:
       - name: 取上游源码
         run: |
           set -euo pipefail
-          git clone --depth 64 "$UPSTREAM_REPO" Agent2API
+          # GitHub 偶发连接重置：直连失败就换镜像（用户提供）
+          clone_upstream() {
+            local repo="$1" dir="$2" depth="${3:-64}"
+            for base in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+              rm -rf "$dir"
+              if git clone --depth "$depth" "${base}${repo}" "$dir" 2>&1 | tail -2; then
+                if [ -d "$dir/.git" ]; then
+                  echo "   clone ok: ${base:-直连}"
+                  return 0
+                fi
+              fi
+              echo "   clone 失败，换下一个源：${base:-直连}"
+            done
+            echo "❌ 所有源都克隆失败：$repo"
+            return 1
+          }
+          clone_upstream "$UPSTREAM_REPO" Agent2API 64
           # 对齐"官方最新发布"而不是 main 的浮动头：拉 tag 并切到最新 v* 版本。
           # main 上可能有未发布的提交，官方 release 一定对应某个 tag。
           git -C Agent2API fetch --tags --depth 64 >/dev/null 2>&1 || true
@@ -90,7 +106,12 @@ jobs:
       - name: 编内嵌 provider 静态库（C 方案）
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/ProvidersPlugin/Agent2Providers.git plugins-src
+          for base in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+            rm -rf plugins-src
+            if git clone --depth 1 "${base}https://github.com/ProvidersPlugin/Agent2Providers.git" plugins-src 2>&1 | tail -1 && [ -d plugins-src/.git ]; then
+              echo "   plugins-src ok: ${base:-直连}"; break
+            fi
+          done
           python3 scripts/patch-plugin-cargo.py plugins-src
           chmod +x scripts/*.sh
           bash scripts/build-pack-host.sh plugins-src out/packlib
@@ -197,7 +218,26 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 取插件源码
-        run: git clone --depth 1 https://github.com/ProvidersPlugin/Agent2Providers.git plugins-src
+        run: |
+          set -euo pipefail
+          # GitHub 偶发连接重置：直连失败就换镜像（用户提供）
+          clone_upstream() {
+            local repo="$1" dir="$2" depth="${3:-64}"
+            for base in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+              rm -rf "$dir"
+              if git clone --depth "$depth" "${base}${repo}" "$dir" 2>&1 | tail -2; then
+                if [ -d "$dir/.git" ]; then
+                  echo "   clone ok: ${base:-直连}"
+                  return 0
+                fi
+              fi
+              echo "   clone 失败，换下一个源：${base:-直连}"
+            done
+            echo "❌ 所有源都克隆失败：$repo"
+            return 1
+          }
+          clone_upstream https://github.com/ProvidersPlugin/Agent2Providers.git plugins-src 1
+
 
       - name: 关掉 reqwest 的 system-proxy（iOS SDK 编不过）
         run: python3 scripts/patch-plugin-cargo.py plugins-src
