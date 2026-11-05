@@ -88,7 +88,7 @@ jobs:
           ls -la target/aarch64-apple-ios/release/*.a 2>/dev/null || echo "WARN: 静态库未产出"
           exit 0
 
-      - name: 打 IPA
+      - name: 打 IPA + 打包 deb（rootless / rootful 两版）
         env:
           EMBED_INPUT: ${{ inputs.embed || '1' }}
           BUILD_NUMBER: ${{ github.run_number }}
@@ -97,71 +97,48 @@ jobs:
           UI_SRC: ${{ github.workspace }}/Agent2API/desktop-tauri/ui
         run: |
           set -euo pipefail
-          LIB=agent2api-ios/ios-ffi/target/aarch64-apple-ios/release/libagent2api_ios.a
-          brew install ldid || true
+          brew install ldid dpkg >/dev/null 2>&1 || true
           chmod +x agent2api-ios/scripts/*.sh
           mkdir -p "$GITHUB_WORKSPACE/out/ios"
 
-          # ── ① 客户端版（EMBED=0）：约 0.13 MB，连本机 daemon 的 127.0.0.1:3065
-          #    这是"装 daemon + 插件"那套架构的界面壳，插件只能在这个架构里跑。
-          echo "=== 构建客户端壳（EMBED=0）==="
+          # ① 客户端壳（EMBED=0）：panel-only，配 daemon
+          echo "=== 客户端壳 ==="
           EMBED=0 ./agent2api-ios/scripts/build-ipa.sh
-          test -f agent2api-ios/build/Agent2API.ipa
-          cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API.ipa"
+          cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-client.ipa"
 
-          # ── ② 独立版（EMBED=1，最小权限）：约 15 MB，网关跑在 App 进程内，
-          #    装完即用、不需要 daemon。这一版已验证"能装能开"。
+          # ② 独立版（EMBED=1）：网关内嵌，无需 daemon（插件不可用）
+          LIB=agent2api-ios/ios-ffi/target/aarch64-apple-ios/release/libagent2api_ios.a
           if [ -f "$LIB" ]; then
-            echo "=== 构建独立版（EMBED=1，最小权限）==="
+            echo "=== 独立版 ==="
             EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
             cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-standalone.ipa"
-
-            # ── ③ 实验版（EMBED=1 + 仅 no-sandbox）：验证 App 内能否 exec 插件。
-            #    刻意不带 platform-application / cs.debugger —— 那两个是"秒退"的主要嫌疑。
-            echo "=== 构建实验版（EMBED=1 + no-sandbox）==="
-            ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-nosandbox.plist" \
-              EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
-            cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-nosandbox.ipa"
-
-            # ── ④ TrollStore 专用版（EMBED=1 + platform-application + no-sandbox）
-            #    只有 TrollStore（CoreTrust）安装时这些特权才会被内核接受；
-            #    用 appinst/AppSync 装它会秒退，别混用。
-            echo "=== 构建 TrollStore 版 ==="
-            ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-trollstore.plist" \
-              EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
-            cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-trollstore.ipa"
-          else
-            echo "WARN: 没有静态库，跳过独立版/实验版"
           fi
 
-          cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
-
-          # ── ⑤ 一次装完的 rootless .deb：App（/Applications） + daemon + LaunchDaemon
-          #    用户只需在 Sileo/Zebra/Filza 里点一个文件：桌面出现 App，网关自动常驻
-          # deb 里要放"客户端壳（EMBED=0）"：它只显示面板、连 daemon；
-          # 不能放 EMBED=1 的独立版，否则 App 内也会起一个网关，与 daemon 抢 3065。
-          echo "=== 为 deb 重建客户端壳（EMBED=0）==="
+          # ③ deb 用客户端壳重建一次（保证只有面板，不抢 3065）
+          echo "=== deb 用客户端壳 ==="
           EMBED=0 ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-platform.plist" \
             ./agent2api-ios/scripts/build-ipa.sh
 
-          echo "=== 打包 all-in-one deb ==="
-          brew install dpkg ldid >/dev/null 2>&1 || true
           if command -v dpkg-deb >/dev/null 2>&1; then
             VER=$(python3 -c "import json;v=json.load(open('plugins/agent2api-providers.json'))['version'];print('.'.join(v.split('.')[:2]))")
-            # STAMP 是在 build-ipa.sh 内部定义的，这里要自己算一次（原来直接引用导致 unbound variable）
             STAMP="${BUILD_NUMBER:-$(date +%y%m%d%H%M)}"
             STAMP_VER="${VER}.${STAMP}"
-            bash -x scripts/build-allinone-deb.sh \
-              --app agent2api-ios/build/Payload/Agent2API.app \
-              --binary "$GITHUB_WORKSPACE/out/ios/agent2api-server" \
-              --plist "$GITHUB_WORKSPACE/out/ios/com.chiyu.agent2api.plist" \
-              --ui Agent2API/desktop-tauri/ui \
-              --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
-              --version "$STAMP_VER" --out "$GITHUB_WORKSPACE/out/ios" \
-              || { echo "❌ all-in-one deb 打包失败（上面有 -x 的失败命令）"; exit 1; }
+            for PREFIX in "/var/jb" ""; do
+              echo "=== 打包 deb（prefix='${PREFIX}'）==="
+              bash -x scripts/build-allinone-deb.sh \
+                --app agent2api-ios/build/Payload/Agent2API.app \
+                --binary "$GITHUB_WORKSPACE/out/ios/agent2api-server" \
+                --plist "$GITHUB_WORKSPACE/out/ios/com.chiyu.agent2api.plist" \
+                --ui Agent2API/desktop-tauri/ui \
+                --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
+                --prefix "$PREFIX" \
+                --version "$STAMP_VER" --out "$GITHUB_WORKSPACE/out/ios"
+            done
           else
-            echo "WARN: 没有 dpkg-deb，跳过 all-in-one deb"
+            echo "WARN: 没有 dpkg-deb，跳过 deb"
           fi
+
+          cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
           ls -lh "$GITHUB_WORKSPACE/out/ios"
 
       - name: 上传 iOS 产物

@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
-# ── 一次装完的 rootless .deb：App（/Applications） + 网关守护进程 + LaunchDaemon ──
+# ── 一次装完的 .deb：App（桌面） + 网关守护进程 + LaunchDaemon + 面板资源 ──
 #
-# 用户在 Sileo / Zebra / Filza 里**点一个文件**装完，就得到：
-#   /Applications/Agent2API.app           面板（沙盒/平台应用 → WKWebView 正常）
-#   /var/jb/usr/local/bin/agent2api-server 网关守护进程（无沙盒 → 可 exec 插件）
-#   /var/jb/Library/LaunchDaemons/com.chiyu.agent2api.plist
-# postinst 自动：ldid 签名 → uicache 注册 App → bootstrap 守护进程 → /health 自检
-#
-# 用法（在 macOS runner 上跑，需 brew install dpkg ldid）：
-#   ./scripts/build-allinone-deb.sh \
-#       --app agent2api-ios/build/Payload/Agent2API.app \
-#       --binary out/ios/agent2api-server \
-#       --plist out/ios/com.chiyu.agent2api.plist \
-#       --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \
-#       --version 3.4.65 --out out/deb
+# 支持两种越狱布局（用 --prefix 选择）：
+#   rootless（Dopamine / palera1n rootless）: --prefix /var/jb
+#   rootful （Relaxin / unc0ver / checkra1n）: --prefix ""（装到根 /）
 set -euo pipefail
 
 APP=""
@@ -21,6 +11,7 @@ UI_SRC=""
 BIN=""
 PLIST=""
 ENTS=""
+PREFIX="/var/jb"
 VERSION="0.0.0"
 OUT="out/deb"
 PKG="com.chiyu.agent2api"
@@ -32,6 +23,7 @@ while [ $# -gt 0 ]; do
     --plist)        PLIST="$2"; shift 2 ;;
     --entitlements) ENTS="$2"; shift 2 ;;
     --ui)           UI_SRC="$2"; shift 2 ;;
+    --prefix)       PREFIX="$2"; shift 2 ;;
     --version)      VERSION="$2"; shift 2 ;;
     --out)          OUT="$2"; shift 2 ;;
     *) echo "未知参数：$1"; exit 2 ;;
@@ -44,56 +36,54 @@ done
 [ -f "$ENTS" ]  || { echo "找不到 entitlements：$ENTS"; exit 1; }
 command -v dpkg-deb >/dev/null || { echo "缺少 dpkg-deb（brew install dpkg）"; exit 1; }
 
+PREFIX="${PREFIX%/}"
+case "$PREFIX" in "/"|".") PREFIX="" ;; esac
+if [ -n "$PREFIX" ]; then echo "==> 目标布局：rootless（$PREFIX）"; else echo "==> 目标布局：rootful（/）"; fi
+
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
-echo "==> 组装 App（/Applications）"
-# rootless 布局：/Applications 位于只读系统卷（SSV），写它必然 Operation not permitted；
-# 正确位置是 /var/jb/Applications（rootless 的应用目录，uicache 也认这里）
-mkdir -p "$ROOT/var/jb/Applications"
-cp -R "$APP" "$ROOT/var/jb/Applications/Agent2API.app" || { echo "❌ 拷贝 App 失败"; exit 1; }
-echo "    App 已拷贝：$(du -sh "$ROOT/var/jb/Applications/Agent2API.app" | cut -f1)"
-APP_BIN="$ROOT/var/jb/Applications/Agent2API.app/Agent2API"
+echo "==> 组装 App"
+mkdir -p "$ROOT$PREFIX/Applications"
+cp -R "$APP" "$ROOT$PREFIX/Applications/Agent2API.app" || { echo "❌ 拷贝 App 失败"; exit 1; }
+APP_BIN="$ROOT$PREFIX/Applications/Agent2API.app/Agent2API"
 [ -f "$APP_BIN" ] || { echo "App 主二进制缺失：$APP_BIN"; exit 1; }
 
 echo "==> 组装守护进程"
-mkdir -p "$ROOT/var/jb/usr/local/bin"
-cp "$BIN" "$ROOT/var/jb/usr/local/bin/agent2api-server"
-chmod 755 "$ROOT/var/jb/usr/local/bin/agent2api-server"
-mkdir -p "$ROOT/var/jb/Library/LaunchDaemons"
-cp "$PLIST" "$ROOT/var/jb/Library/LaunchDaemons/${PKG}.plist"
-chmod 644 "$ROOT/var/jb/Library/LaunchDaemons/${PKG}.plist"
+mkdir -p "$ROOT$PREFIX/usr/local/bin"
+cp "$BIN" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+chmod 755 "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+mkdir -p "$ROOT$PREFIX/Library/LaunchDaemons"
+cp "$PLIST" "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
+chmod 644 "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
 
 if [ -n "$UI_SRC" ] && [ -d "$UI_SRC" ]; then
-  echo "==> 安装面板资源（$UI_SRC → /var/jb/usr/local/share/agent2api/ui）"
-  mkdir -p "$ROOT/var/jb/usr/local/share/agent2api/ui"
-  cp -R "$UI_SRC"/. "$ROOT/var/jb/usr/local/share/agent2api/ui"/
-  # 再放一份到守护进程同级：上游 resolve_ui_dir() 默认就是 <exe_dir>/ui，
-  # 这样 launchd 不传 AGENT2API_UI_DIR 也能找到面板（双保险）
-  mkdir -p "$ROOT/var/jb/usr/local/bin/ui"
-  cp -R "$UI_SRC"/. "$ROOT/var/jb/usr/local/bin/ui"/
-  echo "    面板文件数：$(find "$ROOT/var/jb/usr/local/share/agent2api/ui" -type f | wc -l | tr -d ' ')"
+  echo "==> 安装面板资源"
+  mkdir -p "$ROOT$PREFIX/usr/local/share/agent2api/ui"
+  cp -R "$UI_SRC"/. "$ROOT$PREFIX/usr/local/share/agent2api/ui"/
+  mkdir -p "$ROOT$PREFIX/usr/local/bin/ui"
+  cp -R "$UI_SRC"/. "$ROOT$PREFIX/usr/local/bin/ui"/
+  echo "    面板文件数：$(find "$ROOT$PREFIX/usr/local/share/agent2api/ui" -type f | wc -l | tr -d ' ')"
 else
-  echo "WARN: 没有提供 --ui，守护进程将没有面板（/m 会 404）"
+  echo "WARN: 没有提供 --ui，/m 会 404"
 fi
 
-echo "==> 签名（App 用 platform-application，daemon 用最小签名）"
+echo "==> 签名"
 if command -v ldid >/dev/null 2>&1; then
   ldid -S"$ENTS" "$APP_BIN"
-  ldid -S "$ROOT/var/jb/usr/local/bin/agent2api-server"
+  ldid -S "$ROOT$PREFIX/usr/local/bin/agent2api-server"
 else
-  echo "WARN: 没有 ldid，跳过签名（装到设备后 AMFI 可能拒绝运行）"
+  echo "WARN: 没有 ldid，跳过签名"
 fi
 
 mkdir -p "$ROOT/DEBIAN"
-SIZE=$(( $(du -sk "$ROOT/var" | cut -f1) ))
-echo "    估算安装体积：${SIZE} KB"
+SIZE=$(( $(du -sk "$ROOT" | cut -f1) ))
 cat > "$ROOT/DEBIAN/control" <<EOF
 Package: ${PKG}
 Name: Agent2API
 Version: ${VERSION}
 Architecture: iphoneos-arm64
-Description: Agent2API 网关 + 面板（一次安装：/Applications App + LaunchDaemon 网关，插件原生运行）
+Description: Agent2API gateway + panel (app + launchd daemon)
 Maintainer: vbox-Ai
 Author: vbox-Ai
 Section: Applications
@@ -101,85 +91,80 @@ Depends: firmware (>= 15.0), ldid
 Installed-Size: ${SIZE}
 EOF
 
-cat > "$ROOT/DEBIAN/postinst" <<'EOF'
+cat > "$ROOT/DEBIAN/postinst" <<EOF
 #!/bin/sh
 set -u
 PKG="com.chiyu.agent2api"
-APP="/var/jb/Applications/Agent2API.app"
-BIN="/var/jb/usr/local/bin/agent2api-server"
-PLIST="/var/jb/Library/LaunchDaemons/${PKG}.plist"
-DATA="/var/jb/usr/local/var/agent2api"
+PREFIX="${PREFIX}"
+APP="\${PREFIX}/Applications/Agent2API.app"
+BIN="\${PREFIX}/usr/local/bin/agent2api-server"
+PLIST="\${PREFIX}/Library/LaunchDaemons/\${PKG}.plist"
+DATA="\${PREFIX}/usr/local/var/agent2api"
 
-echo "[agent2api] 数据目录"
-mkdir -p "$DATA"
-chown mobile:mobile "$DATA" 2>/dev/null || true
-chmod 700 "$DATA" 2>/dev/null || true
+echo "[agent2api] layout: \${PREFIX:-/ (rootful)}"
+mkdir -p "\$DATA"
+chown mobile:mobile "\$DATA" 2>/dev/null || true
+chmod 700 "\$DATA" 2>/dev/null || true
 
-echo "[agent2api] 权限"
-chmod -R 755 "$APP" 2>/dev/null || true
-chmod 755 "$BIN" 2>/dev/null || true
-chown -R root:wheel "$APP" 2>/dev/null || true
+chmod -R 755 "\$APP" 2>/dev/null || true
+chown -R root:wheel "\$APP" 2>/dev/null || true
+chmod 755 "\$BIN" 2>/dev/null || true
 
-echo "[agent2api] 注册 App"
+echo "[agent2api] register app"
 if command -v uicache >/dev/null 2>&1; then
-  uicache -p "$APP" 2>/dev/null || uicache -a 2>/dev/null || true
-else
-  echo "[agent2api] WARN: 没有 uicache，请手动 respring"
+  uicache -p "\$APP" 2>/dev/null || uicache -a 2>/dev/null || true
 fi
 
-echo "[agent2api] 停止旧进程（否则新装的面板资源不会被加载）"
-launchctl bootout system/"$PKG" 2>/dev/null || true
-launchctl unload "$PLIST" 2>/dev/null || true
+UI_DIR="\${PREFIX}/usr/local/share/agent2api/ui"
+if [ -d "\$UI_DIR" ]; then
+  echo "[agent2api]   ui files: \$(find "\$UI_DIR" -type f | wc -l | tr -d ' ')"
+else
+  echo "[agent2api]   WARN missing \$UI_DIR"
+fi
+
+echo "[agent2api] stop old"
+launchctl bootout system/"\$PKG" 2>/dev/null || true
+launchctl unload "\$PLIST" 2>/dev/null || true
 killall -9 agent2api-server 2>/dev/null || true
 sleep 1
 
-echo "[agent2api] 面板资源检查"
-UI_DIR="/var/jb/usr/local/share/agent2api/ui"
-if [ -d "$UI_DIR" ]; then
-  echo "[agent2api]    ui 文件数：$(find "$UI_DIR" -type f | wc -l | tr -d ' ')（期望 256）"
-else
-  echo "[agent2api]   ⚠ 缺少 $UI_DIR，/m 会 404"
+echo "[agent2api] bootstrap"
+launchctl enable system/"\$PKG" 2>/dev/null || true
+if ! launchctl bootstrap system "\$PLIST" 2>/dev/null; then
+  launchctl kickstart -k system/"\$PKG" 2>/dev/null || launchctl load -w "\$PLIST" 2>/dev/null || true
 fi
 
-echo "[agent2api] 加载守护进程"
-launchctl enable system/"$PKG" 2>/dev/null || true
-if ! launchctl bootstrap system "$PLIST" 2>/dev/null; then
-  echo "[agent2api]   bootstrap 失败，尝试 kickstart 已注册的 job"
-  launchctl kickstart -k system/"$PKG" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || true
-fi
-
-echo "[agent2api] 健康检查"
+echo "[agent2api] health check"
 i=0
-while [ $i -lt 20 ]; do
-  i=$((i + 1))
+while [ \$i -lt 20 ]; do
+  i=\$((i + 1))
   sleep 1
   if curl -s --max-time 2 http://127.0.0.1:3065/health 2>/dev/null | grep -q '"ok"'; then
-    echo "[agent2api] ✅ 网关已就绪；打开桌面上的 Agent2API 即可"
+    echo "[agent2api] OK gateway ready"
     exit 0
   fi
 done
-echo "[agent2api] ⚠ 网关未在 20 秒内就绪：tail -50 $DATA/server.log"
+echo "[agent2api] WARN gateway not ready, see \$DATA/server.log"
 exit 0
 EOF
 
-cat > "$ROOT/DEBIAN/prerm" <<'EOF'
+cat > "$ROOT/DEBIAN/prerm" <<EOF
 #!/bin/sh
 set -u
 PKG="com.chiyu.agent2api"
-PLIST="/var/jb/Library/LaunchDaemons/${PKG}.plist"
-launchctl bootout system/"$PKG" 2>/dev/null || true
-launchctl unload "$PLIST" 2>/dev/null || true
-if command -v uicache >/dev/null 2>&1; then
-  uicache -a 2>/dev/null || true
-fi
+PREFIX="${PREFIX}"
+PLIST="\${PREFIX}/Library/LaunchDaemons/\${PKG}.plist"
+launchctl bootout system/"\$PKG" 2>/dev/null || true
+launchctl unload "\$PLIST" 2>/dev/null || true
 exit 0
 EOF
 
 chmod 755 "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm"
 
 mkdir -p "$OUT"
-# 文件名做得一眼可辨：Agent2API-3.4.83.deb（dpkg 只看 control 里的 Package/Version）
-DEB="$OUT/Agent2API-${VERSION}.deb"
+OUT="$(cd "$OUT" && pwd)"
+SUFFIX=rootful
+[ -n "$PREFIX" ] && SUFFIX=rootless
+DEB="$OUT/Agent2API-${VERSION}-${SUFFIX}.deb"
 dpkg-deb -b --root-owner-group "$ROOT" "$DEB" >/dev/null
-echo "==> 产出：$DEB ($(du -h "$DEB" | cut -f1))"
-dpkg-deb -c "$DEB" | sed -n '1,12p'
+echo "==> 产出：$DEB"
