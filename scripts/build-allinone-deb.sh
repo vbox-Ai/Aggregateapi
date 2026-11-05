@@ -152,6 +152,15 @@ while [ \$i -lt 20 ]; do
     exit 0
   fi
 done
+echo "[agent2api] launchd 没拉起来，改为直接后台启动（本次开机内有效）"
+if [ -x "\$BIN" ]; then
+  ( nohup "\$BIN" >>"\$DATA/server.log" 2>&1 & ) 2>/dev/null || true
+  sleep 4
+  if curl -s --max-time 2 http://127.0.0.1:3065/health 2>/dev/null | grep -q '"ok"'; then
+    echo "[agent2api] OK gateway ready (direct start)"
+    exit 0
+  fi
+fi
 echo "[agent2api] WARN gateway not ready, see \$DATA/server.log"
 exit 0
 EOF
