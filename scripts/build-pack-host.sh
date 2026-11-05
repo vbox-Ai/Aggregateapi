@@ -27,41 +27,7 @@ echo "==> 给 provider crate 生成 lib 目标"
 python3 "$ROOT/scripts/make-pack-lib.py" "$CRATE" pack_inner "providers::registry()"
 
 echo "==> 生成 pack_host crate"
-python3 - "$CRATE" "$HOST" "$FEATURES" <<'PY'
-import pathlib
-import re
-import sys
-
-crate = pathlib.Path(sys.argv[1])
-host = pathlib.Path(sys.argv[2])
-features = [x.strip() for x in sys.argv[3].split(",") if x.strip()]
-
-name = "agent2api-providers"
-manifest = crate / "Cargo.toml"
-m = re.search(r'(?m)^name\s*=\s*"([^"]+)"', manifest.read_text(encoding="utf-8"))
-if m:
-    name = m.group(1)
-
-if features:
-    dep = '%s = { path = "%s", default-features = false, features = [%s] }' % (
-        name, crate.as_posix(), ", ".join('"%s"' % f for f in features))
-else:
-    dep = '%s = { path = "%s" }' % (name, crate.as_posix())
-
-(host / "Cargo.toml").write_text(f"""[package]
-name = "pack_host"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "pack_host"
-crate-type = ["staticlib"]
-
-[dependencies]
-{dep}
-""", encoding="utf-8")
-print("   依赖：", dep)
-PY
+python3 "$ROOT/scripts/gen-pack-host.py" "$CRATE" "$HOST" "$FEATURES"
 
 cat > "$HOST/src/lib.rs" <<'EOF'
 //! 内嵌宿主：把 provider 注册表暴露成一个 C ABI 函数，供 daemon 的
