@@ -39,7 +39,7 @@ jobs:
     # run #157 就是这么丢掉 iOS 的（Plugins 在 1 秒内被 cancelled → iOS skipped，
     # 一只 deb 都没出）。插件包只是"锦上添花"，拿不到就出不带预置插件的 deb。
     if: ${{ always() && (!inputs.only || inputs.only == 'all' || inputs.only == 'ios' || inputs.only == 'store') }}
-    runs-on: macos-14
+    runs-on: macos-15
     continue-on-error: true
     # deb 里要预置插件包，所以先等插件作业出包（它的产物下载是尽力而为）
     needs: [plugins]
@@ -246,7 +246,7 @@ jobs:
   plugins:
     name: Plugins (iOS packs)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'plugins' || inputs.only == 'store' }}
-    runs-on: macos-14
+    runs-on: macos-15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -392,7 +392,7 @@ jobs:
   macos:
     name: macOS (dmg)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'macos' }}
-    runs-on: macos-14
+    runs-on: macos-15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
