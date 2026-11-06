@@ -431,15 +431,27 @@ jobs:
         with:
           workspaces: Agent2API/desktop-tauri/src-tauri -> target
       - run: cargo install tauri-cli --version "^2" --locked
-      - name: 打 msi/exe
+
+      # 先把 exe 编出来：这一步失败才是真的编译问题（步骤名直接指出来）
+      - name: 编 Windows 可执行（cargo build）
+        working-directory: Agent2API/desktop-tauri/src-tauri
+        run: cargo build --release -p workbuddy-proxy-desktop
+
+      # 再打安装包（WiX/NSIS + icon.ico 这类打包器问题很常见）。
+      # Release 只收 deb 和插件 zip，msi/exe 只是附带产物，所以打包失败
+      # 不该把整条腿染红 —— 失败就跳过，exe 仍然照常上传。
+      - name: 打 msi/exe（打包尽力而为）
+        continue-on-error: true
         working-directory: Agent2API/desktop-tauri/src-tauri
         run: cargo tauri build
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
             Agent2API/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
             Agent2API/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
+            Agent2API/desktop-tauri/src-tauri/target/release/workbuddy-proxy-desktop.exe
           if-no-files-found: warn
 
   # ══════════════════════════════════════════════════════════════════════
