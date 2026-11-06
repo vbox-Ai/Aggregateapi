@@ -30,7 +30,14 @@ NEW = """    let mut options = HostOptions {
     // 这类环境拒绝对"未被越狱工具重签"的二进制做 exec，插件包里的 exe
     // 永远起不来。daemon 自身被重签过，所以让它 exec 自己、用
     // `--serve-pack` 切到插件形态，协议完全不变。
-    if std::env::var("AGENT2API_INPROC").map(|v| v.trim() != "0").unwrap_or(true) {
+    // 只有 agent2api-providers 被编进了 daemon 的 pack_host。
+    // web-providers 是独立 Mach-O，必须走插件包自己的 exe；
+    // 否则 daemon --serve-pack 只会重复提供主 provider，web 包永远 0 家。
+    let use_inproc = std::env::var("AGENT2API_INPROC")
+        .map(|v| v.trim() != "0")
+        .unwrap_or(true)
+        && pack.id == "agent2api-providers";
+    if use_inproc {
         match std::env::current_exe() {
             Ok(self_exe) => {
                 options.exe = self_exe.clone();
@@ -49,6 +56,11 @@ NEW = """    let mut options = HostOptions {
                 &format!("取不到自身路径，回退到插件 exe：{error}"),
             ),
         }
+    } else {
+        logging::log(
+            "Plugin",
+            &format!("使用插件包自身 exe：{}（包 {}）", options.exe.display(), pack.id),
+        );
     }"""
 
 patched = 0
