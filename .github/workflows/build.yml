@@ -35,10 +35,13 @@ jobs:
   # ══════════════════════════════════════════════════════════════════════
   ios:
     name: iOS (daemon + IPA)
-    if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'ios' || inputs.only == 'store' }}
+    # always() 是必需的：`needs` 里任何作业失败/被取消，默认会让本作业 skipped。
+    # run #157 就是这么丢掉 iOS 的（Plugins 在 1 秒内被 cancelled → iOS skipped，
+    # 一只 deb 都没出）。插件包只是"锦上添花"，拿不到就出不带预置插件的 deb。
+    if: ${{ always() && (!inputs.only || inputs.only == 'all' || inputs.only == 'ios' || inputs.only == 'store') }}
     runs-on: macos-14
     continue-on-error: true
-    # deb 里要预置插件包，所以先等插件作业出包；插件作业挂了也不会挡住 iOS
+    # deb 里要预置插件包，所以先等插件作业出包（它的产物下载是尽力而为）
     needs: [plugins]
     steps:
       - uses: actions/checkout@v4
