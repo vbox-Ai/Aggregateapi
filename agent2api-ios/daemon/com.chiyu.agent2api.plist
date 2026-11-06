@@ -62,10 +62,12 @@
 	<key>ProcessType</key>
 	<string>Background</string>
 
-	<!-- 以 mobile 身份跑：面板写 SQLite/WAL、account.key、日志后，
-	     App（同为 mobile）能直接读；3065 > 1024 不需要 root 绑端口 -->
-	<key>UserName</key>
-	<string>mobile</string>
+	<!-- 以 root 身份跑（不写 UserName 即默认 root）。
+	     曾经的 UserName=mobile 会踩两个坑：
+	       · RootHide 的 .jbroot-* 与数据目录由 root 布局，mobile 起不来库，
+	         日志里就是「[Storage] 数据库不可用」「[Config] 保存失败」；
+	       · 面板是 WKWebView 走 HTTP，并不需要 App 直接读 SQLite。
+	     3065 是高位端口，root/mobile 都能绑。 -->
 
 	<key>StandardOutPath</key>
 	<string>/var/mobile/Library/agent2api/server.log</string>

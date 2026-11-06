@@ -5,6 +5,8 @@
 	<!-- 插件二进制（子进程）用的签名 entitlements。
 	     由守护进程以 mobile 身份 posix_spawn，AMFI 要求它是"有效签名"；
 	     在 rootless 越狱上，platform-application 是最通用的通过方式。 -->
+		<key>com.apple.private.security.no-sandbox</key>
+	<true/>
 	<key>platform-application</key>
 	<true/>
 	<key>get-task-allow</key>

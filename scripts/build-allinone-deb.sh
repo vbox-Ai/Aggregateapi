@@ -195,13 +195,24 @@ if [ -d "\$LEGACY_DATA" ] && [ ! -f "\$DATA/agent2api.db" ]; then
   echo "[agent2api] migrate data: \$LEGACY_DATA -> \$DATA"
   cp -R "\$LEGACY_DATA"/. "\$DATA"/ 2>/dev/null || true
 fi
-# 数据目录里可能有上一版留下的 root:wheel 库/日志：postinst 末尾的"兜底直启"
-# 是以 root 跑 daemon 的，它创建的 agent2api.db 属主就是 root；之后 launchd
-# 按 UserName=mobile 再起时读不动，面板就会报
-# 「数据库不可用，无法保存管理员账号」。所以每次安装都递归纠正属主。
-chown -R mobile:mobile "\$DATA" 2>/dev/null || true
-chown mobile:mobile "\$DATA" 2>/dev/null || true
-chmod 700 "\$DATA" 2>/dev/null || true
+# 数据目录：daemon 现在以 root 跑（plist 不再设 UserName），所以属主统一 root。
+# 之前的 mobile 属主会让 RootHide 上的 launchd 起不来库（[Storage] 数据库不可用）。
+chown -R root:wheel "\$DATA" 2>/dev/null || true
+chown root:wheel "\$DATA" 2>/dev/null || true
+chmod 755 "\$DATA" 2>/dev/null || true
+
+# 空库/半截库（0 字节、或只有 -wal 没有主库）会让 SQLite 直接打不开，
+# 表现为「数据库不可用，无法保存管理员账号」。这种库没有可用数据，删掉重建。
+if [ -f "\$DATA/agent2api.db" ]; then
+  DB_SIZE="\$(wc -c <"\$DATA/agent2api.db" 2>/dev/null | tr -d ' ')"
+  echo "[agent2api] db: \$(ls -l "\$DATA/agent2api.db" 2>/dev/null)"
+  if [ -z "\$DB_SIZE" ] || [ "\$DB_SIZE" -lt 1024 ]; then
+    rm -f "\$DATA/agent2api.db" "\$DATA/agent2api.db-wal" "\$DATA/agent2api.db-shm"
+    echo "[agent2api] 0 字节/损坏的库已删除，启动时会重建"
+  fi
+fi
+echo "[agent2api] data dir:"
+ls -l "\$DATA" 2>/dev/null | head -8 || true
 
 # 预置插件：把 deb 里带的插件目录放进网关的 plugins/，并写注册表。
 # 注册表是"装了哪些包"的唯一来源（网关不会自己扫目录），所以必须带 plugins.json。
@@ -225,7 +236,7 @@ if [ -d "\$PACKDIR" ]; then
     fi
     cp "\$PACKDIR/plugins.json" "\$DATA/plugins/plugins.json" 2>/dev/null || true
   fi
-  chown -R mobile:mobile "\$DATA/plugins" 2>/dev/null || true
+  chown -R root:wheel "\$DATA/plugins" 2>/dev/null || true
   chmod -R 755 "\$DATA/plugins" 2>/dev/null || true
 fi
 
@@ -288,15 +299,15 @@ if [ -x "\$BIN" ]; then
   sleep 4
   # 兜底直启是 root 跑的：它刚落盘的库/日志属主是 root，必须交回 mobile，
   # 否则下次 launchd 按 UserName=mobile 拉起时读不动（「数据库不可用」）。
-  chown -R mobile:mobile "\$DATA" 2>/dev/null || true
+  chown -R root:wheel "\$DATA" 2>/dev/null || true
   if curl -s --max-time 2 http://127.0.0.1:3065/health 2>/dev/null | grep -q '"ok"'; then
     echo "[agent2api] OK gateway ready (direct start)"
     exit 0
   fi
 fi
-chown -R mobile:mobile "\$DATA" 2>/dev/null || true
+chown -R root:wheel "\$DATA" 2>/dev/null || true
 echo "[agent2api] ---- server.log 末尾（诊断用）----"
-tail -n 25 "\$DATA/server.log" 2>/dev/null || echo "[agent2api] (没有 server.log)"
+tail -n 60 "\$DATA/server.log" 2>/dev/null || echo "[agent2api] (没有 server.log)"
 echo "[agent2api] ---- end ----"
 echo "[agent2api] WARN gateway not ready, see \$DATA/server.log"
 exit 0
