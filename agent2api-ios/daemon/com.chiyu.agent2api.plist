@@ -12,6 +12,8 @@
 
 	<key>ProgramArguments</key>
 	<array>
+		<string>/bin/sh</string>
+		<string>/var/jb/usr/local/bin/agent2api-launch</string>
 		<string>/var/jb/usr/local/bin/agent2api-server</string>
 	</array>
 
@@ -48,12 +50,10 @@
 	<key>RunAtLoad</key>
 	<true/>
 
-	<!-- 崩溃自恢复：只有「非正常退出」才重启，等价 supervisor.sh 的退避循环 -->
+	<!-- 始终由 launchd 保住 launcher；launcher 再决定何时 exec daemon。
+	     这样旧网关先死、端口释放后，新 daemon 会自动接管。 -->
 	<key>KeepAlive</key>
-	<dict>
-		<key>SuccessfulExit</key>
-		<false/>
-	</dict>
+	<true/>
 
 	<!-- 退避下限（launchd 原生节流，取代 supervisor.sh 的 3s→60s 指数退避） -->
 	<key>ThrottleInterval</key>

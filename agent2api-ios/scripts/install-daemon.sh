@@ -29,8 +29,9 @@ echo "==> [1/6] 建目录"
 rsh "mkdir -p '$DATA' '$PREFIX_DEST/bin' '$PREFIX_DEST/share/agent2api' '$SETUP/Library/LaunchDaemons'" 2>/dev/null || true
 rsh "chown -R mobile:mobile '$DATA'" 2>/dev/null || true
 
-echo "==> [2/6] 传二进制与面板"
+echo "==> [2/6] 传二进制、launcher 与面板"
 rcp "$BIN" "$PREFIX_DEST/bin/agent2api-server"
+rcp "$ROOT/daemon/agent2api-launch.sh" "$PREFIX_DEST/bin/agent2api-launch"
 rsh "rm -rf '$PREFIX_DEST/share/agent2api/ui'"
 if [ -n "$DEV" ]; then
   tar -C "$UI_SRC" -czf - . | ssh "$DEV" "mkdir -p '$PREFIX_DEST/share/agent2api/ui' && tar -C '$PREFIX_DEST/share/agent2api/ui' -xzf -"
@@ -43,7 +44,7 @@ echo "==> [3/6] 传 LaunchDaemon"
 rcp "$ROOT/daemon/$LABEL.plist" "$SETUP/Library/LaunchDaemons/$LABEL.plist"
 
 echo "==> [4/6] 权限与签名"
-rsh "chmod 755 '$PREFIX_DEST/bin/agent2api-server'
+rsh "chmod 755 '$PREFIX_DEST/bin/agent2api-server' '$PREFIX_DEST/bin/agent2api-launch'
      chown -R mobile:mobile '$PREFIX_DEST/share/agent2api' 2>/dev/null || true
      chown root:wheel '$SETUP/Library/LaunchDaemons/$LABEL.plist'
      chmod 644 '$SETUP/Library/LaunchDaemons/$LABEL.plist'

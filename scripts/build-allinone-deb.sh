@@ -12,6 +12,8 @@
 #   一次编译直接出两种包，不用事后手工转换。
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 APP=""
 UI_SRC=""
 BIN=""
@@ -64,7 +66,10 @@ APP_BIN="$ROOT$PREFIX/Applications/Agent2API.app/Agent2API"
 echo "==> 组装守护进程"
 mkdir -p "$ROOT$PREFIX/usr/local/bin"
 cp "$BIN" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
-chmod 755 "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+cp "$REPO_ROOT/agent2api-ios/daemon/agent2api-launch.sh" \
+   "$ROOT$PREFIX/usr/local/bin/agent2api-launch"
+chmod 755 "$ROOT$PREFIX/usr/local/bin/agent2api-server" \
+          "$ROOT$PREFIX/usr/local/bin/agent2api-launch"
 mkdir -p "$ROOT$PREFIX/Library/LaunchDaemons"
 if [ -n "$PREFIX" ]; then
   cp "$PLIST" "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
@@ -133,198 +138,10 @@ Installed-Size: ${SIZE}
 EOF
 }
 
-cat > "$ROOT/DEBIAN/postinst" <<EOF
-#!/bin/sh
-set -u
-PKG="com.chiyu.agent2api"
-PREFIX="${PREFIX}"
-
-# ── 解析真实根（RootHide / roothide）────────────────────────────────
-# RootHide 把 dpkg 的根重定向到
-#   /private/var/containers/Bundle/Application/.jbroot-<random>/
-# 系统里既没有 /var/jb，也没有真正的 /usr/local：安装时 dpkg 会把无前缀
-# 路径统统落进 .jbroot-*。但 plist 里的 ProgramArguments 是**绝对路径
-# 字符串**，launchd 不会替你翻译，于是 exec 失败、面板永远
-# 「网关未响应 127.0.0.1:3065」。
-# 判定：① 本脚本自身路径里的 /var/lib/dpkg 前缀 ② 现成的 .jbroot-* 目录
-# 命中后直接把 PREFIX 切成 jbroot —— 后面所有 \${PREFIX}/... 路径自动跟上。
-JB=""
-SELF="\$0"
-case "\$SELF" in
-  /*) ;;
-  *) SELF="\$(cd "\$(dirname "\$SELF")" 2>/dev/null && pwd)/\$(basename "\$SELF")" ;;
-esac
-case "\$SELF" in
-  */var/lib/dpkg/*) JB="\${SELF%%/var/lib/dpkg/*}" ;;
-esac
-if [ -z "\$JB" ] || [ ! -d "\$JB" ]; then
-  JB=""
-  for cand in /private/var/containers/Bundle/Application/.jbroot-* \
-              /var/containers/Bundle/Application/.jbroot-*; do
-    if [ -d "\$cand/usr/local/bin" ]; then JB="\$cand"; break; fi
-  done
-fi
-# 只对"无前缀"（rootful 语义）的包改写；rootless 包已自带 /var/jb
-if [ -n "\$JB" ] && [ -z "\${PREFIX}" ]; then
-  PREFIX="\$JB"
-  echo "[agent2api] jbroot: \$JB"
-fi
-
-APP="\${PREFIX}/Applications/Agent2API.app"
-BIN="\${PREFIX}/usr/local/bin/agent2api-server"
-PLIST="\${PREFIX}/Library/LaunchDaemons/\${PKG}.plist"
-# 数据目录**不跟着安装前缀走**：它必须在 /var/mobile 这种固定、可写、
-# 重装不变的位置上。放在 <jbroot>/usr/local/var 里有两个致命问题：
-#   ① RootHide 的 jbroot 由 dpkg 以 root 布局，launchd 以 mobile 运行 daemon
-#      时常常读不动 → 登录页「数据库不可用，无法保存管理员账号」；
-#   ② jbroot 名字是随机的，重建引导后路径会变，账号/配置等于全丢。
-DATA="/var/mobile/Library/agent2api"
-LEGACY_DATA="\${PREFIX}/usr/local/var/agent2api"
-
-echo "[agent2api] layout: \${PREFIX:-/ (rootful)}"
-
-# plist 里的绝对路径同样要落到真实根下，否则 launchd exec 不到
-if [ -n "\$JB" ] && [ -f "\$PLIST" ]; then
-  sed -e "s#>\/usr\/local/#>\$JB\/usr\/local/#g" "\$PLIST" > "\$PLIST.tmp" 2>/dev/null \
-    && mv "\$PLIST.tmp" "\$PLIST"
-fi
-
-mkdir -p "\$DATA"
-# 老版本把数据放在 <前缀>/usr/local/var/agent2api：存在就搬过来（只搬一次）
-if [ -d "\$LEGACY_DATA" ] && [ ! -f "\$DATA/agent2api.db" ]; then
-  echo "[agent2api] migrate data: \$LEGACY_DATA -> \$DATA"
-  cp -R "\$LEGACY_DATA"/. "\$DATA"/ 2>/dev/null || true
-fi
-# 数据目录：daemon 现在以 root 跑（plist 不再设 UserName），所以属主统一 root。
-# 之前的 mobile 属主会让 RootHide 上的 launchd 起不来库（[Storage] 数据库不可用）。
-chown -R root:wheel "\$DATA" 2>/dev/null || true
-chown root:wheel "\$DATA" 2>/dev/null || true
-chmod 755 "\$DATA" 2>/dev/null || true
-
-# 空库/半截库（0 字节、或只有 -wal 没有主库）会让 SQLite 直接打不开，
-# 表现为「数据库不可用，无法保存管理员账号」。这种库没有可用数据，删掉重建。
-if [ -f "\$DATA/agent2api.db" ]; then
-  DB_SIZE="\$(wc -c <"\$DATA/agent2api.db" 2>/dev/null | tr -d ' ')"
-  echo "[agent2api] db: \$(ls -l "\$DATA/agent2api.db" 2>/dev/null)"
-  if [ -z "\$DB_SIZE" ] || [ "\$DB_SIZE" -lt 1024 ]; then
-    rm -f "\$DATA/agent2api.db" "\$DATA/agent2api.db-wal" "\$DATA/agent2api.db-shm"
-    echo "[agent2api] 0 字节/损坏的库已删除，启动时会重建"
-  fi
-fi
-echo "[agent2api] data dir:"
-ls -l "\$DATA" 2>/dev/null | head -8 || true
-
-# 预置插件：把 deb 里带的插件目录放进网关的 plugins/，并写注册表。
-# 注册表是"装了哪些包"的唯一来源（网关不会自己扫目录），所以必须带 plugins.json。
-PACKDIR="\${PREFIX}/usr/local/share/agent2api/packs"
-if [ -d "\$PACKDIR" ]; then
-  echo "[agent2api] 预置插件"
-  mkdir -p "\$DATA/plugins"
-  for one in "\$PACKDIR"/*; do
-    [ -d "\$one" ] || continue
-    id="\$(basename "\$one")"
-    rm -rf "\$DATA/plugins/\$id"
-    cp -R "\$one" "\$DATA/plugins/\$id"
-    echo "[agent2api]   pack: \$id"
-  done
-  if [ -f "\$PACKDIR/plugins.json" ]; then
-    if [ -f "\$DATA/plugins/plugins.json" ]; then
-      # 备份名放 /tmp：往 DATA 里写时若目录正被 daemon 换动会报
-      # 「cp: updating times ... No such file or directory」这种红字，
-      # 虽然不影响安装，但日志里很难看。
-      cp "\$DATA/plugins/plugins.json" "/tmp/a2a-plugins.json.bak.\$(date +%s)" 2>/dev/null || true
-    fi
-    cp "\$PACKDIR/plugins.json" "\$DATA/plugins/plugins.json" 2>/dev/null || true
-  fi
-  chown -R root:wheel "\$DATA/plugins" 2>/dev/null || true
-  chmod -R 755 "\$DATA/plugins" 2>/dev/null || true
-fi
-
-chmod -R 755 "\$APP" 2>/dev/null || true
-chown -R root:wheel "\$APP" 2>/dev/null || true
-chmod 755 "\$BIN" 2>/dev/null || true
-
-echo "[agent2api] register app"
-if command -v uicache >/dev/null 2>&1; then
-  uicache -p "\$APP" 2>/dev/null || uicache -a 2>/dev/null || true
-fi
-
-UI_DIR="\${PREFIX}/usr/local/share/agent2api/ui"
-if [ -d "\$UI_DIR" ]; then
-  echo "[agent2api]   ui files: \$(find "\$UI_DIR" -type f | wc -l | tr -d ' ')"
-else
-  echo "[agent2api]   WARN missing \$UI_DIR"
-fi
-
-echo "[agent2api] stop old"
-launchctl bootout system/"\$PKG" 2>/dev/null || true
-launchctl unload "\$PLIST" 2>/dev/null || true
-killall -9 agent2api-server 2>/dev/null || true
-sleep 1
-
-echo "[agent2api] bootstrap"
-launchctl enable system/"\$PKG" 2>/dev/null || true
-# 把 launchctl 的原话记进安装日志（Sileo/Filza 都能看到）——以前这里
-# 2>/dev/null，出错只剩一句"没拉起来"，排查全靠猜。
-BOOT_OUT="\$(launchctl bootstrap system "\$PLIST" 2>&1)" || {
-  echo "[agent2api] bootstrap 失败：\$BOOT_OUT"
-  KICK_OUT="\$(launchctl kickstart -k system/"\$PKG" 2>&1)" || echo "[agent2api] kickstart 失败：\$KICK_OUT"
-  LOAD_OUT="\$(launchctl load -w "\$PLIST" 2>&1)" || echo "[agent2api] load 失败：\$LOAD_OUT"
-}
-echo "[agent2api] launchctl print:"
-launchctl print system/"\$PKG" 2>&1 | head -12 || true
-
-echo "[agent2api] health check"
-i=0
-while [ \$i -lt 20 ]; do
-  i=\$((i + 1))
-  sleep 1
-  if curl -s --max-time 2 http://127.0.0.1:3065/health 2>/dev/null | grep -q '"ok"'; then
-    echo "[agent2api] OK gateway ready"
-    exit 0
-  fi
-done
-echo "[agent2api] launchd 没拉起来，改为直接后台启动（本次开机内有效）"
-if [ -x "\$BIN" ]; then
-  # 必须显式带环境：否则 daemon 会把数据写到 cwd 下的 ./.agent2api
-  (
-    AGENT2API_PROXY_HOME="\$DATA" \
-    AGENT2API_UI_DIR="\${PREFIX}/usr/local/share/agent2api/ui" \
-    AGENT2API_HOST=127.0.0.1 \
-    AGENT2API_PROXY_PORT=3065 \
-    AGENT2API_ALLOW_EXEC=1 \
-    AGENT2API_SELF_UPDATE=0 \
-    nohup "\$BIN" >>"\$DATA/server.log" 2>&1 &
-  ) 2>/dev/null || true
-  sleep 4
-  # 兜底直启是 root 跑的：它刚落盘的库/日志属主是 root，必须交回 mobile，
-  # 否则下次 launchd 按 UserName=mobile 拉起时读不动（「数据库不可用」）。
-  chown -R root:wheel "\$DATA" 2>/dev/null || true
-  if curl -s --max-time 2 http://127.0.0.1:3065/health 2>/dev/null | grep -q '"ok"'; then
-    echo "[agent2api] OK gateway ready (direct start)"
-    exit 0
-  fi
-fi
-chown -R root:wheel "\$DATA" 2>/dev/null || true
-echo "[agent2api] ---- server.log 末尾（诊断用）----"
-tail -n 60 "\$DATA/server.log" 2>/dev/null || echo "[agent2api] (没有 server.log)"
-echo "[agent2api] ---- end ----"
-echo "[agent2api] WARN gateway not ready, see \$DATA/server.log"
-exit 0
-EOF
-
-cat > "$ROOT/DEBIAN/prerm" <<EOF
-#!/bin/sh
-set -u
-PKG="com.chiyu.agent2api"
-PREFIX="${PREFIX}"
-PLIST="\${PREFIX}/Library/LaunchDaemons/\${PKG}.plist"
-launchctl bootout system/"\$PKG" 2>/dev/null || true
-launchctl unload "\$PLIST" 2>/dev/null || true
-exit 0
-EOF
-
-chmod 755 "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm"
+cp "$REPO_ROOT/agent2api-ios/daemon/preinst.sh"  "$ROOT/DEBIAN/preinst"
+cp "$REPO_ROOT/agent2api-ios/daemon/postinst.sh" "$ROOT/DEBIAN/postinst"
+cp "$REPO_ROOT/agent2api-ios/daemon/prerm.sh"    "$ROOT/DEBIAN/prerm"
+chmod 755 "$ROOT/DEBIAN/preinst" "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm"
 
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"

@@ -21,6 +21,10 @@ final class PanelViewController: UIViewController {
     static var backend: Backend = .daemon
     #endif
 
+    static var backendName: String {
+        backend == .embedded ? "A2 内嵌网关" : "A1 守护进程"
+    }
+
     /// 网关端口首选值（与 daemon plist 的 AGENT2API_PROXY_PORT 一致）；
     /// 若被占用（例如上一次的实例还没退干净），会依次尝试后面的端口。
     private var port: UInt16 = 3065
@@ -370,8 +374,19 @@ final class PanelViewController: UIViewController {
     }
 
     @objc private func onRetry() {
-        // 形态 A1 下守护进程可能被 launchctl bootout 过：给用户一个"自救"路径
-        if PanelViewController.backend == .embedded { startEmbeddedGateway() }
+        if PanelViewController.backend == .embedded {
+            startEmbeddedGateway()
+        } else {
+            // A1 的 App 没有权限启动 LaunchDaemon；这里只刷新页面，并把真实原因说清楚。
+            let alert = UIAlertController(
+                title: "守护进程没有运行",
+                message: "请先打开 Relaxin 重新越狱，或重新安装 Agent2API deb。"
+                    + "\n\n安装包里的 launcher 会在旧网关退出后自动接管 3065。",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "知道了", style: .default))
+            present(alert, animated: true)
+        }
         reload()
     }
 
@@ -404,7 +419,10 @@ final class PanelViewController: UIViewController {
                     var text = "网关未响应 127.0.0.1:\(self.port)\n构建 \(Self.buildStamp)"
                     if !self.diag.isEmpty { text += "\n" + self.diag }
                     if let err = error { text += "\n错误：\(err.localizedDescription)" }
-                    text += "\nA1 形态：launchctl kickstart -k system/com.chiyu.agent2api"
+                    text += "\n形态：\(Self.backendName)"
+                    if Self.backend == .daemon {
+                        text += "\n提示：先打开 Relaxin 重新越狱，或重装 deb；launcher 会自动接管端口。"
+                    }
                     self.statusLabel.text = text
                 }
             }
