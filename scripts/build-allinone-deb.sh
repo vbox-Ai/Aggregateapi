@@ -173,7 +173,13 @@ fi
 APP="\${PREFIX}/Applications/Agent2API.app"
 BIN="\${PREFIX}/usr/local/bin/agent2api-server"
 PLIST="\${PREFIX}/Library/LaunchDaemons/\${PKG}.plist"
-DATA="\${PREFIX}/usr/local/var/agent2api"
+# 数据目录**不跟着安装前缀走**：它必须在 /var/mobile 这种固定、可写、
+# 重装不变的位置上。放在 <jbroot>/usr/local/var 里有两个致命问题：
+#   ① RootHide 的 jbroot 由 dpkg 以 root 布局，launchd 以 mobile 运行 daemon
+#      时常常读不动 → 登录页「数据库不可用，无法保存管理员账号」；
+#   ② jbroot 名字是随机的，重建引导后路径会变，账号/配置等于全丢。
+DATA="/var/mobile/Library/agent2api"
+LEGACY_DATA="\${PREFIX}/usr/local/var/agent2api"
 
 echo "[agent2api] layout: \${PREFIX:-/ (rootful)}"
 
@@ -184,6 +190,16 @@ if [ -n "\$JB" ] && [ -f "\$PLIST" ]; then
 fi
 
 mkdir -p "\$DATA"
+# 老版本把数据放在 <前缀>/usr/local/var/agent2api：存在就搬过来（只搬一次）
+if [ -d "\$LEGACY_DATA" ] && [ ! -f "\$DATA/agent2api.db" ]; then
+  echo "[agent2api] migrate data: \$LEGACY_DATA -> \$DATA"
+  cp -R "\$LEGACY_DATA"/. "\$DATA"/ 2>/dev/null || true
+fi
+# 数据目录里可能有上一版留下的 root:wheel 库/日志：postinst 末尾的"兜底直启"
+# 是以 root 跑 daemon 的，它创建的 agent2api.db 属主就是 root；之后 launchd
+# 按 UserName=mobile 再起时读不动，面板就会报
+# 「数据库不可用，无法保存管理员账号」。所以每次安装都递归纠正属主。
+chown -R mobile:mobile "\$DATA" 2>/dev/null || true
 chown mobile:mobile "\$DATA" 2>/dev/null || true
 chmod 700 "\$DATA" 2>/dev/null || true
 
@@ -261,11 +277,15 @@ if [ -x "\$BIN" ]; then
     nohup "\$BIN" >>"\$DATA/server.log" 2>&1 &
   ) 2>/dev/null || true
   sleep 4
+  # 兜底直启是 root 跑的：它刚落盘的库/日志属主是 root，必须交回 mobile，
+  # 否则下次 launchd 按 UserName=mobile 拉起时读不动（「数据库不可用」）。
+  chown -R mobile:mobile "\$DATA" 2>/dev/null || true
   if curl -s --max-time 2 http://127.0.0.1:3065/health 2>/dev/null | grep -q '"ok"'; then
     echo "[agent2api] OK gateway ready (direct start)"
     exit 0
   fi
 fi
+chown -R mobile:mobile "\$DATA" 2>/dev/null || true
 echo "[agent2api] WARN gateway not ready, see \$DATA/server.log"
 exit 0
 EOF
