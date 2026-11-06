@@ -437,21 +437,27 @@ jobs:
         working-directory: Agent2API/desktop-tauri/src-tauri
         run: cargo build --release -p workbuddy-proxy-desktop
 
-      # 再打安装包（WiX/NSIS + icon.ico 这类打包器问题很常见）。
-      # Release 只收 deb 和插件 zip，msi/exe 只是附带产物，所以打包失败
-      # 不该把整条腿染红 —— 失败就跳过，exe 仍然照常上传。
-      - name: 打 msi/exe（打包尽力而为）
+      # 再打安装包。上游 src-tauri/nsis-hooks.nsh 里的 NSIS_HOOK_PREINSTALL 会
+      # !insertmacro CheckIfAppIsRunning，而他们的自定义 nsis-template.nsi 没带上
+      # RestartManager 那段宏，makensis 直接报
+      #   macro named "RestartManager_StartSession" not found
+      # （run #155/156 的 Windows 腿就是这么挂的，编译本身是好的）。
+      # 绕开它：走 WiX 出 msi，完全不碰他们的 NSIS 模板；失败也无所谓。
+      - name: 打安装包（msi，打包尽力而为）
         continue-on-error: true
         working-directory: Agent2API/desktop-tauri/src-tauri
-        run: cargo tauri build
+        run: cargo tauri build --bundles msi
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
+            Agent2API/desktop-tauri/target/release/bundle/msi/*.msi
+            Agent2API/desktop-tauri/target/release/bundle/nsis/*.exe
+            Agent2API/desktop-tauri/target/release/workbuddy-proxy-desktop.exe
+            Agent2API/desktop-tauri/target/release/agent2api.exe
             Agent2API/desktop-tauri/src-tauri/target/release/bundle/msi/*.msi
             Agent2API/desktop-tauri/src-tauri/target/release/bundle/nsis/*.exe
-            Agent2API/desktop-tauri/src-tauri/target/release/workbuddy-proxy-desktop.exe
           if-no-files-found: warn
 
   # ══════════════════════════════════════════════════════════════════════
