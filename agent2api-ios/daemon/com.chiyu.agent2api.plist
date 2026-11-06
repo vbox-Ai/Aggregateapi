@@ -31,7 +31,10 @@
 		<key>AGENT2API_PROXY_PORT</key>
 		<string>3065</string>
 		<key>AGENT2API_CAPTCHA_ENABLED</key>
-		<string>1</string>
+		<string>0</string>
+		<!-- 机器人校验默认关：面板只监听 127.0.0.1，装机首次登录时
+		     WKWebView 里求解 PoW 容易失败（报「机器人校验无效」），
+		     真正的门槛是账号口令。需要时可在面板设置里再打开。 -->
 		<!-- 必须为 0：自更新会下载 glibc ELF 覆盖自身，iOS 上直接砖 -->
 		<key>AGENT2API_SELF_UPDATE</key>
 		<string>0</string>
