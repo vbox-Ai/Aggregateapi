@@ -233,6 +233,7 @@ write_plist() {
     <key>AGENT2API_CAPTCHA_ENABLED</key><string>0</string>
     <key>AGENT2API_SELF_UPDATE</key><string>0</string>
     <key>AGENT2API_ALLOW_EXEC</key><string>1</string>
+    <key>AGENT2API_ALLOW_UNSIGNED_PLUGIN_INSTALL</key><string>1</string>
     <key>AGENT2API_INPROC</key><string>1</string>
     <key>AGENT2API_DEPLOY</key><string>ios</string>
     <key>AGENT2API_VERBOSE</key><string>0</string>
