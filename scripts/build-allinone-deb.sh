@@ -138,12 +138,51 @@ cat > "$ROOT/DEBIAN/postinst" <<EOF
 set -u
 PKG="com.chiyu.agent2api"
 PREFIX="${PREFIX}"
+
+# ── 解析真实根（RootHide / roothide）────────────────────────────────
+# RootHide 把 dpkg 的根重定向到
+#   /private/var/containers/Bundle/Application/.jbroot-<random>/
+# 系统里既没有 /var/jb，也没有真正的 /usr/local：安装时 dpkg 会把无前缀
+# 路径统统落进 .jbroot-*。但 plist 里的 ProgramArguments 是**绝对路径
+# 字符串**，launchd 不会替你翻译，于是 exec 失败、面板永远
+# 「网关未响应 127.0.0.1:3065」。
+# 判定：① 本脚本自身路径里的 /var/lib/dpkg 前缀 ② 现成的 .jbroot-* 目录
+# 命中后直接把 PREFIX 切成 jbroot —— 后面所有 \${PREFIX}/... 路径自动跟上。
+JB=""
+SELF="\$0"
+case "\$SELF" in
+  /*) ;;
+  *) SELF="\$(cd "\$(dirname "\$SELF")" 2>/dev/null && pwd)/\$(basename "\$SELF")" ;;
+esac
+case "\$SELF" in
+  */var/lib/dpkg/*) JB="\${SELF%%/var/lib/dpkg/*}" ;;
+esac
+if [ -z "\$JB" ] || [ ! -d "\$JB" ]; then
+  JB=""
+  for cand in /private/var/containers/Bundle/Application/.jbroot-* \
+              /var/containers/Bundle/Application/.jbroot-*; do
+    if [ -d "\$cand/usr/local/bin" ]; then JB="\$cand"; break; fi
+  done
+fi
+# 只对"无前缀"（rootful 语义）的包改写；rootless 包已自带 /var/jb
+if [ -n "\$JB" ] && [ -z "\${PREFIX}" ]; then
+  PREFIX="\$JB"
+  echo "[agent2api] jbroot: \$JB"
+fi
+
 APP="\${PREFIX}/Applications/Agent2API.app"
 BIN="\${PREFIX}/usr/local/bin/agent2api-server"
 PLIST="\${PREFIX}/Library/LaunchDaemons/\${PKG}.plist"
 DATA="\${PREFIX}/usr/local/var/agent2api"
 
 echo "[agent2api] layout: \${PREFIX:-/ (rootful)}"
+
+# plist 里的绝对路径同样要落到真实根下，否则 launchd exec 不到
+if [ -n "\$JB" ] && [ -f "\$PLIST" ]; then
+  sed -e "s#>\/usr\/local/#>\$JB\/usr\/local/#g" "\$PLIST" > "\$PLIST.tmp" 2>/dev/null \
+    && mv "\$PLIST.tmp" "\$PLIST"
+fi
+
 mkdir -p "\$DATA"
 chown mobile:mobile "\$DATA" 2>/dev/null || true
 chmod 700 "\$DATA" 2>/dev/null || true
