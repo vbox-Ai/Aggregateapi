@@ -218,9 +218,12 @@ if [ -d "\$PACKDIR" ]; then
   done
   if [ -f "\$PACKDIR/plugins.json" ]; then
     if [ -f "\$DATA/plugins/plugins.json" ]; then
-      cp "\$DATA/plugins/plugins.json" "\$DATA/plugins/plugins.json.bak.\$(date +%s)"
+      # 备份名放 /tmp：往 DATA 里写时若目录正被 daemon 换动会报
+      # 「cp: updating times ... No such file or directory」这种红字，
+      # 虽然不影响安装，但日志里很难看。
+      cp "\$DATA/plugins/plugins.json" "/tmp/a2a-plugins.json.bak.\$(date +%s)" 2>/dev/null || true
     fi
-    cp "\$PACKDIR/plugins.json" "\$DATA/plugins/plugins.json"
+    cp "\$PACKDIR/plugins.json" "\$DATA/plugins/plugins.json" 2>/dev/null || true
   fi
   chown -R mobile:mobile "\$DATA/plugins" 2>/dev/null || true
   chmod -R 755 "\$DATA/plugins" 2>/dev/null || true
@@ -250,9 +253,15 @@ sleep 1
 
 echo "[agent2api] bootstrap"
 launchctl enable system/"\$PKG" 2>/dev/null || true
-if ! launchctl bootstrap system "\$PLIST" 2>/dev/null; then
-  launchctl kickstart -k system/"\$PKG" 2>/dev/null || launchctl load -w "\$PLIST" 2>/dev/null || true
-fi
+# 把 launchctl 的原话记进安装日志（Sileo/Filza 都能看到）——以前这里
+# 2>/dev/null，出错只剩一句"没拉起来"，排查全靠猜。
+BOOT_OUT="\$(launchctl bootstrap system "\$PLIST" 2>&1)" || {
+  echo "[agent2api] bootstrap 失败：\$BOOT_OUT"
+  KICK_OUT="\$(launchctl kickstart -k system/"\$PKG" 2>&1)" || echo "[agent2api] kickstart 失败：\$KICK_OUT"
+  LOAD_OUT="\$(launchctl load -w "\$PLIST" 2>&1)" || echo "[agent2api] load 失败：\$LOAD_OUT"
+}
+echo "[agent2api] launchctl print:"
+launchctl print system/"\$PKG" 2>&1 | head -12 || true
 
 echo "[agent2api] health check"
 i=0
@@ -286,6 +295,9 @@ if [ -x "\$BIN" ]; then
   fi
 fi
 chown -R mobile:mobile "\$DATA" 2>/dev/null || true
+echo "[agent2api] ---- server.log 末尾（诊断用）----"
+tail -n 25 "\$DATA/server.log" 2>/dev/null || echo "[agent2api] (没有 server.log)"
+echo "[agent2api] ---- end ----"
 echo "[agent2api] WARN gateway not ready, see \$DATA/server.log"
 exit 0
 EOF
