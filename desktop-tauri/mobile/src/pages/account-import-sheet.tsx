@@ -19,12 +19,15 @@ export function AccountImportSheet({
   providers,
   onClose,
   onImported,
+  initialProvider = '',
 }: {
   providers: Array<{ id?: string; label?: string }>
   onClose: () => void
   onImported: () => void
+  /** 打开时预选的提供商（账号详情里「重新粘贴凭证」用） */
+  initialProvider?: string
 }) {
-  const [provider, setProvider] = useState('')
+  const [provider, setProvider] = useState(initialProvider)
   const [name, setName] = useState('')
   const [content, setContent] = useState('')
   const [busy, setBusy] = useState(false)

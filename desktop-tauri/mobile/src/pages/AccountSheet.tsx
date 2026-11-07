@@ -7,6 +7,7 @@ import { store } from '../state/store'
 import {
   clearAccountRateLimits,
   deleteAccount,
+  exportAccountFile,
   fetchAccountUsage,
   fetchUsageSnapshot,
   promoteAccount,
@@ -16,6 +17,8 @@ import {
   type Account,
   type UsageRow,
 } from '../api/gateway'
+import { AccountImportSheet } from './account-import-sheet'
+import { downloadJson, dateStamp, safeFileName } from '../lib/download'
 import { accountName, activeLimits, formatExpiry, formatRelative, formatStamp, isRateLimited } from '../lib/format'
 import { expiryOf, hasExpiry, isLongLivedCredential, supportsUsage } from '../lib/providerFacts'
 import { mergeUsageRow, usageIndex, usageText } from '../lib/usage'
@@ -50,6 +53,8 @@ export function AccountSheet({
   const [usageRow, setUsageRow] = useState<UsageRow | undefined>(undefined)
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
+  const [reimportOpen, setReimportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const open = Boolean(account)
   const accountId = account?.id || ''
   const identity = serverIdentity()
@@ -157,6 +162,23 @@ export function AccountSheet({
   const promote = async () => {
     if (!account) return
     await run('promote', () => promoteAccount(account.id), t('已设为首选'))
+  }
+
+  /** 导出这个账号的凭证文件（.json），可在原客户端或另一台网关上再导入 */
+  const exportThis = async () => {
+    if (!account || exporting || serverIdentity() !== identity) return
+    setExporting(true)
+    try {
+      const data = await exportAccountFile({ id: account.id })
+      if (serverIdentity() !== identity) return
+      const name = safeFileName(accountName(account), account.id)
+      downloadJson(data, `${name}-${dateStamp()}.json`)
+      store.toast(t('已导出账号文件'))
+    } catch (error) {
+      if (serverIdentity() === identity) store.toast(error instanceof Error ? error.message : String(error), 'err')
+    } finally {
+      if (serverIdentity() === identity) setExporting(false)
+    }
   }
 
   const limits = account ? activeLimits(account) : []
@@ -468,6 +490,28 @@ export function AccountSheet({
               type='button'
               className='m-btn m-ghost w-full'
               style={{ flex: 1 }}
+              disabled={exporting || !account}
+              onClick={() => void exportThis()}
+            >
+              <Icon name='download' />
+              {exporting ? t('导出中…') : t('导出账号')}
+            </Button>
+            <Button size='touch' variant='outline'
+              type='button'
+              className='m-btn m-ghost w-full'
+              style={{ flex: 1 }}
+              disabled={Boolean(busy) || !account}
+              onClick={() => setReimportOpen(true)}
+            >
+              <Icon name='edit' />
+              {t('重新粘贴凭证')}
+            </Button>
+          </div>
+          <div className='m-btn-row'>
+            <Button size='touch' variant='outline'
+              type='button'
+              className='m-btn m-ghost w-full'
+              style={{ flex: 1 }}
               disabled={busy === 'toggle' || !account}
               onClick={() =>
                 account &&
@@ -494,6 +538,18 @@ export function AccountSheet({
           </div>
         </SheetFooter>
       </SheetContent>
+      {reimportOpen && account ? (
+        <AccountImportSheet
+          providers={store.get().session?.accounts?.providers || []}
+          initialProvider={account.provider}
+          onClose={() => setReimportOpen(false)}
+          onImported={() => {
+            setReimportOpen(false)
+            onChanged()
+            onClose()
+          }}
+        />
+      ) : null}
     </Sheet>
   )
 }

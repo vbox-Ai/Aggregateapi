@@ -17,10 +17,12 @@ import { useStore, store } from '../state/store'
 import {
   fetchUsageSnapshot,
   setAccountEnabled,
+  exportAccounts,
   type Account,
   type UsageRow,
   type UsageSnapshot,
 } from '../api/gateway'
+import { downloadJson, dateStamp } from '../lib/download'
 import { accountName, formatExpiry, formatRelative, isRateLimited } from '../lib/format'
 import { expiryOf, hasExpiry, isLongLivedCredential, supportsUsage } from '../lib/providerFacts'
 import { usageIndex, usageText } from '../lib/usage'
@@ -57,6 +59,7 @@ export function AccountsPage() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [usage, setUsage] = useState<UsageSnapshot | null>(null)
@@ -81,6 +84,21 @@ export function AccountsPage() {
   usePolling(load, 30_000)
 
   const pull = usePullToRefresh({ onRefresh: load })
+
+  // 导出全部账号（含 token 与自定义提供商定义）
+  const exportAll = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const data = await exportAccounts()
+      downloadJson(data, `agent2api-accounts-${dateStamp()}.json`)
+      store.toast(t('已导出 {n} 个账号', { n: accounts.length }))
+    } catch (failure) {
+      store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // 快照行按 id 索引：每次 render 重建 Map 太浪费，且行组件会因此白白重渲
   const usageById = useMemo(() => usageIndex(usage), [usage])
@@ -259,6 +277,9 @@ export function AccountsPage() {
           <>
             <Button variant='outline' size='sm' onClick={() => setAdding(true)}>{t('添加账号')}</Button>
             <Button variant='outline' size='sm' onClick={() => setImporting(true)}>{t('导入凭证')}</Button>
+            <Button variant='outline' size='sm' disabled={exporting || !accounts.length} onClick={() => void exportAll()}>
+              {exporting ? t('导出中…') : t('导出')}
+            </Button>
             <Button size='icon-touch' variant='outline'
               type='button'
               className='m-icon-btn'

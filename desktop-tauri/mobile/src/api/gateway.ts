@@ -132,6 +132,36 @@ export async function addAccountByFile(payload: AccountFileImportPayload): Promi
   })
 }
 
+/**
+ * 导出全部账号（含 token 与自定义提供商定义）。
+ *
+ * `GET /api/accounts/export` 是明文 JSON —— 桌面端只把它写进用户选的文件，
+ * 手机端同样只落成本地文件，不进 localStorage、不进日志。
+ */
+export function exportAccounts(): Promise<unknown> {
+  return apiCall('/api/accounts/export')
+}
+
+/**
+ * 导出单账号 / 本组账号的逐账号文件。
+ *
+ * 传 `id` 给一个账号，传 `provider` 给这一家的全部账号 —— 两个都传会以 `id` 为准
+ * （服务端判定顺序如此，见 accounts_export.rs）。
+ */
+export function exportAccountFile(selector: { id?: string; provider?: string }): Promise<unknown> {
+  return apiCall('/api/accounts/export-files', { method: 'POST', body: selector })
+}
+
+/**
+ * 批量导入账号（merge 语义：同身份命中则更新凭证，未命中则追加）。
+ *
+ * 手机端「重新粘贴凭证」走这条：贴进来的账号文件解析成对象后，用同一个 id
+ * 再导一次就是更新，不用先删后建。
+ */
+export function importAccounts(accounts: unknown[]): Promise<unknown> {
+  return apiCall('/api/accounts/import', { method: 'POST', body: { accounts } })
+}
+
 export function deleteAccount(id: string): Promise<unknown> {
   return apiCall(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
