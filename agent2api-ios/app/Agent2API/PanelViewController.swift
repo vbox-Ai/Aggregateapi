@@ -54,6 +54,8 @@ final class PanelViewController: UIViewController {
     private var supervisorURL: URL { URL(string: "http://127.0.0.1:\(supervisorPort)")! }
     private var heartbeatTimer: Timer?
     private var isActivating = false
+    private var activationStartedAt: Date?
+    private var needsReloadAfterActivation = false
     private var appIsActive = true
     private var lastActivateAttempt = Date.distantPast
     private var appObservers: [NSObjectProtocol] = []
@@ -436,6 +438,8 @@ final class PanelViewController: UIViewController {
         if now.timeIntervalSince(lastActivateAttempt) < 2 { return }
         lastActivateAttempt = now
         isActivating = true
+        activationStartedAt = now
+        needsReloadAfterActivation = true
 
         statusBar.isHidden = false
         statusLabel.text = "正在启动网关…\nSupervisor 127.0.0.1:\(supervisorPort)"
@@ -443,18 +447,16 @@ final class PanelViewController: UIViewController {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.isActivating = false
+                self.activationStartedAt = nil
                 if ok && self.appIsActive {
                     self.startHeartbeat()
+                    self.needsReloadAfterActivation = false
                     self.reload()
                 } else if !self.appIsActive {
                     self.deactivateGateway()
                 } else {
-                    self.stopHeartbeat()
-                    self.statusBar.isHidden = false
-                    self.statusLabel.text =
-                        "Supervisor 未响应 127.0.0.1:\(self.supervisorPort)\n"
-                        + "构建 \(Self.buildStamp)\n"
-                        + "请确认已安装 v8 deb，并已重新越狱。"
+                    // 不直接判死：gateway 可能已经由旧实例拉起，交给 /health 定时器确认。
+                    self.probeHealth()
                 }
             }
         }
@@ -468,7 +470,7 @@ final class PanelViewController: UIViewController {
     }
 
     private func startHeartbeat() {
-        stopHeartbeat()
+        if heartbeatTimer != nil { return }
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.supervisorRequest(path: "heartbeat", timeout: 6, completion: nil)
@@ -507,10 +509,12 @@ final class PanelViewController: UIViewController {
     }
 
     private func probeHealth() {
-        if isActivating {
-            statusBar.isHidden = false
-            statusLabel.text = "正在启动网关…\nSupervisor 127.0.0.1:\(supervisorPort)"
-            return
+        // 即使 supervisor 的 /start 请求还没回来，也要继续探测 3065。
+        // 否则网关已经起来了，状态条却会永远停在“正在启动网关”。
+        if isActivating, let started = activationStartedAt,
+           Date().timeIntervalSince(started) > 30 {
+            isActivating = false
+            activationStartedAt = nil
         }
         var req = URLRequest(url: baseURL.appendingPathComponent("health"))
         req.timeoutInterval = 3
@@ -521,11 +525,26 @@ final class PanelViewController: UIViewController {
                 // 网关正常就收起状态条（它只是排障用的），异常或页面报错时才显示
                 self.statusBar.isHidden = ok && self.jsErrors.isEmpty
                 if ok {
+                    self.isActivating = false
+                    self.activationStartedAt = nil
                     self.statusLabel.text = self.summary.isEmpty
                         ? "网关 OK \u{00B7} 127.0.0.1:\(self.port)\n" + self.diag
                         : self.summary
+                    if Self.backend == .daemon, self.appIsActive {
+                        self.startHeartbeat()
+                        if self.needsReloadAfterActivation {
+                            self.needsReloadAfterActivation = false
+                            self.reload()
+                        }
+                    }
                 }
                 if !ok {
+                    if self.isActivating {
+                        self.statusBar.isHidden = false
+                        self.statusLabel.text =
+                            "正在启动网关…\nSupervisor 127.0.0.1:\(self.supervisorPort)"
+                        return
+                    }
                     // 把诊断信息直接印在界面上（无需终端）：模式、启动返回码、数据目录、ui 是否存在
                     var text = "网关未响应 127.0.0.1:\(self.port)\n构建 \(Self.buildStamp)"
                     if !self.diag.isEmpty { text += "\n" + self.diag }
