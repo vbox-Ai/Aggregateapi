@@ -6,7 +6,7 @@ import type {
 } from '../../../ui-shared/plugins'
 
 export type {
-  PackProvider, PackSummary, PluginMutation, PluginOperation, PluginSettings,
+  PackProvider, PackSummary, PackUiSummary, PluginMutation, PluginOperation, PluginSettings,
   PluginsPayload, PluginUpdate, StorePlugin,
 } from '../../../ui-shared/plugins'
 

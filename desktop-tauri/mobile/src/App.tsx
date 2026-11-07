@@ -22,6 +22,7 @@ import { ToolsPage } from './pages/ToolsPage'
 import { ServersPage } from './pages/ServersPage'
 import { CheckinPage } from './pages/CheckinPage'
 import { PluginsPage } from './pages/PluginsPage'
+import { PluginPageView } from './pages/PluginPageView'
 import type { ScreenId } from './lib/routes'
 import { NavBar } from './components/NavBar'
 import { t } from './i18n'
@@ -59,6 +60,11 @@ const SCREENS: Record<ScreenId, ScreenDef> = {
   servers: { title: t('服务器'), component: ServersPage },
   checkin: { title: t('签到中心'), component: CheckinPage },
   plugins: { title: t('网关插件'), component: PluginsPage },
+  'plugin-page': { title: t('插件页面'), component: () => PluginPageView({
+    pack: store.get().route.params?.pack || '',
+    page: store.get().route.params?.page || '',
+    onBack: () => store.back(),
+  }) },
 }
 
 export function App() {

@@ -1,9 +1,11 @@
 import { PageHead, SectionHead, IconButton } from '../components/ui'
 import { Icon, type IconName } from '../components/Icon'
 import { store, useStore } from '../state/store'
-import { apiBase, baseLabel } from '../lib/servers'
+import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { isRateLimited } from '../lib/format'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
+import { getPlugins } from '../api/plugins'
+import { useEffect, useState } from 'react'
 import { t } from '../i18n'
 import { Card, Button, SegmentedControl } from '@ui'
 
@@ -21,6 +23,37 @@ export function MorePage() {
   const { session } = useStore()
   const accounts = session?.accounts?.accounts || []
   const limited = accounts.filter(item => item.enabled && isRateLimited(item)).length
+  /** 插件自声明的页面（`pack.json` 的 `ui[]`）；卸载包后自动消失 */
+  const [pluginPages, setPluginPages] = useState<Entry[]>([])
+
+  useEffect(() => {
+    const identity = serverIdentity()
+    let cancelled = false
+    getPlugins()
+      .then(payload => {
+        if (cancelled || serverIdentity() !== identity) return
+        const entries: Entry[] = []
+        for (const pack of payload.packs || []) {
+          if (!pack.enabled) continue
+          for (const ui of pack.ui || []) {
+            entries.push({
+              // 路由串：normalizeRoute 会拆成 pack/page 两段
+              id: `plugin:${pack.id}:${ui.id}`,
+              label: ui.title || pack.name || pack.id,
+              icon: 'plugin',
+            })
+          }
+        }
+        entries.sort((a, b) => a.label.localeCompare(b.label))
+        setPluginPages(entries)
+      })
+      .catch(() => {
+        /* 插件页是增强项：网关没装插件或读不到时不占版面 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [serverIdentity()])
 
   // 本页没有自己的列表请求：下拉只需重拉会话（角标与网关状态都来自它）
   const pull = usePullToRefresh({ onRefresh: () => store.refresh(true) })
@@ -54,6 +87,7 @@ export function MorePage() {
         { id: 'report', label: t('报表'), icon: 'chart' },
       ],
     },
+    ...(pluginPages.length ? [{ title: t('插件页面'), entries: pluginPages }] : []),
   ]
 
   return (

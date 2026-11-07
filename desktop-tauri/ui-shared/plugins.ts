@@ -25,6 +25,24 @@ export type PackSummary = {
   providers: PackProvider[]
   host?: HostState
   providerCategory?: 'agent' | 'web'
+  /**
+   * 包内自声明的界面页面（`pack.json` 的 `ui[]`）。
+   *
+   * 网关原样转给客户端，自己不解释 `group`：分组是客户端的事实。
+   * 手机端只渲染「全部页面」这一组，标题/图标/地址照抄。
+   */
+  ui?: PackUiSummary[]
+}
+
+export type PackUiSummary = {
+  id: string
+  title: string
+  icon?: string | null
+  /** 网关托管地址，形如 `/plugins/<pack>/ui/<entry>`（不带扩展名） */
+  url: string
+  /** 页面申报的默认归属分组（客户端内置分组 id，网关原样转） */
+  group?: string | null
+  order: number
 }
 
 export type HostState = {
