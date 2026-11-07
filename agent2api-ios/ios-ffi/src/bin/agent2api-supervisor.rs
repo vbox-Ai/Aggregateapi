@@ -142,12 +142,12 @@ fn start_child(state: &State) -> Result<(), String> {
 
     std::fs::create_dir_all(&state.home).map_err(|error| error.to_string())?;
     let log_path = state.home.join("server.log");
-    let log = std::fs::OpenOptions::new()
+    let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
         .map_err(|error| format!("open {}: {error}", log_path.display()))?;
-    let log_err = log.try_clone().map_err(|error| error.to_string())?;
+    let log_err = log_file.try_clone().map_err(|error| error.to_string())?;
 
     log(&format!("starting gateway {}", state.server_bin.display()));
     let mut command = Command::new(&state.server_bin);
@@ -162,7 +162,7 @@ fn start_child(state: &State) -> Result<(), String> {
         .env("AGENT2API_ALLOW_UNSIGNED_PLUGIN_INSTALL", "1")
         .env("AGENT2API_DEPLOY", "ios")
         .env("AGENT2API_SELF_UPDATE", "0")
-        .stdout(Stdio::from(log))
+        .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_err));
     #[cfg(unix)]
     {
