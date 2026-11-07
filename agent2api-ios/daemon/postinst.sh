@@ -182,22 +182,28 @@ fi
 
 # 6. launchctl
 LCTLS=""
-for l in "${JB:+$JB/usr/bin/launchctl}" "${JB:+$JB/bin/launchctl}" \
-         /bin/launchctl /var/jb/usr/bin/launchctl; do
+for l in /bin/launchctl /usr/bin/launchctl \
+         "${JB:+$JB/usr/bin/launchctl}" \
+         "${JB:+$JB/bin/launchctl}" \
+         /var/jb/usr/bin/launchctl; do
     if [ -n "$l" ] && [ -x "$l" ]; then
         case " $LCTLS " in *" $l "*) ;; *) LCTLS="$LCTLS $l" ;; esac
     fi
 done
 [ -n "$LCTLS" ] || { log "ERROR: 鎵句笉鍒?launchctl"; exit 1; }
 
+# 系统 launchctl 优先；RootHide 的 jbroot launchctl 有时会把作业装进 user/501
 GOOD_LCTL=""
 for l in $LCTLS; do
-    if "$l" print system >/dev/null 2>&1; then GOOD_LCTL="$l"; break; fi
+    GOOD_LCTL="$l"
+    break
 done
-[ -n "$GOOD_LCTL" ] || GOOD_LCTL="$(for l in $LCTLS; do echo "$l"; break; done)"
 
 # 7. Stop old gateway/supervisor/app process
-for l in $LCTLS; do "$l" bootout system/"$PKG" >/dev/null 2>&1 || true; done
+for l in $LCTLS; do
+    "$l" bootout system/"$PKG" >/dev/null 2>&1 || true
+    "$l" bootout user/501/"$PKG" >/dev/null 2>&1 || true
+done
 killall -9 agent2api-supervisor agent2api-server agent2api-providers agent2api-web-providers >/dev/null 2>&1 || true
 sleep 1
 
@@ -214,6 +220,12 @@ health_supervisor() {
     return 1
 }
 
+job_running() {
+    domain="$1"
+    OUT="$("$GOOD_LCTL" print "$domain/$PKG" 2>&1)"
+    echo "$OUT" | grep -q 'state = running'
+}
+
 REGISTERED=0
 for p in $PLISTS; do
     [ -f "$p" ] || continue
@@ -228,6 +240,15 @@ for p in $PLISTS; do
     "$GOOD_LCTL" enable system/"$PKG" >/dev/null 2>&1 || true
     i=0
     while [ "$i" -lt 20 ]; do
+        if job_running system || job_running user/501; then
+            log "supervisor registered (state=running)"
+            REGISTERED=1
+            if job_running user/501 && ! job_running system; then
+                log "supervisor 在 user/501，数据目录交给 mobile"
+                chown -R mobile:mobile "$DATA" 2>/dev/null || true
+            fi
+            break
+        fi
         if health_supervisor; then
             log "supervisor ready on $CONTROL_PORT"
             REGISTERED=1
