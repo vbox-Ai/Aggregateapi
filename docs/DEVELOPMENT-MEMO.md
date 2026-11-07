@@ -85,7 +85,8 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 
 ### Phase 1.5：整库备份 / 恢复（已完成）
 - 提交：`419d218c6e149c9eeaa9a24076ba152ceeb8a5c1`（mobile UI）+
-  `8a203928649d4b5b491f3c4be694e9e8ec60db1c`（iOS 下载桥）
+  `8a203928649d4b5b491f3c4be694e9e8ec60db1c`（iOS 下载桥）+
+  `f4d439eb27390be402c918de97c83b4c60eb8678`（WKDownloadDelegate 加 iOS 15.4 守卫）
 - 上游网关契约（`api/backup_api.rs`）：
   - `POST /api/backup/download` body `{ password, includeLogs }` → `.a2ab` 二进制流
   - `POST /api/backup/upload` multipart `password` + `backup` → 恢复
@@ -98,7 +99,8 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
     落到临时文件后用 UIActivityViewController 分享（保存到「文件」）
 - 验证：typecheck / build 通过；`mobile.js` 1074.14 → 1078.98 kB。
 - 备注：恢复用 `<input type=file>`（WKWebView 支持 File API）；备份下载需要
-  WKDownloadDelegate（已加），否则 `<a download>` 不会落盘。
+  WKDownloadDelegate（iOS 15.4+，部署目标 15.0，已用 `@available` 守卫）；
+  否则 `<a download>` 不会落盘。
 
 ### Phase 1.6：面板登录持久化（已完成）
 - 提交：`8c6fcb7381c18ceaa38f52b0b964b36eb6748771`
@@ -109,7 +111,7 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
   - `agent2api-ios/app/Agent2API/PanelSessionStore.swift`（新增）：
     Keychain save/load/delete/allServerIds + restoreScript（生成注入 localStorage 的脚本）
   - `agent2api-ios/app/Agent2API/PanelViewController.swift`：
-    - `webView.downloadDelegate = self`（备份下载）
+    - `webView.downloadDelegate = self`（备份下载，`@available(iOS 15.4, *)` 守卫）
     - 注册 `a2aSession` 消息桥 + documentStart 注入 restoreScript
     - `handleSessionMessage`：`{op:'save'|'delete', serverId, json}`
   - `desktop-tauri/mobile/src/lib/servers.ts`：
@@ -119,20 +121,8 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - 备注：`restoreScript` 在 `viewDidLoad` 构建 webView 前注入，所有 `agent2api.panelAuth.<id>`
   从 Keychain 恢复；登出会同步删 Keychain。
 
-## 3. 下一步
-
-### Phase 1 收尾（待做）
-- Phase 1.2 剩余：已有账号凭证编辑（手工改 token/cookie/JWT 等）；
-  目前手机端已支持“粘贴导入凭证”，导出/逐账号导出仍缺网关 API。
-- 然后进入 Phase 2：插件生态（GitHub Token 已完成）、插件自定义 UI 页面、
-  Provider 文档/日志。
-
-### 再之后
-- Phase 3：路由、MCP/Skill、自定义提供商、日志高级能力、批量操作。
-- Phase 4：移除桌面面板按钮和 `/` 入口。
-
 ### Phase 2.3：Provider 文档与插件日志（已完成）
-- 提交：待推送（phase23）
+- 提交：`485b2236ff248a51067188afb62d2133dee920a2`（feat(mobile): Phase 2.3 provider docs & plugin logs）
 - 现状确认：手机端已有 providerDocs（DocsPage 从 `/api/plugins` 读取）、登录方式说明
   （add-account-dynamic-sheet）、支持模型/能力（ModelsPage）、运行日志（/api/logs）。
 - 新增：
@@ -141,6 +131,33 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
   - `PluginsPage`：增加「插件日志」按钮 → 跳转 logs 页并预筛 `category=plugin`；
     增加「最近失败」折叠块，列出有 error/hostError 的插件操作（最多 6 条）。
 - 验证：typecheck / build 通过；`mobile.js` 1079.16 → 1080.42 kB。
+
+## 3. 下一步
+
+### Phase 1 遗漏检查（已完成复核）
+已核对上游 Rust 契约，确认以下实现与网关一致：
+- `POST /api/keys` body `{name?, key?, allowedProviders?, allowedModels?}`（keys_api.rs）
+- `PATCH /api/keys/{id}` body `{name?, enabled?, allowedProviders?, allowedModels?}`
+- `GET /api/keys` 返回 `{keys, authRequired, providers, modelsByProvider}`
+- `POST /api/update/token` body `{token: string|null}`（api/update.rs）
+- `POST /api/panel/change-password` body `{oldPassword, newPassword}`（api/panel.rs）
+- `POST /api/backup/download` body `{password, includeLogs}`；`POST /api/backup/upload` multipart
+- `POST /api/accounts` body 可为 `{provider, authFileContent, authFileName, name}`（桌面同款）
+
+仍存在的已知缺口（不阻塞手机-only 日常使用）：
+1. **账号逐账号/整库 JSON 导出**：网关没有 HTTP 导出接口（桌面走壳层下载），
+   手机端暂不做；可用整库备份 `.a2ab` 替代。
+2. **已有账号凭证手工编辑**：手机端支持“粘贴导入”（新增/更新同身份账号），但没有
+   “编辑这一个账号的 token/cookie”表单；需要 provider 级字段声明，留到后续。
+3. **重置管理员**：网关无 API（删库重注册），手机端不提供。
+4. **Swift 改动未在本环境编译**：`PanelSessionStore.swift` / `PanelViewController.swift`
+   需要在 iOS 构建（CI 或本机 xcodebuild）里验证；本环境只能做静态检查。
+
+### 待继续
+- Phase 2.1：插件设置完整化（镜像/签名/更新策略已在上游，手机端已有入口；可补 GitHub Token 之外的字段）
+- Phase 2.2：插件自定义 UI 页面（动态路由 + iframe 容器）
+- 然后进入 Phase 3：路由、MCP/Skill、自定义提供商、日志高级能力、批量操作
+- Phase 4：移除桌面面板按钮和 `/` 入口
 
 ## 4. 常用事实
 
