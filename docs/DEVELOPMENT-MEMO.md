@@ -72,16 +72,6 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - 备注：手机端“导出凭证文件”暂无 HTTP API（桌面走壳层下载），留待网关侧加导出接口或标桌面专属。
   已有账号的凭证编辑（手工改 token/cookie）仍待后续（计划是 1.2 后续部分）。
 
-### Phase 1.3：GitHub Token（已完成）
-- 提交：`54dfad09612dbc57babb1cf4530fadd1a03c2a65`（feat(mobile): Phase 1.3 GitHub token settings）
-- 上游网关契约（`core/update/token.rs`、`api/update.rs`）：
-  - `GET /api/update/token` → `{ filled, origin, error }`（不回显本体）
-  - `POST /api/update/token` body `{ token: string | null }`（null = 清除；缺字段 400）
-- 改动文件：
-  - `desktop-tauri/mobile/src/components/GithubTokenSettings.tsx`（新增）：保存/清除/状态展示
-  - `desktop-tauri/mobile/src/pages/plugins/PluginSettingsSheet.tsx`：在 GitHub 访问面板上方加入 Token 面板
-- 验证：typecheck / build 通过；`mobile.js` 1069.58 → 1071.49 kB。
-
 ### Phase 1.4：修改面板密码（已完成）
 - 提交：`b3f65734212e0270a31e8ac9094c9011bea2dd64`（feat(mobile): Phase 1.4 change panel password）
 - 上游网关契约（`api/panel.rs`）：
@@ -93,14 +83,53 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
   - `desktop-tauri/mobile/src/pages/SettingsPage.tsx`：账号分组加“修改密码”入口（仅 packaged 形态）
 - 验证：typecheck / build 通过；`mobile.js` 1071.49 → 1074.14 kB。
 
+### Phase 1.5：整库备份 / 恢复（已完成）
+- 提交：`419d218c6e149c9eeaa9a24076ba152ceeb8a5c1`（mobile UI）+
+  `8a203928649d4b5b491f3c4be694e9e8ec60db1c`（iOS 下载桥）
+- 上游网关契约（`api/backup_api.rs`）：
+  - `POST /api/backup/download` body `{ password, includeLogs }` → `.a2ab` 二进制流
+  - `POST /api/backup/upload` multipart `password` + `backup` → 恢复
+  - `GET /api/backup/restore/progress` → 恢复进度
+- 改动文件：
+  - `desktop-tauri/mobile/src/api/backup.ts`（新增）：downloadBackup / uploadBackup
+  - `desktop-tauri/mobile/src/pages/backup-restore-sheet.tsx`（新增）：密码 + 包含日志 + 选择文件恢复
+  - `desktop-tauri/mobile/src/pages/SettingsPage.tsx`：增加「数据」分组
+  - `agent2api-ios/app/Agent2API/PanelViewController.swift`：WKDownloadDelegate，备份下载
+    落到临时文件后用 UIActivityViewController 分享（保存到「文件」）
+- 验证：typecheck / build 通过；`mobile.js` 1074.14 → 1078.98 kB。
+- 备注：恢复用 `<input type=file>`（WKWebView 支持 File API）；备份下载需要
+  WKDownloadDelegate（已加），否则 `<a download>` 不会落盘。
+
+### Phase 1.6：面板登录持久化（已完成）
+- 提交：`8c6fcb7381c18ceaa38f52b0b964b36eb6748771`
+- 问题：WKWebView 用 `nonPersistent()` 数据存储，localStorage 每次启动清空 →
+  每次重开 App 都要重新登录面板。
+- 方案：登录令牌存 iOS Keychain（Security framework），启动时注入回 localStorage。
+- 改动文件：
+  - `agent2api-ios/app/Agent2API/PanelSessionStore.swift`（新增）：
+    Keychain save/load/delete/allServerIds + restoreScript（生成注入 localStorage 的脚本）
+  - `agent2api-ios/app/Agent2API/PanelViewController.swift`：
+    - `webView.downloadDelegate = self`（备份下载）
+    - 注册 `a2aSession` 消息桥 + documentStart 注入 restoreScript
+    - `handleSessionMessage`：`{op:'save'|'delete', serverId, json}`
+  - `desktop-tauri/mobile/src/lib/servers.ts`：
+    - `storeServerAuth` 同步写 Keychain（`persistToNative`）
+    - `clearServerAuth` 同步删除 Keychain
+- 验证：typecheck / build 通过；`mobile.js` 1078.98 → 1079.16 kB。
+- 备注：`restoreScript` 在 `viewDidLoad` 构建 webView 前注入，所有 `agent2api.panelAuth.<id>`
+  从 Keychain 恢复；登出会同步删 Keychain。
+
 ## 3. 下一步
 
-### 待继续
-- Phase 1.2 剩余：已有账号凭证编辑（手工改 token/cookie/JWT 等）
-- Phase 1.4 安全（修改面板密码 / 重置管理员 / 会话失效）
-- Phase 1.5 备份/恢复（整库加密备份/恢复 + iOS 文件分享/选择器桥）
-- Phase 1.6 登录持久化（Keychain 保存 refresh token；`PanelViewController` 的
-  `WKWebsiteDataStore.nonPersistent()` 相关改造）
+### Phase 1 收尾（待做）
+- Phase 1.2 剩余：已有账号凭证编辑（手工改 token/cookie/JWT 等）；
+  目前手机端已支持“粘贴导入凭证”，导出/逐账号导出仍缺网关 API。
+- 然后进入 Phase 2：插件生态（GitHub Token 已完成）、插件自定义 UI 页面、
+  Provider 文档/日志。
+
+### 再之后
+- Phase 3：路由、MCP/Skill、自定义提供商、日志高级能力、批量操作。
+- Phase 4：移除桌面面板按钮和 `/` 入口。
 
 ## 4. 常用事实
 
