@@ -159,6 +159,24 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - 然后进入 Phase 3：路由、MCP/Skill、自定义提供商、日志高级能力、批量操作
 - Phase 4：移除桌面面板按钮和 `/` 入口
 
+### 构建管线修正（2026-11-08，提交 a5195a0）
+发现两个会让改动“不生效/构建失败”的遗漏，已修：
+
+1. **CI 不编手机面板 UI**：原流程用上游 checkout 的
+   `Agent2API/desktop-tauri/ui`（预编译 `mobile.js`），`desktop-tauri/mobile` 源码根本没被构建。
+   → 新增步骤「构建手机面板 UI（从源码）」：`npm ci && npm run build`，
+   再把 `desktop-tauri/ui/m` 与 `desktop-tauri/ui/sw.js` 复制进 `Agent2API/desktop-tauri/ui/`，
+   这样 deb / IPA 的 `--ui` 用的是新编的 mobile.js。
+2. **build-ipa.sh 的 swiftc 文件列表是硬编码的**：新增的 `PanelSessionStore.swift` 不在列表里，
+   iOS 编译会失败（PanelViewController 引用不到）。→ 已加入 `xcrun swiftc` 的源文件列表。
+   （`-framework Security` 本来就有，Keychain 可用。）
+3. **.gitignore**：忽略 `desktop-tauri/ui/m/`、`desktop-tauri/ui/sw.js`、`desktop-tauri/mobile/android-www/`
+   构建产物，避免误提交。
+
+注意：`build-ipa.sh` 在 `Aggregateapi` 仓库里、但实际是在 macOS 上用 `SRC=.../Agent2API`
+跑；它编译的是 `$ROOT/app/Agent2API/*.swift`（本仓库的 Swift 源码）。改 Swift 后需重跑
+CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
+
 ## 4. 常用事实
 
 - 手机端 API client：`desktop-tauri/mobile/src/api/client.ts` 的 `apiCall`。
