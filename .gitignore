@@ -11,3 +11,7 @@ node_modules/
 Pods/
 .DS_Store
 *.log
+# 手机面板构建产物（CI 从 desktop-tauri/mobile 生成）
+desktop-tauri/ui/m/
+desktop-tauri/ui/sw.js
+desktop-tauri/mobile/android-www/

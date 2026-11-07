@@ -178,6 +178,21 @@ jobs:
             echo "WARN: 没取到插件包，这次 deb 不带预置插件"
           fi
 
+      - name: 构建手机面板 UI（从源码，覆盖上游预编译产物）
+        run: |
+          set -euo pipefail
+          echo "=== 构建手机面板 UI ==="
+          ( cd desktop-tauri/mobile && npm ci && npm run build )
+          # 产物落到 desktop-tauri/ui/m；把它放进上游 checkout，
+          # 这样 deb / IPA 打包的 --ui 用的就是我们新编的 mobile.js
+          rm -rf Agent2API/desktop-tauri/ui/m
+          cp -R desktop-tauri/ui/m Agent2API/desktop-tauri/ui/m
+          if [ -f desktop-tauri/ui/sw.js ]; then
+            cp desktop-tauri/ui/sw.js Agent2API/desktop-tauri/ui/sw.js
+          fi
+          echo "==> UI 产物："
+          ls -lh desktop-tauri/ui/m
+
       - name: 打 IPA + 打包 deb（rootless / rootful 两版）
         env:
           EMBED_INPUT: ${{ inputs.embed || '1' }}
