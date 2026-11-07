@@ -6,7 +6,7 @@ import { authenticate, fetchPanelStatus, solveCaptcha } from '../api/auth'
 import { storeApiKey } from '../api/client'
 import { baseLabel, serverIdentity } from '../lib/servers'
 import { t } from '../i18n'
-import { Alert, AppFrame, Button, Field as UiField, FieldLabel, Input } from '@ui'
+import { Alert, AlertDescription, AppFrame, Button, Field as UiField, FieldLabel, Input, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@ui'
 
 /**
  * 登录 / 首次注册（APK 独立整屏页）。
@@ -52,6 +52,11 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
   const [captchaState, setCaptchaState] = useState<'idle' | 'solving' | 'ready' | 'off' | 'failed'>('idle')
   const [captcha, setCaptcha] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
+  /** 「忘记密码」二次确认面板 */
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetPhrase, setResetPhrase] = useState('')
+  const [resetting, setResetting] = useState(false)
+  const [resetError, setResetError] = useState('')
   /** 代次：重试时作废上一轮，避免迟到的结果覆盖新状态 */
   const generation = useRef(0)
 
@@ -316,6 +321,26 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
             {t('换一台服务器')}
           </Button>
         ) : null}
+
+        {packaged ? (
+          <Button size='default' variant='ghost'
+            type='button'
+            disabled={busy}
+            onClick={() => setResetOpen(true)}
+            style={{
+              display: 'block',
+              width: '100%',
+              marginTop: 1,
+              padding: '10px 0',
+              border: 0,
+              background: 'none',
+              color: 'var(--m-danger)',
+              fontSize: 12.5,
+            }}
+          >
+            {t('忘记管理员密码')}
+          </Button>
+        ) : null}
       </div>
 
       <div
@@ -329,8 +354,87 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
       >
         {t('凭证只保存在这台手机上，按服务器分别存放')}
       </div>
+
+      {resetOpen ? (
+        <Sheet open onOpenChange={(open, details) => {
+          if (open) return
+          if (resetting) { details.cancel(); return }
+          setResetOpen(false)
+          setResetPhrase('')
+          setResetError('')
+        }}>
+          <SheetContent showCloseButton={!resetting}>
+            <SheetHeader><SheetTitle>{t('忘记管理员密码')}</SheetTitle></SheetHeader>
+            <SheetBody>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 8 }}>
+                <Alert variant='destructive'>
+                  <AlertDescription>
+                    {t('网关没有「找回密码」接口：管理员密码只能是库里的一行哈希。唯一出路是清空整库后重新注册 —— 账号、网关 Key、GitHub 令牌、日志与设置都会一并删除，无法恢复。')}
+                  </AlertDescription>
+                </Alert>
+                <p style={{ fontSize: 12, color: 'var(--m-text-2)', lineHeight: 1.6 }}>
+                  {t('如果还留着账号导出文件或整库备份（.a2ab），重置后可以再导入。')}
+                </p>
+                <div>
+                  <FieldLabel className='block text-[12px] text-muted-foreground'>
+                    {t('输入「重置」两个字确认')}
+                  </FieldLabel>
+                  <Input
+                    value={resetPhrase}
+                    onChange={event => setResetPhrase(event.currentTarget.value)}
+                    placeholder={t('重置')}
+                    className='h-[46px] text-base'
+                    aria-label={t('确认重置')}
+                  />
+                </div>
+                {resetError ? <p style={{ fontSize: 12, color: 'var(--m-danger)' }}>{resetError}</p> : null}
+              </div>
+            </SheetBody>
+            <SheetFooter>
+              <Button variant='outline' disabled={resetting} onClick={() => { setResetOpen(false); setResetPhrase(''); setResetError('') }}>
+                {t('取消')}
+              </Button>
+              <Button
+                variant='destructive'
+                disabled={resetting || resetPhrase.trim() !== t('重置')}
+                onClick={() => {
+                  if (resetting) return
+                  setResetting(true)
+                  setResetError('')
+                  callSupervisor('factory-reset')
+                    .catch(failure => setResetError(failure instanceof Error ? failure.message : String(failure)))
+                    .finally(() => setResetting(false))
+                }}
+              >
+                {resetting ? t('重置中…') : t('清空整库并重置管理员')}
+              </Button>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
+      ) : null}
     </AppFrame>
   )
+}
+
+/**
+ * 调原生壳上的 supervisor（127.0.0.1:3066）。
+ *
+ * 跨端口 fetch 会被 CORS 拦，所以只能走 `webkit.messageHandlers.a2aControl`；
+ * PWA / 浏览器里没有这个桥，界面会如实告知。
+ */
+export function callSupervisor(op: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const handlers = (window as Window & {
+      webkit?: { messageHandlers?: { a2aControl?: { postMessage: (msg: unknown) => void } } }
+    })?.webkit?.messageHandlers?.a2aControl
+    if (!handlers) {
+      reject(new Error(t('当前形态不支持：请用 iOS App 打开面板')))
+      return
+    }
+    handlers.postMessage({ op })
+    // 原生侧成功后会 reload 页面，这里只等桥投递成功
+    resolve()
+  })
 }
 
 /** 带标签的输入框（整屏表单里标签比 placeholder 更稳：输入后仍看得见） */

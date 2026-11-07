@@ -11,6 +11,9 @@
 //!   POST /stop
 //!   POST /heartbeat
 //!   GET  /health
+//!   POST /factory-reset   —— 删库重注册（忘记面板管理员密码时的唯一出路，
+//!                            见上游 api/panel.rs「重置说明」）。会清空账号、
+//!                            网关 Key、日志与设置，调用方必须先让用户二次确认。
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -193,8 +196,46 @@ fn start_child(state: &State) -> Result<(), String> {
     Err("gateway did not become healthy before timeout".to_string())
 }
 
-fn status_json(state: &State) -> String {
-    let mut running = false;
+/// 删库重注册：停网关 → 删库与密钥文件 → 重新拉起。
+///
+/// 为什么是「删库」而不是「改密码」：上游网关没有「忘记密码」接口
+/// （`api/panel.rs` 明确写着那是删库重注册）。面板管理员的 bcrypt 哈希就在库里，
+/// 清掉库就回到首次注册。
+///
+/// 会连带清空：账号、网关 Key、GitHub 令牌、日志、设置。调用方必须先确认。
+fn factory_reset(state: &State) -> Result<(), String> {
+    log("factory reset requested: stopping gateway");
+    stop_child(state)?;
+
+    let mut removed = 0usize;
+    if let Ok(entries) = std::fs::read_dir(&state.home) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else { continue };
+            // 只删库文件与库外密钥：账号/配置都在 agent2api.db，密钥是 *.key。
+            // supervisor.log / server.log 保留，排障还要看。
+            let target = name == "agent2api.db"
+                || name.starts_with("agent2api.db-")
+                || name.ends_with(".key");
+            if !target || !path.is_file() {
+                continue;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    removed += 1;
+                    log(&format!("removed {}", path.display()));
+                }
+                Err(error) => return Err(format!("remove {}: {error}", path.display())),
+            }
+        }
+    }
+    log(&format!("factory reset removed {removed} file(s)"));
+
+    // 起来的是一台空库网关：管理员未注册，App 打开就是首次注册页。
+    start_child(state)
+}
+
+fn status_json(state: &State) -> String {    let mut running = false;
     if let Ok(mut guard) = state.child.lock() {
         let mut child_state = 0u8;
         if let Some(child) = guard.as_mut() {
@@ -253,6 +294,17 @@ fn handle(mut stream: TcpStream, state: Arc<State>) {
                 Ok(()) => (200, status_json(&state)),
                 Err(error) => {
                     log(&format!("heartbeat start failed: {error}"));
+                    (500, format!("{{\"supervisor\":\"error\",\"error\":{:?}}}", error))
+                }
+            }
+        }
+        // 删库重注册。**破坏性操作**：App 侧必须让用户明确确认后再调用。
+        ("POST", "/factory-reset") => {
+            state.last_heartbeat.store(now_ms(), Ordering::SeqCst);
+            match factory_reset(&state) {
+                Ok(()) => (200, status_json(&state)),
+                Err(error) => {
+                    log(&format!("factory reset failed: {error}"));
                     (500, format!("{{\"supervisor\":\"error\",\"error\":{:?}}}", error))
                 }
             }

@@ -163,6 +163,9 @@ final class PanelViewController: UIViewController {
             WKUserScript(source: PanelSessionStore.restoreScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
         config.userContentController.add(self, name: "a2aSession")
+        // ③ 面板控制（目前只有「删库重注册」）：跨端口调用 3066 会被 CORS 拦，
+        //    所以走原生桥，由 App 侧用 URLSession 打 supervisor。
+        config.userContentController.add(self, name: "a2aControl")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
@@ -683,6 +686,13 @@ extension PanelViewController: WKScriptMessageHandler {
             }
             return
         }
+        if message.name == "a2aControl" {
+            guard let body = message.body as? [String: Any],
+                  let op = body["op"] as? String,
+                  op == "factory-reset" else { return }
+            factoryResetSupervisor()
+            return
+        }
         guard message.name == Bridge.messageName,
               let body = message.body as? [String: Any],
               let raw = body["url"] as? String,
@@ -704,6 +714,37 @@ extension PanelViewController: WKScriptMessageHandler {
         default:
             break
         }
+    }
+
+    /// 删库重注册：调 supervisor 的 `POST /factory-reset`（会停网关、删库、再拉起）。
+    /// 成功后页面回到首次注册；失败把原因打到状态条上。
+    func factoryResetSupervisor() {
+        guard let url = URL(string: "http://127.0.0.1:3066/factory-reset") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let error {
+                    self.jsErrors.append("重置失败：\(error.localizedDescription)")
+                    self.statusBar.isHidden = false
+                    self.statusLabel.text = self.summary + "\n— 重置 —\n" + self.jsErrors.joined(separator: "\n")
+                    return
+                }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if status == 200 {
+                    // 库没了，页面里的本地会话也一并清掉，直接回首次注册
+                    self.webView.evaluateJavaScript("try{localStorage.clear()}catch(e){}", completionHandler: nil)
+                    self.webView.reload()
+                } else {
+                    let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    self.jsErrors.append("重置失败：HTTP \(status) \(text)")
+                    self.statusBar.isHidden = false
+                    self.statusLabel.text = self.summary + "\n— 重置 —\n" + self.jsErrors.joined(separator: "\n")
+                }
+            }
+        }.resume()
     }
 }
 
