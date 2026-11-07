@@ -11,6 +11,7 @@ import { APP_VERSION } from '../lib/appUpdate'
 import { AppUpdatePanel } from '../components/AppUpdatePanel'
 import { CommunitySheet } from '../components/CommunitySheet'
 import { SystemInfoSheet } from '../components/SystemInfoSheet'
+import { ChangePasswordSheet } from './change-password-sheet'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
@@ -37,6 +38,7 @@ export function SettingsPage() {
   const [community, setCommunity] = useState(false)
   const [systemInfo, setSystemInfo] = useState(false)
   const [clientIdentification, setClientIdentification] = useState(false)
+  const [passwordOpen, setPasswordOpen] = useState(false)
   const currentLocale = locale()
   const options = localeOptions()
 
@@ -200,7 +202,19 @@ export function SettingsPage() {
         <SectionHead title={t('账号')} />
         <Card className='m-card'>
           {/* APK 有真正的登录态，给「退出登录」；浏览器端只有 API Key 可清 */}
-          {packaged ? (
+          {packaged ? (<>
+            <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setPasswordOpen(true)}>
+              <span className='m-logo'>
+                <Icon name='shield' />
+              </span>
+              <div className='m-grow'>
+                <div className='m-t1'>{t('修改密码')}</div>
+                <div className='m-t2'>{t('需要当前密码；其他设备会话会失效')}</div>
+              </div>
+              <span className='m-chev'>
+                <Icon name='chev' />
+              </span>
+            </Button>
             <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => void signOut()}>
               <span className='m-logo'>
                 <Icon name='logout' />
@@ -213,7 +227,7 @@ export function SettingsPage() {
                 <Icon name='chev' />
               </span>
             </Button>
-          ) : (
+          </>) : (
             <Button size='default' variant='ghost'
               type='button'
               className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left'
@@ -399,6 +413,7 @@ export function SettingsPage() {
       </Sheet>
       <CommunitySheet open={community} onClose={() => setCommunity(false)} />
       <SystemInfoSheet open={systemInfo} onClose={() => setSystemInfo(false)} />
+      {passwordOpen ? <ChangePasswordSheet onClose={() => setPasswordOpen(false)} /> : null}
     </div>
   )
 }
