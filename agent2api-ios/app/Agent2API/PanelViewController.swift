@@ -157,6 +157,12 @@ final class PanelViewController: UIViewController {
             WKUserScript(source: errorHook, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         )
         config.userContentController.add(self, name: "a2aDiag")
+        // ② 会话持久化：把 Keychain 里的面板登录态注入回 localStorage（WKWebView
+        //    是非持久存储，不注入每次启动都要重新登录）
+        config.userContentController.addUserScript(
+            WKUserScript(source: PanelSessionStore.restoreScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+        config.userContentController.add(self, name: "a2aSession")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
@@ -668,11 +674,33 @@ extension PanelViewController: WKScriptMessageHandler {
             statusLabel.text = summary + "\n— JS —\n" + jsErrors.joined(separator: "\n")
             return
         }
+        if message.name == "a2aSession" {
+            if let body = message.body as? [String: Any] {
+                handleSessionMessage(body)
+            }
+            return
+        }
         guard message.name == Bridge.messageName,
               let body = message.body as? [String: Any],
               let raw = body["url"] as? String,
               let url = URL(string: raw) else { return }
         openLoginContainer(url: url, state: body["state"] as? String ?? "")
+    }
+
+    /// 会话持久化：JS 登录后调用 {op:"save", serverId, json} 存 Keychain，
+    /// 登出调用 {op:"delete", serverId} 删除。
+    func handleSessionMessage(_ body: [String: Any]) {
+        guard let op = body["op"] as? String, let serverId = body["serverId"] as? String else { return }
+        switch op {
+        case "save":
+            if let json = body["json"] as? String {
+                PanelSessionStore.save(serverId: serverId, json: json)
+            }
+        case "delete":
+            PanelSessionStore.delete(serverId: serverId)
+        default:
+            break
+        }
     }
 }
 

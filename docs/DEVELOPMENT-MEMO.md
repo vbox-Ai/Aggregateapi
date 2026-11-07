@@ -54,19 +54,49 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - 验证：`pnpm exec tsc --noEmit` 通过；`pnpm run build` 通过；
   `mobile.js` 从 1062.95 kB → 1066.22 kB。
 
+### Phase 1.2：账号凭证导入（粘贴导入）（已完成）
+- 提交：`8e3c7cc1e487959f4d26ce9306910a16a320259a`（feat(mobile): Phase 1.2 account credential import by paste）
+- 关键发现：桌面端“导入凭证文件”走 `POST /api/accounts`，body 为
+  `{ provider, authFileContent, authFileName, name }`；不需要 provider 声明动态登录
+  （501 provider 也可用）。手机端之前只实现了动态登录通道。
+- 改动文件：
+  - `desktop-tauri/mobile/src/api/gateway.ts`
+    - 新增 `addAccountByFile(payload)` → POST `/api/accounts`（authFileContent 通道）
+    - 新增类型 `AccountFileImportPayload`
+  - `desktop-tauri/mobile/src/pages/account-import-sheet.tsx`（新增）
+    - `AccountImportSheet`：选择提供商 → 粘贴凭证 JSON/文本（Textarea）→ 提交
+    - 高频 provider 提示：raccoon / deepseek-web / doubaowork / tabbit / codearts
+  - `desktop-tauri/mobile/src/pages/AccountsPage.tsx`
+    - 右上角增加“导入凭证”按钮
+- 验证：typecheck / build 通过；`mobile.js` 1066.22 kB → 1069.58 kB。
+- 备注：手机端“导出凭证文件”暂无 HTTP API（桌面走壳层下载），留待网关侧加导出接口或标桌面专属。
+  已有账号的凭证编辑（手工改 token/cookie）仍待后续（计划是 1.2 后续部分）。
+
+### Phase 1.3：GitHub Token（已完成）
+- 提交：`54dfad09612dbc57babb1cf4530fadd1a03c2a65`（feat(mobile): Phase 1.3 GitHub token settings）
+- 上游网关契约（`core/update/token.rs`、`api/update.rs`）：
+  - `GET /api/update/token` → `{ filled, origin, error }`（不回显本体）
+  - `POST /api/update/token` body `{ token: string | null }`（null = 清除；缺字段 400）
+- 改动文件：
+  - `desktop-tauri/mobile/src/components/GithubTokenSettings.tsx`（新增）：保存/清除/状态展示
+  - `desktop-tauri/mobile/src/pages/plugins/PluginSettingsSheet.tsx`：在 GitHub 访问面板上方加入 Token 面板
+- 验证：typecheck / build 通过；`mobile.js` 1069.58 → 1071.49 kB。
+
+### Phase 1.4：修改面板密码（已完成）
+- 提交：`b3f65734212e0270a31e8ac9094c9011bea2dd64`（feat(mobile): Phase 1.4 change panel password）
+- 上游网关契约（`api/panel.rs`）：
+  - `POST /api/panel/change-password` body `{ oldPassword, newPassword }` → `{ changed: true }`
+  - 需要已登录会话；成功后其他会话链失效，当前会话保留。
+  - 重置管理员没有独立 API（文档：删库重注册），手机端不做重置入口。
+- 改动文件：
+  - `desktop-tauri/mobile/src/pages/change-password-sheet.tsx`（新增）：当前密码/新密码/确认
+  - `desktop-tauri/mobile/src/pages/SettingsPage.tsx`：账号分组加“修改密码”入口（仅 packaged 形态）
+- 验证：typecheck / build 通过；`mobile.js` 1071.49 → 1074.14 kB。
+
 ## 3. 下一步
 
-### Phase 1.2：账号凭证编辑与导入/导出
-- 文件：`desktop-tauri/mobile/src/pages/AccountSheet.tsx`、`AccountsPage.tsx`、`add-account-dynamic-sheet.tsx`
-- API：`/api/accounts` 相关（mobile 端已有 refresh/current/usage/snapshot）
-- 目标：
-  1. 已有账号可编辑凭证（provider 声明的手工凭证字段：API Key / Cookie / JWT / Token）
-  2. 对未声明动态登录的 provider 提供手工凭证表单兜底（不再要求必须切桌面）
-  3. 账号 JSON 导出 / 从文件导入（需要原生文件桥，可先做文本/粘贴导入 + JSON 复制导出）
-- 需要核对：桌面端凭证 schema 来源（provider 声明），网关是否已有导入导出 API。
-
-### 之后
-- Phase 1.3 GitHub Token（手机插件设置 → GitHub 访问加 token 字段）
+### 待继续
+- Phase 1.2 剩余：已有账号凭证编辑（手工改 token/cookie/JWT 等）
 - Phase 1.4 安全（修改面板密码 / 重置管理员 / 会话失效）
 - Phase 1.5 备份/恢复（整库加密备份/恢复 + iOS 文件分享/选择器桥）
 - Phase 1.6 登录持久化（Keychain 保存 refresh token；`PanelViewController` 的

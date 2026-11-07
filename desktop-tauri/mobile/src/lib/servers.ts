@@ -261,6 +261,9 @@ export function readServerAuth(id: string): PanelAuth | null {
 /**
  * 落盘一对令牌。`expiresIn` 是服务端下发的剩余秒数（见 `issue_response`），
  * 转成绝对时刻存下来 —— 相对秒数在页面挂久了就失去意义。
+ *
+ * 同时写进 iOS Keychain（经原生桥 `a2aSession`）：WKWebView 是非持久存储，
+ * 只写 localStorage 的话每次启动都要重新登录。
  */
 export function storeServerAuth(
   id: string,
@@ -270,17 +273,34 @@ export function storeServerAuth(
 ): void {
   const seconds = Number(expiresIn)
   const expiresAt = Number.isFinite(seconds) && seconds > 0 ? Date.now() + seconds * 1000 : 0
+  const record = JSON.stringify({ access, refresh, expiresAt })
   try {
-    localStorage.setItem(PANEL_AUTH(id), JSON.stringify({ access, refresh, expiresAt }))
+    localStorage.setItem(PANEL_AUTH(id), record)
   } catch {
     /* 同上 */
   }
+  persistToNative(id, record)
 }
 
+/** 删除会话时同步删除 Keychain 里的记录 */
 export function clearServerAuth(id: string): void {
   try {
     localStorage.removeItem(PANEL_AUTH(id))
   } catch {
     /* 无害 */
+  }
+  persistToNative(id, null)
+}
+
+/** 把面板登录态写进原生 Keychain（如果壳实现了 `a2aSession` 桥） */
+function persistToNative(id: string, json: string | null): void {
+  try {
+    const handlers = (window as Window & {
+      webkit?: { messageHandlers?: { a2aSession?: { postMessage: (msg: unknown) => void } } }
+    })?.webkit?.messageHandlers?.a2aSession
+    if (!handlers) return
+    handlers.postMessage({ op: json === null ? 'delete' : 'save', serverId: id, json })
+  } catch {
+    /* 没有桥或调用失败：localStorage 仍是主路径 */
   }
 }
