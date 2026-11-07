@@ -12,6 +12,7 @@ import { AppUpdatePanel } from '../components/AppUpdatePanel'
 import { CommunitySheet } from '../components/CommunitySheet'
 import { SystemInfoSheet } from '../components/SystemInfoSheet'
 import { ChangePasswordSheet } from './change-password-sheet'
+import { BackupRestoreSheet } from './backup-restore-sheet'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
@@ -39,6 +40,7 @@ export function SettingsPage() {
   const [systemInfo, setSystemInfo] = useState(false)
   const [clientIdentification, setClientIdentification] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
+  const [backupOpen, setBackupOpen] = useState(false)
   const currentLocale = locale()
   const options = localeOptions()
 
@@ -253,6 +255,24 @@ export function SettingsPage() {
         </Card>
       </div>
 
+      <div className='m-section'>
+        <SectionHead title={t('数据')} />
+        <Card className='m-card'>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setBackupOpen(true)}>
+            <span className='m-logo'>
+              <Icon name='download' />
+            </span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('整库备份 / 恢复')}</div>
+              <div className='m-t2'>{t('密码加密的 .a2ab 备份，可跨机器恢复')}</div>
+            </div>
+            <span className='m-chev'>
+              <Icon name='chev' />
+            </span>
+          </Button>
+        </Card>
+      </div>
+
       {/* APK 不需要装到桌面（本身就是 App），这一段只给浏览器形态 */}
       {packaged ? null : (
       <div className='m-section'>
@@ -414,6 +434,7 @@ export function SettingsPage() {
       <CommunitySheet open={community} onClose={() => setCommunity(false)} />
       <SystemInfoSheet open={systemInfo} onClose={() => setSystemInfo(false)} />
       {passwordOpen ? <ChangePasswordSheet onClose={() => setPasswordOpen(false)} /> : null}
+      {backupOpen ? <BackupRestoreSheet onClose={() => setBackupOpen(false)} onChanged={() => store.refresh(true)} /> : null}
     </div>
   )
 }
