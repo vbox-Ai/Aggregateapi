@@ -356,6 +356,28 @@ export function fetchKeys(signal?: AbortSignal): Promise<KeysPayload> {
   return apiCall<KeysPayload>('/api/keys', { signal })
 }
 
+export type KeyCreatePayload = {
+  name?: string
+  key?: string
+  allowedProviders?: string[]
+  allowedModels?: string[]
+}
+
+export type KeyUpdatePayload = {
+  name?: string
+  enabled?: boolean
+  allowedProviders?: string[]
+  allowedModels?: string[]
+}
+
+export function createKey(payload: KeyCreatePayload): Promise<KeysPayload> {
+  return apiCall<KeysPayload>('/api/keys', { method: 'POST', body: payload })
+}
+
+export function updateKey(id: string, payload: KeyUpdatePayload): Promise<KeysPayload> {
+  return apiCall<KeysPayload>(`/api/keys/${encodeURIComponent(id)}`, { method: 'PATCH', body: payload })
+}
+
 export function setKeyEnabled(id: string, enabled: boolean): Promise<KeysPayload> {
   return apiCall<KeysPayload>(`/api/keys/${encodeURIComponent(id)}`, { method: 'PATCH', body: { enabled } })
 }
