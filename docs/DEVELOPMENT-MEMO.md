@@ -132,6 +132,68 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
     增加「最近失败」折叠块，列出有 error/hostError 的插件操作（最多 6 条）。
 - 验证：typecheck / build 通过；`mobile.js` 1079.16 → 1080.42 kB。
 
+### Phase 2.4：账号导出 + 重新粘贴凭证（已完成）
+- 提交：`531e7f475f0afb3a97c798a68057bc461bcad5ab`（feat(mobile): account export (all/single) and re-paste credentials）
+- 上游网关契约（`api/accounts.rs` 模块头 + `accounts_export.rs`）：
+  - `GET /api/accounts/export` → 全部账号 JSON（含 token 与自定义提供商定义）
+  - `POST /api/accounts/export-files` body `{ id? }` / `{ provider? }` → 单账号 / 本组逐账号文件
+  - `POST /api/accounts/import` body `{ accounts: [...] }` → merge 语义（同身份命中更新，未命中追加）
+  - `PATCH /api/accounts/{id}` → `{ name?, priority?, enabled?, proxy? }`（**不含凭证**）
+- 改动文件：
+  - `desktop-tauri/mobile/src/api/gateway.ts`：新增 `exportAccounts()` / `exportAccountFile(selector)` / `importAccounts(accounts)`
+  - `desktop-tauri/mobile/src/lib/download.ts`（新增）：`downloadJson` / `downloadBlob` / `safeFileName` / `dateStamp`
+    （备份/导出共用，iOS 壳由 WKDownloadDelegate 接管落盘）
+  - `desktop-tauri/mobile/src/pages/AccountsPage.tsx`：PageHead 增加「导出」按钮（导出全部账号）
+  - `desktop-tauri/mobile/src/pages/AccountSheet.tsx`：footer 增加「导出账号」「重新粘贴凭证」
+    （重新粘贴凭证 = 用该账号的 provider 预选打开 AccountImportSheet，导进去就是同身份更新）
+  - `desktop-tauri/mobile/src/pages/account-import-sheet.tsx`：新增 `initialProvider` prop
+- 验证：typecheck / build 通过；`mobile.js` 1080.42 → 1082.45 kB。
+- 备注：「逐账号编辑凭证」的正确姿势是重新粘贴（merge 更新），不是 PATCH（PATCH 只改属性）。
+
+### Phase 2.5：忘记密码 → 删库重注册（已完成）
+- 提交：`85327f8b7e3d500c8afad65e75137efeef6c4a55`（feat(ios+mobile): factory reset）
+- 结论先行：网关**没有**找回/重置密码接口 —— `api/panel.rs` 原文写着
+  「忘记密码时重置是删库重注册」。supervisor 原来只有
+  `/health /status /start /stop /heartbeat`，所以手机端原本无路可走。
+- 方案：给 supervisor 加破坏性接口，App 侧二次确认后调用。
+  - `agent2api-ios/ios-ffi/src/bin/agent2api-supervisor.rs`：
+    - 新增 `POST /factory-reset`：`stop_child` → 删 `agent2api.db`、`agent2api.db-*`、`*.key`
+      → `start_child`（起来就是空库，管理员未注册）。保留 `*.log` 供排障。
+  - `agent2api-ios/app/Agent2API/PanelViewController.swift`：
+    - 注册 `a2aControl` 消息桥（跨端口 fetch 会被 CORS 拦，必须走原生）
+    - `factoryResetSupervisor()`：URLSession POST `127.0.0.1:3066/factory-reset`，
+      成功后清 localStorage 并 reload（回到首次注册页）
+  - `desktop-tauri/mobile/src/pages/LoginPage.tsx`：
+    - 新增「忘记管理员密码」入口（仅 packaged）+ 二次确认 Sheet：
+      必须手输「重置」才可点按钮；提示会删账号 / Key / 令牌 / 日志 / 设置
+    - 导出 `callSupervisor(op)` 供其它页面复用
+### Phase 2.6：插件自定义 UI 页面（已完成）
+- 提交：`cf0ab23f680e70f639b373e79723ee1218469cac`（feat(mobile): Phase 2.2 plugin custom UI pages）
+- 上游契约（`api/plugin_ui.rs` + `plugin_host/pack_view.rs`）：
+  - `GET /plugins/{pack}/ui/{*rest}` —— 网关托管插件页面，**不鉴权**（页面只是代码），
+    只服务**已启用**包的 `ui/` 目录，`..` 与绝对路径拒绝。
+  - `/api/plugins` 的 `packs[].ui[]` = `{ id, title, icon?, url, group?, order }`
+    （`updateRequired` 时为空数组）。
+  - 页面里的 `/api/*` 请求带不上面板令牌头 —— 宿主要用 postMessage 把令牌送进去。
+- 改动文件：
+  - `desktop-tauri/ui-shared/plugins.ts`：新增 `PackUiSummary` + `PackSummary.ui?`
+  - `desktop-tauri/mobile/src/api/plugins.ts`：re-export `PackUiSummary`
+  - `desktop-tauri/mobile/src/lib/routes.ts`：`plugin:<pack>:<page>` → `plugin-page`
+    屏幕（保留 `pack` / `page` 两个 params）；不再把插件页并到 `plugins`
+  - `desktop-tauri/mobile/src/pages/PluginPageView.tsx`（新增）：
+    拉 `/api/plugins` 找到 `pack.ui[page]` → iframe 加载 `entry.url`；
+    sandbox=`allow-scripts allow-forms allow-same-origin allow-popups allow-downloads`
+    （**不给** top-navigation）；只允许同 origin 的 `/plugins/` 路径；
+    加载完成 `postMessage({type:'a2a-auth', access})`；错误态给返回与排查提示
+  - `desktop-tauri/mobile/src/pages/MorePage.tsx`：新增「插件页面」分组，
+    从 `packs[].ui[]` 动态生成（只列 `enabled` 的包），点了 `push('plugin:<pack>:<id>')`
+  - `desktop-tauri/mobile/src/App.tsx`：注册 `plugin-page` 屏幕
+- 验证：typecheck / build 通过；`mobile.js` 1084.55 → 1087.49 kB。
+- 待验证：插件页里若自己 fetch `/api/*`，需要面板令牌；当前只做了 postMessage 投递，
+  插件若不监听 `a2a-auth` 消息则仍会被 401 —— 这属于插件侧契约，桌面端同样是这一步。
+- **未验证**：Rust supervisor 与 Swift 本环境无工具链，需 CI（ios job）编译确认；
+  删库仅删 `config_dir` 下 `agent2api.db*` 与 `*.key`，路径来自 supervisor 的 `home`。
+
 ## 3. 下一步
 
 ### Phase 1 遗漏检查（已完成复核）
