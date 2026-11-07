@@ -59,6 +59,8 @@ final class PanelViewController: UIViewController {
     private var appIsActive = true
     private var lastActivateAttempt = Date.distantPast
     private var appObservers: [NSObjectProtocol] = []
+    /// WKDownload 已落盘的备份文件（didFinish 时交给用户保存）
+    private var downloadedBackupURL: URL?
 
     /// 内嵌网关 `a2a_start` 的返回码（0 成功 / -1 初始化失败 / -2 端口占用）
     private var embeddedRC: Int32?
@@ -159,6 +161,8 @@ final class PanelViewController: UIViewController {
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        // 备份下载（.a2ab）需要 WKDownloadDelegate：网页里的 <a download> 才会落盘
+        webView.downloadDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         // 面板是移动端布局，禁掉「双击缩放」造成的输入框抖动
         webView.scrollView.contentInsetAdjustmentBehavior = .never
@@ -669,5 +673,43 @@ extension PanelViewController: WKScriptMessageHandler {
               let raw = body["url"] as? String,
               let url = URL(string: raw) else { return }
         openLoginContainer(url: url, state: body["state"] as? String ?? "")
+    }
+}
+
+// MARK: - WKDownloadDelegate（备份下载落盘）
+
+extension PanelViewController: WKDownloadDelegate {
+
+    /// 备份下载（`.a2ab`）从网关流式返回。WKWebView 不会自动保存，
+    /// 这里把数据落到临时文件，再交给用户决定存到哪里。
+    func download(_ download: WKDownload, decideDestinationWith response: URLResponse,
+                  suggestion: [String: String]?, completionHandler: @escaping (URL?) -> Void) {
+        let filename = response.suggestedFilename?.isEmpty == false ? response.suggestedFilename! : "agent2api-backup.a2ab"
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agent2api-backup-\(UUID().uuidString)-\(filename)")
+        downloadedBackupURL = target
+        completionHandler(target)
+    }
+
+    func didFinish(_ download: WKDownload) {
+        guard let url = downloadedBackupURL else { return }
+        downloadedBackupURL = nil
+        presentDownloadedFile(url)
+    }
+}
+
+/// 把下载好的 .a2ab 分享给用户（保存到「文件」、iCloud 等）。
+private func presentDownloadedFile(_ url: URL) {
+    // 在主线程上呈现（WKDownload 回调可能在子线程）
+    DispatchQueue.main.async {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let root = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first {
+            root.rootViewController?.present(activity, animated: true)
+        }
+        // 分享结束后清理临时文件（延迟一下，让用户有时间选中"保存"）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }
