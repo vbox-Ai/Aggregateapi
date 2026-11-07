@@ -49,6 +49,15 @@ final class PanelViewController: UIViewController {
     private var healthTimer: Timer?
     private var startedEmbedded = false
 
+    /// Supervisor 控制口（不占 3065；网关由 supervisor 按 App 前后台启停）
+    private let supervisorPort: UInt16 = 3066
+    private var supervisorURL: URL { URL(string: "http://127.0.0.1:\(supervisorPort)")! }
+    private var heartbeatTimer: Timer?
+    private var isActivating = false
+    private var appIsActive = true
+    private var lastActivateAttempt = Date.distantPast
+    private var appObservers: [NSObjectProtocol] = []
+
     /// 内嵌网关 `a2a_start` 的返回码（0 成功 / -1 初始化失败 / -2 端口占用）
     private var embeddedRC: Int32?
     /// 显示在黄条上的诊断串：模式、返回码、数据目录、ui 是否存在
@@ -78,20 +87,29 @@ final class PanelViewController: UIViewController {
             target: self,
             action: #selector(toggleDesktopPanel)
         )
-        reload()
+        installAppLifecycleObservers()
+        if PanelViewController.backend == .daemon {
+            activateGateway()
+        } else {
+            reload()
+        }
         scheduleHealthPolling()
+    }
+
+    deinit {
+        healthTimer?.invalidate()
+        heartbeatTimer?.invalidate()
+        for observer in appObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        #if A2A_EMBEDDED
+        if PanelViewController.backend == .embedded { _ = a2a_stop() }
+        #endif
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(false, animated: animated)
-    }
-
-    deinit {
-        healthTimer?.invalidate()
-        #if A2A_EMBEDDED
-        if PanelViewController.backend == .embedded { _ = a2a_stop() }
-        #endif
     }
 
     // MARK: - 视图搭建
@@ -376,18 +394,106 @@ final class PanelViewController: UIViewController {
     @objc private func onRetry() {
         if PanelViewController.backend == .embedded {
             startEmbeddedGateway()
+            reload()
         } else {
-            // A1 的 App 没有权限启动 LaunchDaemon；这里只刷新页面，并把真实原因说清楚。
-            let alert = UIAlertController(
-                title: "守护进程没有运行",
-                message: "请先打开 Relaxin 重新越狱，或重新安装 Agent2API deb。"
-                    + "\n\n安装包里的 launcher 会在旧网关退出后自动接管 3065。",
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: "知道了", style: .default))
-            present(alert, animated: true)
+            activateGateway()
         }
-        reload()
+    }
+
+    // MARK: - Supervisor 生命周期（方案 B）
+
+    private func installAppLifecycleObservers() {
+        let center = NotificationCenter.default
+        appObservers.append(center.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.appIsActive = true
+            if PanelViewController.backend == .daemon {
+                self.activateGateway()
+            }
+        })
+        appObservers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.appIsActive = false
+            if PanelViewController.backend == .daemon {
+                self.deactivateGateway()
+            }
+        })
+    }
+
+    /// App 在前台：让 supervisor 拉起网关，然后加载面板。
+    private func activateGateway() {
+        guard PanelViewController.backend == .daemon, appIsActive else { return }
+        if isActivating { return }
+        let now = Date()
+        if now.timeIntervalSince(lastActivateAttempt) < 2 { return }
+        lastActivateAttempt = now
+        isActivating = true
+
+        statusBar.isHidden = false
+        statusLabel.text = "正在启动网关…\nSupervisor 127.0.0.1:\(supervisorPort)"
+        supervisorRequest(path: "start", timeout: 25) { [weak self] ok in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isActivating = false
+                if ok && self.appIsActive {
+                    self.startHeartbeat()
+                    self.reload()
+                } else if !self.appIsActive {
+                    self.deactivateGateway()
+                } else {
+                    self.stopHeartbeat()
+                    self.statusBar.isHidden = false
+                    self.statusLabel.text =
+                        "Supervisor 未响应 127.0.0.1:\(self.supervisorPort)\n"
+                        + "构建 \(Self.buildStamp)\n"
+                        + "请确认已安装 v8 deb，并已重新越狱。"
+                }
+            }
+        }
+    }
+
+    /// App 进入后台：停掉网关和插件子进程。
+    private func deactivateGateway() {
+        guard PanelViewController.backend == .daemon else { return }
+        stopHeartbeat()
+        supervisorRequest(path: "stop", timeout: 3, completion: nil)
+    }
+
+    private func startHeartbeat() {
+        stopHeartbeat()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.supervisorRequest(path: "heartbeat", timeout: 6, completion: nil)
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+    }
+
+    private func supervisorRequest(
+        path: String,
+        timeout: TimeInterval,
+        completion: ((Bool) -> Void)?
+    ) {
+        var request = URLRequest(url: supervisorURL.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{}".utf8)
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            let ok = error == nil && (response as? HTTPURLResponse)?.statusCode == 200
+            completion?(ok)
+        }.resume()
     }
 
     // MARK: - 健康探测（对应 supervisor.sh 的 /health 判定）
@@ -401,6 +507,11 @@ final class PanelViewController: UIViewController {
     }
 
     private func probeHealth() {
+        if isActivating {
+            statusBar.isHidden = false
+            statusLabel.text = "正在启动网关…\nSupervisor 127.0.0.1:\(supervisorPort)"
+            return
+        }
         var req = URLRequest(url: baseURL.appendingPathComponent("health"))
         req.timeoutInterval = 3
         URLSession.shared.dataTask(with: req) { [weak self] data, _, error in
@@ -421,7 +532,8 @@ final class PanelViewController: UIViewController {
                     if let err = error { text += "\n错误：\(err.localizedDescription)" }
                     text += "\n形态：\(Self.backendName)"
                     if Self.backend == .daemon {
-                        text += "\n提示：先打开 Relaxin 重新越狱，或重装 deb；launcher 会自动接管端口。"
+                        text += "\n提示：App 在前台会自动请求 supervisor 启动网关。"
+                        self.activateGateway()
                     }
                     self.statusLabel.text = text
                 }

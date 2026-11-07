@@ -142,11 +142,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --release --target aarch64-apple-ios --features pack_host --bin agent2api-daemon
+          cargo build --release --target aarch64-apple-ios --bin agent2api-supervisor
           BIN=target/aarch64-apple-ios/release/agent2api-daemon
-          file "$BIN"
+          SUP=target/aarch64-apple-ios/release/agent2api-supervisor
+          file "$BIN" "$SUP"
           mkdir -p "$GITHUB_WORKSPACE/out/ios"
           # 保持与 LaunchDaemon plist 里的路径/文件名一致
           cp "$BIN" "$GITHUB_WORKSPACE/out/ios/agent2api-server"
+          cp "$SUP" "$GITHUB_WORKSPACE/out/ios/agent2api-supervisor"
 
       - name: 编 iOS 静态库（供 EMBED=1 的 IPA 使用）
         continue-on-error: true
@@ -217,6 +220,7 @@ jobs:
               bash -x scripts/build-allinone-deb.sh \
                 --app agent2api-ios/build/Payload/Agent2API.app \
                 --binary "$GITHUB_WORKSPACE/out/ios/agent2api-server" \
+                --supervisor "$GITHUB_WORKSPACE/out/ios/agent2api-supervisor" \
                 --plist "$GITHUB_WORKSPACE/out/ios/com.chiyu.agent2api.plist" \
                 --ui Agent2API/desktop-tauri/ui \
                 --entitlements agent2api-ios/app/Agent2API/entitlements-platform.plist \

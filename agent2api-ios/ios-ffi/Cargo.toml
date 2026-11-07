@@ -15,6 +15,11 @@ crate-type = ["staticlib", "rlib"]
 name = "agent2api-daemon"
 path = "src/bin/agent2api-daemon.rs"
 
+# 方案 B：唯一的 LaunchDaemon，按 App 前后台控制网关子进程。
+[[bin]]
+name = "agent2api-supervisor"
+path = "src/bin/agent2api-supervisor.rs"
+
 [dependencies]
 # 内嵌 provider（C 方案）：由 CI 在 out/packlib/pack_host 生成，本地没有就关掉该 feature
 pack_host = { path = "../../out/packlib/pack_host", optional = true }

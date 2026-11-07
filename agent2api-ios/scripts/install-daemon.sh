@@ -12,6 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEV="${DEV:-}"
 BIN="${BIN:-$ROOT/../Agent2API/desktop-tauri/src-tauri/target/aarch64-apple-ios/release/agent2api-server}"
+SUPERVISOR="${SUPERVISOR:-$ROOT/../out/ios/agent2api-supervisor}"
 UI_SRC="${UI_SRC:-$ROOT/../_a2a/ui}"
 SETUP="${SETUP:-/var/jb}"
 LABEL="com.chiyu.agent2api"
@@ -19,19 +20,20 @@ DATA="/var/mobile/Library/agent2api"
 PREFIX_DEST="$SETUP/usr/local"
 
 [ -f "$BIN" ] || { echo "找不到 Mach-O 二进制：$BIN"; echo "先编：cargo build -p agent2api-server --release --target aarch64-apple-ios"; exit 1; }
+[ -f "$SUPERVISOR" ] || { echo "找不到 supervisor：$SUPERVISOR"; exit 1; }
 [ -d "$UI_SRC" ] || { echo "找不到面板资源：$UI_SRC"; exit 1; }
-file "$BIN" | grep -q "Mach-O" || { echo "不是 Mach-O，别把 Android 的 ELF 传上去"; exit 1; }
+file "$BIN" "$SUPERVISOR" | grep -q "Mach-O" || { echo "不是 Mach-O，别把 Android 的 ELF 传上去"; exit 1; }
 
 rsh() { if [ -n "$DEV" ]; then ssh "$DEV" "$@"; else "$@"; fi; }
 rcp() { if [ -n "$DEV" ]; then scp -q "$1" "$DEV:$2"; else cp "$1" "$2"; fi; }
 
 echo "==> [1/6] 建目录"
 rsh "mkdir -p '$DATA' '$PREFIX_DEST/bin' '$PREFIX_DEST/share/agent2api' '$SETUP/Library/LaunchDaemons'" 2>/dev/null || true
-rsh "chown -R mobile:mobile '$DATA'" 2>/dev/null || true
+rsh "chown -R root:wheel '$DATA'" 2>/dev/null || true
 
-echo "==> [2/6] 传二进制、launcher 与面板"
+echo "==> [2/6] 传二进制、supervisor 与面板"
 rcp "$BIN" "$PREFIX_DEST/bin/agent2api-server"
-rcp "$ROOT/daemon/agent2api-launch.sh" "$PREFIX_DEST/bin/agent2api-launch"
+rcp "$SUPERVISOR" "$PREFIX_DEST/bin/agent2api-supervisor"
 rsh "rm -rf '$PREFIX_DEST/share/agent2api/ui'"
 if [ -n "$DEV" ]; then
   tar -C "$UI_SRC" -czf - . | ssh "$DEV" "mkdir -p '$PREFIX_DEST/share/agent2api/ui' && tar -C '$PREFIX_DEST/share/agent2api/ui' -xzf -"
@@ -44,11 +46,11 @@ echo "==> [3/6] 传 LaunchDaemon"
 rcp "$ROOT/daemon/$LABEL.plist" "$SETUP/Library/LaunchDaemons/$LABEL.plist"
 
 echo "==> [4/6] 权限与签名"
-rsh "chmod 755 '$PREFIX_DEST/bin/agent2api-server' '$PREFIX_DEST/bin/agent2api-launch'
-     chown -R mobile:mobile '$PREFIX_DEST/share/agent2api' 2>/dev/null || true
+rsh "chmod 755 '$PREFIX_DEST/bin/agent2api-server' '$PREFIX_DEST/bin/agent2api-supervisor'
+     chown -R root:wheel '$PREFIX_DEST/share/agent2api' 2>/dev/null || true
      chown root:wheel '$SETUP/Library/LaunchDaemons/$LABEL.plist'
      chmod 644 '$SETUP/Library/LaunchDaemons/$LABEL.plist'
-     command -v ldid >/dev/null && ldid -S '$PREFIX_DEST/bin/agent2api-server' || echo '  (无 ldid，跳过签名)'"
+     command -v ldid >/dev/null && ldid -S '$PREFIX_DEST/bin/agent2api-server' '$PREFIX_DEST/bin/agent2api-supervisor' || echo '  (无 ldid，跳过签名)'"
 
 echo "==> [5/6] 加载守护进程"
 rsh "launchctl bootout system/$LABEL 2>/dev/null || true
@@ -58,8 +60,8 @@ rsh "launchctl bootout system/$LABEL 2>/dev/null || true
 echo "==> [6/6] 健康检查（最多等 20s）"
 for i in $(seq 1 20); do
   sleep 1
-  OUT="$(rsh "curl -s --max-time 2 http://127.0.0.1:3065/health" 2>/dev/null || true)"
-  if echo "$OUT" | grep -q '"ok"'; then
+  OUT="$(rsh "curl -s --max-time 2 http://127.0.0.1:3066/health" 2>/dev/null || true)"
+  if echo "$OUT" | grep -q '"supervisor":"ok"'; then
     echo "    ✅ $OUT"
     echo
     echo "面板：http://127.0.0.1:3065/   （手机本体浏览器 / 装好的 App）"

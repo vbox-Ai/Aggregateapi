@@ -17,6 +17,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP=""
 UI_SRC=""
 BIN=""
+SUPERVISOR=""
 PLIST=""
 ENTS=""
 DAEMON_ENTS=""
@@ -31,6 +32,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --app)          APP="$2"; shift 2 ;;
     --binary)       BIN="$2"; shift 2 ;;
+    --supervisor)   SUPERVISOR="$2"; shift 2 ;;
     --plist)        PLIST="$2"; shift 2 ;;
     --entitlements) ENTS="$2"; shift 2 ;;
     --daemon-entitlements) DAEMON_ENTS="$2"; shift 2 ;;
@@ -46,6 +48,7 @@ done
 
 [ -d "$APP" ]   || { echo "找不到 App bundle：$APP"; exit 1; }
 [ -f "$BIN" ]   || { echo "找不到守护进程：$BIN"; exit 1; }
+[ -f "$SUPERVISOR" ] || { echo "找不到 supervisor：$SUPERVISOR"; exit 1; }
 [ -f "$PLIST" ] || { echo "找不到 plist：$PLIST"; exit 1; }
 [ -f "$ENTS" ]  || { echo "找不到 entitlements：$ENTS"; exit 1; }
 command -v dpkg-deb >/dev/null || { echo "缺少 dpkg-deb（brew install dpkg）"; exit 1; }
@@ -66,9 +69,11 @@ APP_BIN="$ROOT$PREFIX/Applications/Agent2API.app/Agent2API"
 echo "==> 组装守护进程"
 mkdir -p "$ROOT$PREFIX/usr/local/bin"
 cp "$BIN" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+cp "$SUPERVISOR" "$ROOT$PREFIX/usr/local/bin/agent2api-supervisor"
 cp "$REPO_ROOT/agent2api-ios/daemon/agent2api-launch.sh" \
    "$ROOT$PREFIX/usr/local/bin/agent2api-launch"
 chmod 755 "$ROOT$PREFIX/usr/local/bin/agent2api-server" \
+          "$ROOT$PREFIX/usr/local/bin/agent2api-supervisor" \
           "$ROOT$PREFIX/usr/local/bin/agent2api-launch"
 mkdir -p "$ROOT$PREFIX/Library/LaunchDaemons"
 if [ -n "$PREFIX" ]; then
@@ -114,6 +119,11 @@ if command -v ldid >/dev/null 2>&1; then
     ldid -S"$DAEMON_ENTS" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
   else
     ldid -S "$ROOT$PREFIX/usr/local/bin/agent2api-server"
+  fi
+  if [ -n "$DAEMON_ENTS" ] && [ -f "$DAEMON_ENTS" ]; then
+    ldid -S"$DAEMON_ENTS" "$ROOT$PREFIX/usr/local/bin/agent2api-supervisor"
+  else
+    ldid -S "$ROOT$PREFIX/usr/local/bin/agent2api-supervisor"
   fi
 else
   echo "WARN: 没有 ldid，跳过签名"
