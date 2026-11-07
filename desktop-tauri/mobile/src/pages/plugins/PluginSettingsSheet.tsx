@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle, Switch , Label } from '@ui'
 import { getPluginSettings, savePluginSettings, type PluginSettings } from '../../api/plugins'
 import { GithubAccessSettingsPanel } from '../../components/GithubAccessSettings'
+import { GithubTokenSettings } from '../../components/GithubTokenSettings'
 import { serverIdentity } from '../../lib/servers'
 import { store } from '../../state/store'
 import { t } from '../../i18n'
@@ -121,6 +122,7 @@ export function PluginSettingsSheet({ onClose, onChanged }: { onClose: () => voi
           <p className='m-ck-note'>{option.note}</p>
         </div>)}
         {error ? <p className='m-ck-error'>{error}</p> : null}
+        <GithubTokenSettings />
         <GithubAccessSettingsPanel />
       </SheetBody>
     </SheetContent>
