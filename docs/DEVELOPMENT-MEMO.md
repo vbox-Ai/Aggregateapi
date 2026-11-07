@@ -131,6 +131,17 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - Phase 3：路由、MCP/Skill、自定义提供商、日志高级能力、批量操作。
 - Phase 4：移除桌面面板按钮和 `/` 入口。
 
+### Phase 2.3：Provider 文档与插件日志（已完成）
+- 提交：待推送（phase23）
+- 现状确认：手机端已有 providerDocs（DocsPage 从 `/api/plugins` 读取）、登录方式说明
+  （add-account-dynamic-sheet）、支持模型/能力（ModelsPage）、运行日志（/api/logs）。
+- 新增：
+  - `LogsPage`：增加分类筛选（全部/插件/账号/模型/网关/请求），并从路由参数
+    `category` 初始化（`store.get().route.params.category`）。
+  - `PluginsPage`：增加「插件日志」按钮 → 跳转 logs 页并预筛 `category=plugin`；
+    增加「最近失败」折叠块，列出有 error/hostError 的插件操作（最多 6 条）。
+- 验证：typecheck / build 通过；`mobile.js` 1079.16 → 1080.42 kB。
+
 ## 4. 常用事实
 
 - 手机端 API client：`desktop-tauri/mobile/src/api/client.ts` 的 `apiCall`。

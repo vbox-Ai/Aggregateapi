@@ -100,6 +100,12 @@ export function PluginsPage() {
   const packs = payload?.packs || []
   const catalog = payload?.catalog?.plugins || []
   const uninstalled = catalog.filter(item => !packs.some(pack => pack.id === item.id))
+  // 最近一次带失败原因的插件操作（安装/更新/启停失败会记录在这里）
+  const failedOperations = (payload?.operations || []).filter(operation => {
+    if (operation.active) return false
+    const reason = pluginErrorMessage(operation.error || operation.hostError || '')
+    return Boolean(reason)
+  })
   return (
     <div className='m-page' ref={pull.bindRef}>
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
@@ -112,6 +118,7 @@ export function PluginsPage() {
           <div className='m-ck-actions'>
             <Button size='sm' variant='outline' disabled={Boolean(busy)} onClick={() => void refresh()}>{busy === 'catalog' ? t('读取中…') : t('刷新插件仓库')}</Button>
             <Button size='sm' variant='outline' disabled={Boolean(busy)} onClick={() => void check()}>{busy === 'check' ? t('检查中…') : t('检查更新')}</Button>
+            <Button size='sm' variant='ghost' onClick={() => store.push('logs', { category: 'plugin' })}>{t('插件日志')}</Button>
             <Button size='sm' variant='ghost' onClick={() => setSettings(true)}>{t('插件设置')}</Button>
           </div>
         </Card>
@@ -133,6 +140,16 @@ export function PluginsPage() {
         {!packs.length ? <Card className='m-card'><Empty text={payload ? t('这台网关还没有安装插件') : t('正在读取插件列表…')} /></Card> : null}
       </div>
       {payload?.catalog?.reason ? <div className='m-section'><p className='m-ck-note'>{pluginErrorMessage(payload.catalog.reason)}</p></div> : null}
+      {failedOperations.length ? <div className='m-section'><Collapsible className='m-card m-card-pad'>
+        <CollapsibleTrigger className='m-ck-title'>{t('最近失败')}</CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          {failedOperations.slice(0, 6).map(operation => (
+            <p key={operation.id} className='m-ck-note'>
+              <span className='m-mono'>{operation.id}</span>：
+              {pluginErrorMessage(operation.error || operation.hostError || '')}
+            </p>
+          ))}
+        </CollapsibleContent></Collapsible></div> : null}
       {payload ? <div className='m-section'><Collapsible className='m-card m-card-pad'>
         <CollapsibleTrigger className='m-ck-title'>{t('诊断信息')}</CollapsibleTrigger><CollapsibleContent keepMounted>
         <p className='m-ck-note'>{t('插件目录')}：<span className='m-mono'>{payload.pluginsDir}</span></p>

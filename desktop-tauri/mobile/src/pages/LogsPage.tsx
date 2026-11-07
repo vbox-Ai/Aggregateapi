@@ -15,6 +15,14 @@ import { dateRangeQuery, readCustomRange, saveCustomRange, type CustomDates, typ
 
 const LIMIT = 50
 const CUSTOM_RANGE_KEY = 'agent2api-mobile-logs-custom-range'
+const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: t('全部分类') },
+  { value: 'plugin', label: t('插件') },
+  { value: 'account', label: t('账号') },
+  { value: 'model', label: t('模型') },
+  { value: 'gateway', label: t('网关') },
+  { value: 'request', label: t('请求') },
+]
 const VIEWS = [
   { value: 'important' as LogView, label: t('重要事件') },
   { value: 'all' as LogView, label: t('全部事件') },
@@ -22,10 +30,12 @@ const VIEWS = [
 ]
 
 export function LogsPage() {
+  const routeCategory = store.get().route?.params?.category || ''
   const [view, setView] = useState<LogView>('important')
   const [range, setRange] = useState<DateRange>('all')
   const [dates, setDates] = useState<CustomDates>(() => readCustomRange(CUSTOM_RANGE_KEY))
   const [level, setLevel] = useState('')
+  const [category, setCategory] = useState(routeCategory)
   const [keyword, setKeyword] = useState('')
   const [search, setSearch] = useState('')
   const [aggregate, setAggregate] = useState(true)
@@ -39,8 +49,8 @@ export function LogsPage() {
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const snapshotRef = useRef<number | undefined>(undefined)
   const seqRef = useRef(0)
-  const stateRef = useRef({ view, level, search, aggregate, page, paused, detail, range, dates })
-  stateRef.current = { view, level, search, aggregate, page, paused, detail, range, dates }
+  const stateRef = useRef({ view, level, search, aggregate, page, paused, detail, range, dates, category })
+  stateRef.current = { view, level, search, aggregate, page, paused, detail, range, dates, category }
   const pollingRef = useRef(false)
 
   useEffect(() => {
@@ -64,6 +74,7 @@ export function LogsPage() {
       const locked = !latest && (state.page > 1 || state.paused || state.detail !== null || (bodyRef.current?.scrollTop || 0) > 20)
       const result = await fetchLogs({
         view: state.view, level: state.view === 'debug' ? undefined : state.level,
+        category: state.category || undefined,
         keyword: state.search, aggregate: state.aggregate, ...dateRangeQuery(state.range, state.dates),
         offset: (state.page - 1) * LIMIT, limit: LIMIT, untilId: locked ? snapshotRef.current : undefined,
       })
@@ -106,6 +117,7 @@ export function LogsPage() {
         if (locked && snapshotRef.current !== undefined) {
           const sinceId = snapshotRef.current
           const result = await fetchLogs({ view: state.view, level: state.view === 'debug' ? undefined : state.level,
+            category: state.category || undefined,
             keyword: state.search, ...dateRangeQuery(state.range, state.dates), sinceId, limit: 1 })
           if (sinceId !== snapshotRef.current || state.view !== stateRef.current.view || state.search !== stateRef.current.search || state.level !== stateRef.current.level || state.aggregate !== stateRef.current.aggregate || state.range !== stateRef.current.range || state.dates !== stateRef.current.dates) return
           if (result.lastId !== undefined && result.lastId < sinceId) await load(true)
@@ -157,10 +169,16 @@ export function LogsPage() {
         </div>
         <DateRangeFilter range={range} dates={dates} onRangeChange={setRange} label={t('事件日志时间范围')}
           onDatesChange={next => { setDates(next); saveCustomRange(CUSTOM_RANGE_KEY, next) }} />
-        {view !== 'debug' ? <div className='m-chips' style={{ padding: '0 16px 10px' }}>
-          {[{ value: '', label: t('全部级别') }, { value: 'warn', label: t('warn 及以上') }, { value: 'error', label: t('仅 error') }].map(option =>
-            <UiToggle size='default' variant='outline' key={option.value} type='button' className='m-chip rounded-pill' pressed={level === option.value} onClick={() => setLevel(option.value)}>{option.label}</UiToggle>)}
-        </div> : null}
+        {view !== 'debug' ? <>
+          <div className='m-chips' style={{ padding: '0 16px 10px' }}>
+            {CATEGORY_OPTIONS.map(option =>
+              <UiToggle size='default' variant='outline' key={option.value} type='button' className='m-chip rounded-pill' pressed={category === option.value} onClick={() => setCategory(option.value)}>{option.label}</UiToggle>)}
+          </div>
+          <div className='m-chips' style={{ padding: '0 16px 10px' }}>
+            {[{ value: '', label: t('全部级别') }, { value: 'warn', label: t('warn 及以上') }, { value: 'error', label: t('仅 error') }].map(option =>
+              <UiToggle size='default' variant='outline' key={option.value} type='button' className='m-chip rounded-pill' pressed={level === option.value} onClick={() => setLevel(option.value)}>{option.label}</UiToggle>)}
+          </div>
+        </> : null}
       </div>
       <div className='m-body' ref={bodyRef}>
         {error ? <ErrorNote text={error} /> : null}
