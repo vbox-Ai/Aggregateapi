@@ -16,7 +16,7 @@
 
 但它仍然**不能直接替代桌面面板**，主要差距是：
 
-1. 手机 UI 源码不在 `vbox-Ai/Aggregateapi`，但上游 `aimod-cc/Agent2API` 的 `desktop-tauri/mobile/src` 有完整源码；
+1. 手机 UI 源码已从上游 `aimod-cc/Agent2API` 同步到 `vbox-Ai/Aggregateapi`（commit `cedab6c`）；
 2. Key 页可复制/启停/删除，但缺少新建和范围编辑；
 3. 账号只能动态登录，不能手工编辑/导入凭证；
 4. 插件页有 GitHub 访问方式/镜像/更新策略，但没有 GitHub Token 字段；
@@ -219,9 +219,9 @@ config.websiteDataStore = .nonPersistent()
 
 ## 4. 第三轮补充审计：新增遗漏
 
-### 4.1 手机 UI 源码：本 fork 没有，上游有
+### 4.1 手机 UI 源码：已同步到本仓库
 
-`vbox-Ai/Aggregateapi` 当前只有：
+原来 `vbox-Ai/Aggregateapi` 只有：
 
 ```text
 ui/m/mobile.js
@@ -231,32 +231,38 @@ ui/m.html
 
 `mobile.js` 是压缩后的 React bundle，不是源码。
 
-但完整手机源码在上游：
+现在已从上游 `aimod-cc/Agent2API` 的 `v3.4.2` 拉取并推送：
 
 ```text
-aimod-cc/Agent2API
-  └─ desktop-tauri/mobile/src/
-       ├─ App.tsx
-       ├─ pages/
-       ├─ components/
-       ├─ api/
-       ├─ lib/
-       ├─ state/
-       └─ styles/
+commit: cedab6c78233010161ed1d19bfe28779e3fc2870
 ```
 
-`agent2api-universal/docs/MOBILE-CALLSITES.md` 也明确写了文件路径来自：
+仓库中已有：
+
+```text
+desktop-tauri/mobile/        React + Vite + Capacitor 手机工程
+desktop-tauri/ui-kit/        @ui 组件源码
+desktop-tauri/ui-shared/     共享业务组件
+desktop-tauri/ui-islands/    共享 islands（含 add-account-dynamic-fields）
+desktop-tauri/ui/aliyun-captcha.js
+```
+
+`agent2api-universal/docs/MOBILE-CALLSITES.md` 里也明确写了源路径来自：
 
 ```text
 desktop-tauri/mobile/src/
 ```
 
-所以正确做法是：
+当前开发入口：
 
-- 把上游 `desktop-tauri/mobile/` 同步/引入本 fork；
-- 用上游 React + Vite 源码构建 `ui/m`；
-- 不直接改压缩 bundle；
-- CI 从源码构建并校验产物。
+```bash
+cd desktop-tauri/mobile
+pnpm install
+pnpm run typecheck
+pnpm run build
+```
+
+构建产物落到 `desktop-tauri/ui/m`，再同步到发布包。
 
 附件 `agent2api-providers-3.4.2-...zip` 不是手机 UI 源码，而是 provider 插件包（含 `pack.json`、`bin/agent2api-providers.exe`、`ui/checkin`），不能替代 mobile 源码。
 
@@ -471,6 +477,9 @@ SHA256 67663cf046b8800eddffd18f8a0ed938a9846ef89adca75cd993feb1f057662da
 ## 6. 分阶段开发方案
 
 ### Phase 0：源码与工程基础（5～7 天）
+
+**状态：源码拉取、推送、typecheck/build 已完成（2026-11-07）。**  
+剩余：CI 接入、锁文件、静态资源整理。
 
 **目标：能可持续开发手机 UI。**
 
