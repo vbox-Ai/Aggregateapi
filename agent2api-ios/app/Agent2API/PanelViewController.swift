@@ -167,8 +167,11 @@ final class PanelViewController: UIViewController {
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        // 备份下载（.a2ab）需要 WKDownloadDelegate：网页里的 <a download> 才会落盘
-        webView.downloadDelegate = self
+        // 备份下载（.a2ab）需要 WKDownloadDelegate（iOS 15.4+）：网页里的 <a download>
+        // 才会落盘。部署目标 15.0，用 availability 守卫。
+        if #available(iOS 15.4, *) {
+            webView.downloadDelegate = self
+        }
         webView.allowsBackForwardNavigationGestures = true
         // 面板是移动端布局，禁掉「双击缩放」造成的输入框抖动
         webView.scrollView.contentInsetAdjustmentBehavior = .never
@@ -704,8 +707,9 @@ extension PanelViewController: WKScriptMessageHandler {
     }
 }
 
-// MARK: - WKDownloadDelegate（备份下载落盘）
+// MARK: - WKDownloadDelegate（备份下载落盘，iOS 15.4+）
 
+@available(iOS 15.4, *)
 extension PanelViewController: WKDownloadDelegate {
 
     /// 备份下载（`.a2ab`）从网关流式返回。WKWebView 不会自动保存，
