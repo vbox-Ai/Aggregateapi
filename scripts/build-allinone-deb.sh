@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# ── 一次装完的 .deb：App（桌面） + 网关守护进程 + LaunchDaemon + 面板资源 ──
+# 鈹€鈹€ 涓€娆¤瀹岀殑 .deb锛欰pp锛堟闈級 + 缃戝叧瀹堟姢杩涚▼ + LaunchDaemon + 闈㈡澘璧勬簮 鈹€鈹€
 #
-# 支持两种越狱布局（用 --prefix 选择）：
-#   rootless（Dopamine / palera1n rootless）: --prefix /var/jb
-#   rootful （Relaxin / unc0ver / checkra1n）: --prefix ""（装到根 /）
-#
-# 架构（--arch）：
-#   iphoneos-arm64（默认）/ iphoneos-arm64e / both
-#   arm64e 机器的 dpkg 认 iphoneos-arm64e；同一份 Mach-O（arm64 ABI）在
-#   arm64e 设备上原生可跑，所以这里只换 control 的 Architecture 字段，
-#   一次编译直接出两种包，不用事后手工转换。
-set -euo pipefail
+# 鏀寔涓ょ瓒婄嫳甯冨眬锛堢敤 --prefix 閫夋嫨锛夛細
+#   rootless锛圖opamine / palera1n rootless锛? --prefix /var/jb
+#   rootful 锛圧elaxin / unc0ver / checkra1n锛? --prefix ""锛堣鍒版牴 /锛?#
+# 鏋舵瀯锛?-arch锛夛細
+#   iphoneos-arm64锛堥粯璁わ級/ iphoneos-arm64e / both
+#   arm64e 鏈哄櫒鐨?dpkg 璁?iphoneos-arm64e锛涘悓涓€浠?Mach-O锛坅rm64 ABI锛夊湪
+#   arm64e 璁惧涓婂師鐢熷彲璺戯紝鎵€浠ヨ繖閲屽彧鎹?control 鐨?Architecture 瀛楁锛?#   涓€娆＄紪璇戠洿鎺ュ嚭涓ょ鍖咃紝涓嶇敤浜嬪悗鎵嬪伐杞崲銆?set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -42,31 +39,31 @@ while [ $# -gt 0 ]; do
     --arch)         ARCH="$2"; shift 2 ;;
     --version)      VERSION="$2"; shift 2 ;;
     --out)          OUT="$2"; shift 2 ;;
-    *) echo "未知参数：$1"; exit 2 ;;
+    *) echo "鏈煡鍙傛暟锛?1"; exit 2 ;;
   esac
 done
 
-[ -d "$APP" ]   || { echo "找不到 App bundle：$APP"; exit 1; }
-[ -f "$BIN" ]   || { echo "找不到守护进程：$BIN"; exit 1; }
-[ -f "$SUPERVISOR" ] || { echo "找不到 supervisor：$SUPERVISOR"; exit 1; }
-[ -f "$PLIST" ] || { echo "找不到 plist：$PLIST"; exit 1; }
-[ -f "$ENTS" ]  || { echo "找不到 entitlements：$ENTS"; exit 1; }
-command -v dpkg-deb >/dev/null || { echo "缺少 dpkg-deb（brew install dpkg）"; exit 1; }
+[ -d "$APP" ]   || { echo "鎵句笉鍒?App bundle锛?APP"; exit 1; }
+[ -f "$BIN" ]   || { echo "鎵句笉鍒板畧鎶よ繘绋嬶細$BIN"; exit 1; }
+[ -f "$SUPERVISOR" ] || { echo "鎵句笉鍒?supervisor锛?SUPERVISOR"; exit 1; }
+[ -f "$PLIST" ] || { echo "鎵句笉鍒?plist锛?PLIST"; exit 1; }
+[ -f "$ENTS" ]  || { echo "鎵句笉鍒?entitlements锛?ENTS"; exit 1; }
+command -v dpkg-deb >/dev/null || { echo "缂哄皯 dpkg-deb锛坆rew install dpkg锛?; exit 1; }
 
 PREFIX="${PREFIX%/}"
 case "$PREFIX" in "/"|".") PREFIX="" ;; esac
-if [ -n "$PREFIX" ]; then echo "==> 目标布局：rootless（${PREFIX}）"; else echo "==> 目标布局：rootful（/）"; fi
+if [ -n "$PREFIX" ]; then echo "==> 鐩爣甯冨眬锛歳ootless锛?{PREFIX}锛?; else echo "==> 鐩爣甯冨眬锛歳ootful锛?锛?; fi
 
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
-echo "==> 组装 App"
+echo "==> 缁勮 App"
 mkdir -p "$ROOT$PREFIX/Applications"
-cp -R "$APP" "$ROOT$PREFIX/Applications/Agent2API.app" || { echo "❌ 拷贝 App 失败"; exit 1; }
+cp -R "$APP" "$ROOT$PREFIX/Applications/Agent2API.app" || { echo "鉂?鎷疯礉 App 澶辫触"; exit 1; }
 APP_BIN="$ROOT$PREFIX/Applications/Agent2API.app/Agent2API"
-[ -f "$APP_BIN" ] || { echo "App 主二进制缺失：$APP_BIN"; exit 1; }
+[ -f "$APP_BIN" ] || { echo "App 涓讳簩杩涘埗缂哄け锛?APP_BIN"; exit 1; }
 
-echo "==> 组装守护进程"
+echo "==> 缁勮瀹堟姢杩涚▼"
 mkdir -p "$ROOT$PREFIX/usr/local/bin"
 cp "$BIN" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
 cp "$SUPERVISOR" "$ROOT$PREFIX/usr/local/bin/agent2api-supervisor"
@@ -79,43 +76,38 @@ mkdir -p "$ROOT$PREFIX/Library/LaunchDaemons"
 if [ -n "$PREFIX" ]; then
   cp "$PLIST" "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
 else
-  # rootful：plist 里的 ProgramArguments / 数据目录都写着 /var/jb/...，
-  # 直接照抄会让 launchd 去 exec 一个不存在的路径（装完 daemon 起不来）。
-  sed 's#/var/jb##g' "$PLIST" > "$ROOT/Library/LaunchDaemons/${PKG}.plist"
+  # rootful锛歱list 閲岀殑 ProgramArguments / 鏁版嵁鐩綍閮藉啓鐫€ /var/jb/...锛?  # 鐩存帴鐓ф妱浼氳 launchd 鍘?exec 涓€涓笉瀛樺湪鐨勮矾寰勶紙瑁呭畬 daemon 璧蜂笉鏉ワ級銆?  sed 's#/var/jb##g' "$PLIST" > "$ROOT/Library/LaunchDaemons/${PKG}.plist"
 fi
 chmod 644 "$ROOT$PREFIX/Library/LaunchDaemons/${PKG}.plist"
 
 if [ -n "$UI_SRC" ] && [ -d "$UI_SRC" ]; then
-  echo "==> 安装面板资源"
+  echo "==> 瀹夎闈㈡澘璧勬簮"
   mkdir -p "$ROOT$PREFIX/usr/local/share/agent2api/ui"
   cp -R "$UI_SRC"/. "$ROOT$PREFIX/usr/local/share/agent2api/ui"/
   mkdir -p "$ROOT$PREFIX/usr/local/bin/ui"
   cp -R "$UI_SRC"/. "$ROOT$PREFIX/usr/local/bin/ui"/
-  echo "    面板文件数：$(find "$ROOT$PREFIX/usr/local/share/agent2api/ui" -type f | wc -l | tr -d ' ')"
+  echo "    闈㈡澘鏂囦欢鏁帮細$(find "$ROOT$PREFIX/usr/local/share/agent2api/ui" -type f | wc -l | tr -d ' ')"
 else
-  echo "WARN: 没有提供 --ui，/m 会 404"
+  echo "WARN: 娌℃湁鎻愪緵 --ui锛?m 浼?404"
 fi
 
-# ── 预置插件包 ──────────────────────────────────────────────────────────
-# 面板里的"网关插件"是走 GitHub 下载 + ed25519 验签的；自建包没有官方签名，
-# 在国内网络下又只能走加速镜像（镜像通道强制验签），所以点下载必然爆红。
-# 把已编译好的插件目录直接装进 deb，postinst 落到网关的 plugins/ 目录并写
-# 注册表 —— 装上就有，不依赖网络，也不碰签名那条路径。
-if [ -n "$PACKS" ] && [ -d "$PACKS" ]; then
-  echo "==> 预置插件包"
+# 鈹€鈹€ 棰勭疆鎻掍欢鍖?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# 闈㈡澘閲岀殑"缃戝叧鎻掍欢"鏄蛋 GitHub 涓嬭浇 + ed25519 楠岀鐨勶紱鑷缓鍖呮病鏈夊畼鏂圭鍚嶏紝
+# 鍦ㄥ浗鍐呯綉缁滀笅鍙堝彧鑳借蛋鍔犻€熼暅鍍忥紙闀滃儚閫氶亾寮哄埗楠岀锛夛紝鎵€浠ョ偣涓嬭浇蹇呯劧鐖嗙孩銆?# 鎶婂凡缂栬瘧濂界殑鎻掍欢鐩綍鐩存帴瑁呰繘 deb锛宲ostinst 钀藉埌缃戝叧鐨?plugins/ 鐩綍骞跺啓
+# 娉ㄥ唽琛?鈥斺€?瑁呬笂灏辨湁锛屼笉渚濊禆缃戠粶锛屼篃涓嶇绛惧悕閭ｆ潯璺緞銆?if [ -n "$PACKS" ] && [ -d "$PACKS" ]; then
+  echo "==> 棰勭疆鎻掍欢鍖?
   mkdir -p "$ROOT$PREFIX/usr/local/share/agent2api/packs"
   cp -R "$PACKS"/. "$ROOT$PREFIX/usr/local/share/agent2api/packs"/
-  echo "    插件包数：$(find "$ROOT$PREFIX/usr/local/share/agent2api/packs" -name pack.json -maxdepth 3 | wc -l | tr -d ' ')"
+  echo "    鎻掍欢鍖呮暟锛?(find "$ROOT$PREFIX/usr/local/share/agent2api/packs" -name pack.json -maxdepth 3 | wc -l | tr -d ' ')"
 else
-  if [ -n "$PACKS" ]; then echo "WARN: --packs 目录不存在：$PACKS"; fi
+  if [ -n "$PACKS" ]; then echo "WARN: --packs 鐩綍涓嶅瓨鍦細$PACKS"; fi
 fi
 
-echo "==> 签名"
+echo "==> 绛惧悕"
 if command -v ldid >/dev/null 2>&1; then
   ldid -S"$ENTS" "$APP_BIN"
-  # 守护进程同样带上 platform-application：RootHide / 部分越狱要求
-  # 二进制有平台级签名，launchd 才肯 exec 它（否则进程起不来、health 永远失败）。
-  if [ -n "$DAEMON_ENTS" ] && [ -f "$DAEMON_ENTS" ]; then
+  # 瀹堟姢杩涚▼鍚屾牱甯︿笂 platform-application锛歊ootHide / 閮ㄥ垎瓒婄嫳瑕佹眰
+  # 浜岃繘鍒舵湁骞冲彴绾х鍚嶏紝launchd 鎵嶈偗 exec 瀹冿紙鍚﹀垯杩涚▼璧蜂笉鏉ャ€乭ealth 姘歌繙澶辫触锛夈€?  if [ -n "$DAEMON_ENTS" ] && [ -f "$DAEMON_ENTS" ]; then
     ldid -S"$DAEMON_ENTS" "$ROOT$PREFIX/usr/local/bin/agent2api-server"
   else
     ldid -S "$ROOT$PREFIX/usr/local/bin/agent2api-server"
@@ -126,14 +118,13 @@ if command -v ldid >/dev/null 2>&1; then
     ldid -S "$ROOT$PREFIX/usr/local/bin/agent2api-supervisor"
   fi
 else
-  echo "WARN: 没有 ldid，跳过签名"
+  echo "WARN: 娌℃湁 ldid锛岃烦杩囩鍚?
 fi
 
 mkdir -p "$ROOT/DEBIAN"
 SIZE=$(( $(du -sk "$ROOT" | cut -f1) ))
 
-# control 里唯一的架构差异就是 Architecture，逐架构重写一次
-write_control() {
+# control 閲屽敮涓€鐨勬灦鏋勫樊寮傚氨鏄?Architecture锛岄€愭灦鏋勯噸鍐欎竴娆?write_control() {
   cat > "$ROOT/DEBIAN/control" <<EOF
 Package: ${PKG}
 Name: Agent2API
@@ -151,7 +142,8 @@ EOF
 cp "$REPO_ROOT/agent2api-ios/daemon/preinst.sh"  "$ROOT/DEBIAN/preinst"
 cp "$REPO_ROOT/agent2api-ios/daemon/postinst.sh" "$ROOT/DEBIAN/postinst"
 cp "$REPO_ROOT/agent2api-ios/daemon/prerm.sh"    "$ROOT/DEBIAN/prerm"
-chmod 755 "$ROOT/DEBIAN/preinst" "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm"
+cp "$REPO_ROOT/agent2api-ios/daemon/postrm.sh"   "$ROOT/DEBIAN/postrm"
+chmod 755 "$ROOT/DEBIAN/preinst" "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/prerm" "$ROOT/DEBIAN/postrm"
 
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
@@ -168,5 +160,5 @@ for A in $ARCH_LIST; do
   DEB="$OUT/Agent2API-${VERSION}-${SUFFIX}-${A}.deb"
   rm -f "$DEB"
   dpkg-deb -b --root-owner-group "$ROOT" "$DEB" >/dev/null
-  echo "==> 产出：$DEB ($(du -h "$DEB" | cut -f1))"
+  echo "==> 浜у嚭锛?DEB ($(du -h "$DEB" | cut -f1))"
 done
