@@ -6,6 +6,7 @@ import { HiddenAccountsNotice } from '../components/HiddenAccountsNotice'
 import { Icon } from '../components/Icon'
 import { AccountSheet } from './AccountSheet'
 import { DynamicProviderSheet } from './add-account-dynamic-sheet'
+import { AccountImportSheet } from './account-import-sheet'
 import {
   AccountsFilterSheet,
   DEFAULT_FILTERS,
@@ -55,6 +56,7 @@ export function AccountsPage() {
   const [query, setQuery] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [usage, setUsage] = useState<UsageSnapshot | null>(null)
@@ -256,6 +258,7 @@ export function AccountsPage() {
         actions={
           <>
             <Button variant='outline' size='sm' onClick={() => setAdding(true)}>{t('添加账号')}</Button>
+            <Button variant='outline' size='sm' onClick={() => setImporting(true)}>{t('导入凭证')}</Button>
             <Button size='icon-touch' variant='outline'
               type='button'
               className='m-icon-btn'
@@ -385,6 +388,14 @@ export function AccountsPage() {
         setAdding(false)
         void load()
       }} /> : null}
+      {importing ? <AccountImportSheet
+        providers={state.session?.accounts?.providers || []}
+        onClose={() => setImporting(false)}
+        onImported={() => {
+          setImporting(false)
+          void load()
+        }}
+      /> : null}
       <AccountSheet
         account={openAccount}
         onClose={() => setOpenId(null)}

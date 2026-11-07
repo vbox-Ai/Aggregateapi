@@ -105,6 +105,33 @@ export function setAccountEnabled(id: string, enabled: boolean): Promise<unknown
   return apiCall(`/api/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: { enabled } })
 }
 
+/**
+ * 粘贴 / 导入凭证（authFileContent 通道）。
+ *
+ * 桌面端「导入凭证文件」走的就是同一个 POST /api/accounts：
+ * body { provider, authFileContent, authFileName, name }。
+ * 不要求提供商声明动态登录方式，适合 501 / 未声明 provider。
+ */
+export type AccountFileImportPayload = {
+  provider?: string
+  authFileContent: string
+  authFileName?: string
+  name?: string
+}
+
+export async function addAccountByFile(payload: AccountFileImportPayload): Promise<{
+  account?: { id?: string; provider?: string }
+  warning?: string
+}> {
+  return apiCall('/api/accounts', {
+    method: 'POST',
+    body: {
+      ...payload,
+      authFileName: payload.authFileName || '粘贴导入.json',
+    },
+  })
+}
+
 export function deleteAccount(id: string): Promise<unknown> {
   return apiCall(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
