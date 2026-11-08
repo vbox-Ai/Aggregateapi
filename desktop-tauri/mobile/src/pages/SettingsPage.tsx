@@ -18,6 +18,31 @@ import { ConnectionSecuritySheet } from './connection-security-sheet'
 import { DataStorageSheet } from './data-storage-sheet'
 import { ModelMetadataSheet } from './model-metadata-sheet'
 import { PluginSettingsSheet } from './plugin-settings-sheet'
+import { UpdateProxySheet } from './update-proxy-sheet'
+import { openExternal } from '../lib/community'
+
+/**
+ * 桌面端「反馈与需求」分类的三个入口，指向仓库里预设好模板的 GitHub issue 表单。
+ * 桌面端用壳命令 `open_release_page` 交给系统浏览器；手机端走 `openExternal`
+ * （APK 内同窗跳转、PWA 新标签页，见 lib/community.ts 的说明）。
+ */
+const FEEDBACK_LINKS = [
+  {
+    title: t('问题反馈'),
+    desc: t('遇到 Bug、报错或异常行为'),
+    url: 'https://github.com/aimod-cc/Agent2API/issues/new?template=bug_report.yml',
+  },
+  {
+    title: t('功能建议'),
+    desc: t('想要的新功能或改进想法'),
+    url: 'https://github.com/aimod-cc/Agent2API/issues/new?template=feature_request.yml',
+  },
+  {
+    title: t('请求提供商 / 模型支持'),
+    desc: t('希望接入新的提供商或模型'),
+    url: 'https://github.com/aimod-cc/Agent2API/issues/new?template=provider_request.yml',
+  },
+] as const
 import { supervisorStart, supervisorStatus as fetchSupervisorStatus, supervisorStop, type SupervisorStatus } from '../api/supervisor'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -52,6 +77,7 @@ export function SettingsPage() {
   const [dataStorageOpen, setDataStorageOpen] = useState(false)
   const [modelMetadataOpen, setModelMetadataOpen] = useState(false)
   const [pluginSettingsOpen, setPluginSettingsOpen] = useState(false)
+  const [updateProxyOpen, setUpdateProxyOpen] = useState(false)
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
   const [supervisorBusy, setSupervisorBusy] = useState('')
   const currentLocale = locale()
@@ -589,6 +615,50 @@ export function SettingsPage() {
       */}
       {packaged ? <AppUpdatePanel /> : null}
 
+      {/* 出网线路：桌面端在「更新设置」对话框里，手机端单独一行 */}
+      <div className='m-section'>
+        <Card className='m-card'>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setUpdateProxyOpen(true)}>
+            <span className='m-logo'><Icon name='globe' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('更新出网代理')}</div>
+              <div className='m-t2'>{t('检查更新与下载更新包走这个代理')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
+        </Card>
+      </div>
+
+      <div className='m-section'>
+        <SectionHead title={t('反馈与需求')} />
+        <Card className='m-card'>
+          {FEEDBACK_LINKS.map(link => (
+            <Button
+              key={link.url}
+              size='default'
+              variant='ghost'
+              type='button'
+              className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left'
+              onClick={() => openExternal(link.url)}
+            >
+              <span className='m-logo'>
+                <Icon name='link' />
+              </span>
+              <div className='m-grow'>
+                <div className='m-t1'>{link.title}</div>
+                <div className='m-t2'>{link.desc}</div>
+              </div>
+              <span className='m-chev'>
+                <Icon name='chev' />
+              </span>
+            </Button>
+          ))}
+        </Card>
+        <Card className='m-card m-card-pad' style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 10 }}>
+          {t('会在系统浏览器里打开 GitHub 的表单（模板已预设好，需要 GitHub 账号）。')}
+        </Card>
+      </div>
+
       <div className='m-section' style={{ paddingBottom: 8 }}>
         <Card className='m-card'>
           {/* 「Agent2API 手机端」这一行点开是版本信息抽屉：本机版本 + 所连网关
@@ -645,6 +715,7 @@ export function SettingsPage() {
       {dataStorageOpen ? <DataStorageSheet onClose={() => setDataStorageOpen(false)} /> : null}
       {modelMetadataOpen ? <ModelMetadataSheet onClose={() => setModelMetadataOpen(false)} /> : null}
       {pluginSettingsOpen ? <PluginSettingsSheet onClose={() => setPluginSettingsOpen(false)} /> : null}
+      {updateProxyOpen ? <UpdateProxySheet onClose={() => setUpdateProxyOpen(false)} /> : null}
     </div>
   )
 }

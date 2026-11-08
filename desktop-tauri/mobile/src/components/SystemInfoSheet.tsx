@@ -4,6 +4,7 @@ import { apiCall } from '../api/client'
 import { APP_VERSION } from '../lib/appUpdate'
 import { isPackaged, nativePlatform } from '../lib/servers'
 import { Badge, copyWithToast } from './ui'
+import { formatStamp } from '../lib/format'
 import { Icon } from './Icon'
 import { t } from '../i18n'
 
@@ -34,36 +35,78 @@ type GatewayInfo = {
     channel?: string | null
     schemaVersion?: number | null
     dbSchemaVersion?: number | null
+    license?: string | null
+    sourceUrl?: string | null
+    licenseUrl?: string | null
+    copyright?: string | null
   }
   runtime?: {
     deployment?: string | null
+    container?: boolean | null
     os?: string | null
     osVersion?: string | null
     arch?: string | null
     webviewVersion?: string | null
+    startedAt?: number | null
     uptimeSeconds?: number | null
+    pid?: number | null
     debugBuild?: boolean | null
+    verbose?: boolean | null
   }
   deployment?: {
     host?: string | null
     port?: number | null
     panelPort?: number | null
+    uiHosted?: boolean | null
+    localPanel?: boolean | null
     configDir?: string | null
     dbFile?: string | null
     dbBytes?: number | null
+    dbAvailable?: boolean | null
     logFile?: string | null
     exePath?: string | null
+    installerKind?: string | null
+    selfUpdate?: boolean | null
+    updateCapability?: {
+      mode?: string | null
+      packageKind?: string | null
+      installSupported?: boolean | null
+      reason?: string | null
+    } | null
   }
   security?: {
     adminRegistered?: boolean | null
+    panelAuth?: boolean | null
     apiKeyCount?: number | null
+    allowNoKey?: boolean | null
     v1FailClosed?: boolean | null
+    panelGate?: boolean | null
+    githubTokenFilled?: boolean | null
+    githubTokenOrigin?: string | null
+    updateProxy?: boolean | null
+  }
+  /** 各功能开关的当前读数（用来确认「我到底改了没有」） */
+  features?: {
+    debugMode?: boolean | null
+    sanitizeFingerprints?: boolean | null
+    cors?: boolean | null
+    developerRoleCompat?: boolean | null
+    keepaliveStrip?: boolean | null
+    autoContinue?: boolean | null
+    autoContinueMaxRounds?: number | null
+    modelsDev?: boolean | null
+    captchaEnabled?: boolean | null
+    updateBeta?: boolean | null
   }
   stats?: {
     accounts?: number | null
     enabledAccounts?: number | null
+    limitedAccounts?: number | null
     models?: number | null
     inFlight?: number | null
+    requests?: number | null
+    logs?: number | null
+    upgradePending?: boolean | null
   }
 }
 
@@ -86,6 +129,17 @@ function text(value: unknown): string {
   if (value === null || value === undefined) return '—'
   const result = String(value).trim()
   return result || '—'
+}
+
+/**
+ * 布尔读数 → 「开 / 关」。
+ *
+ * 后端这几项都是「默认开、只有字面 false 才算关」的口径，所以判断用 `!== false`，
+ * 不能用 `=== true`（否则取不到值时会把「默认开」显示成「关」）。
+ */
+function flag(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  return value === false ? t('关') : t('开')
 }
 
 /**
@@ -185,6 +239,7 @@ export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () 
   const deployment = info?.deployment || {}
   const security = info?.security || {}
   const stats = info?.stats || {}
+  const features = info?.features || {}
   const deploymentLabel = DEPLOYMENT_LABEL[String(runtime.deployment)] || text(runtime.deployment)
   const osFull = formatOs(runtime.os, runtime.osVersion)
   // 原生壳里「本机版本」是包版本；PWA / 浏览器里是构建期注入的界面版本
@@ -266,6 +321,116 @@ export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () 
               <Row label={t('网关 Key 数量')} value={text(security.apiKeyCount)} mono />
             </Card>
           )}
+
+          {/* 开关读数：改完设置回来对一眼，确认真的落了盘 */}
+          {info?.features ? (
+            <>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--m-text-3)', padding: '14px 2px 6px' }}>
+                {t('开关读数')}
+              </div>
+              <Card className='m-card'>
+                <Row label={t('调试模式')} value={flag(features.debugMode)} />
+                <Row label={t('指纹脱敏')} value={flag(features.sanitizeFingerprints)} />
+                <Row label={t('跨来源访问（CORS）')} value={flag(features.cors)} />
+                <Row label={t('开发者角色兼容')} value={flag(features.developerRoleCompat)} />
+                <Row label={t('保活换行丢弃')} value={flag(features.keepaliveStrip)} />
+                <Row
+                  label={t('自动续写')}
+                  value={features.autoContinue ? t('开（最多 {rounds} 轮）', { rounds: features.autoContinueMaxRounds ?? 0 }) : t('关')}
+                />
+                <Row label={t('models.dev 元数据')} value={flag(features.modelsDev)} />
+                <Row label={t('面板登录人机验证')} value={flag(features.captchaEnabled)} />
+                <Row label={t('关注 beta 版')} value={flag(features.updateBeta)} />
+              </Card>
+            </>
+          ) : null}
+
+          {/* 安全读数 */}
+          {info?.security || info?.stats ? (
+            <>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--m-text-3)', padding: '14px 2px 6px' }}>
+                {t('安全与计数')}
+              </div>
+              <Card className='m-card'>
+                <Row label={t('管理员已注册')} value={flag(security.adminRegistered)} />
+                <Row label={t('面板登录（会校验会话）')} value={flag(security.panelAuth)} />
+                <Row label={t('未注册闸门')} value={flag(security.panelGate)} />
+                <Row label={t('拒绝无 Key 请求')} value={flag(security.v1FailClosed)} />
+                <Row label={t('允许无 Key 裸跑')} value={flag(security.allowNoKey)} />
+                <Row
+                  label={t('GitHub 令牌')}
+                  value={
+                    security.githubTokenOrigin === 'env'
+                      ? t('来自环境变量')
+                      : security.githubTokenFilled
+                        ? t('已保存')
+                        : t('未设置')
+                  }
+                />
+                <Row label={t('更新出网代理')} value={flag(security.updateProxy)} />
+                <Row
+                  label={t('账号 / 限流中')}
+                  value={`${text(stats.enabledAccounts)} / ${text(stats.limitedAccounts)}`}
+                  mono
+                />
+                <Row label={t('在途请求 / 累计请求')} value={`${text(stats.inFlight)} / ${text(stats.requests)}`} mono />
+                <Row label={t('事件日志')} value={text(stats.logs)} mono />
+                <Row label={t('待迁移旧数据')} value={stats.upgradePending ? t('有') : t('无')} />
+              </Card>
+            </>
+          ) : null}
+
+          {/* 许可与源码 */}
+          {app.license || app.sourceUrl ? (
+            <>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--m-text-3)', padding: '14px 2px 6px' }}>
+                {t('许可与源码')}
+              </div>
+              <Card className='m-card'>
+                {app.license ? <Row label={t('开源许可')} value={text(app.license)} mono /> : null}
+                {app.copyright ? <Row label={t('版权声明')} value={text(app.copyright)} /> : null}
+                {app.sourceUrl ? <Row label={t('源代码')} value={text(app.sourceUrl)} mono /> : null}
+                {typeof app.schemaVersion === 'number' ? (
+                  <Row
+                    label={t('数据库 schema')}
+                    value={`${app.schemaVersion}${typeof app.dbSchemaVersion === 'number' ? ` / ${app.dbSchemaVersion}` : ''}`}
+                    mono
+                  />
+                ) : null}
+              </Card>
+            </>
+          ) : null}
+
+          {/* 运行细节 */}
+          {info?.runtime ? (
+            <>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--m-text-3)', padding: '14px 2px 6px' }}>
+                {t('运行细节')}
+              </div>
+              <Card className='m-card'>
+                <Row label={t('进程 PID')} value={runtime.pid ? String(runtime.pid) : '—'} mono />
+                <Row label={t('启动时间')} value={runtime.startedAt ? formatStamp(runtime.startedAt) : '—'} mono />
+                <Row label={t('WebView / 内核')} value={text(runtime.webviewVersion)} mono />
+                <Row label={t('容器内运行')} value={runtime.container ? t('是') : t('否')} />
+                <Row label={t('开发构建')} value={runtime.debugBuild ? t('是') : t('否')} />
+                <Row label={t('详细日志')} value={runtime.verbose ? t('开') : t('关')} />
+              </Card>
+            </>
+          ) : null}
+
+          {/* 可更新能力：决定「能不能在应用内更新」 */}
+          {deployment.updateCapability ? (
+            <Card className='m-card m-card-pad' style={{ marginTop: 10, fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7 }}>
+              {t('更新方式：{mode} · 安装包形态：{kind} · 支持应用内安装：{ok}', {
+                mode: text(deployment.updateCapability.mode),
+                kind: text(deployment.updateCapability.packageKind),
+                ok: deployment.updateCapability.installSupported ? t('是') : t('否'),
+              })}
+              {deployment.updateCapability.reason
+                ? t('（原因：{reason}）', { reason: text(deployment.updateCapability.reason) })
+                : ''}
+            </Card>
+          ) : null}
 
           {/* 路径：只在拿得到时显示（读不到就不占版面） */}
           {deployment.configDir || deployment.logFile ? (

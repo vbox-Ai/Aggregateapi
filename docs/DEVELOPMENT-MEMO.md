@@ -685,6 +685,46 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,180.32 kB。
 
+#### 记忆点 · 步骤 5（批 5：更新出网代理 + 版本信息补全 + 反馈入口）
+
+新增：`api/update-proxy.ts`、`pages/update-proxy-sheet.tsx`。
+改动：`SettingsPage.tsx`（软件更新下面加「更新出网代理」行 + 新增「反馈与需求」分组的三行）、
+`components/SystemInfoSheet.tsx`（**大幅补全**）。
+
+**① 更新出网代理（`api/update.rs` 的 `updateProxy`）**
+- `GET/POST /api/update/proxy`，键 `proxy`；空串 = 清除。
+- ⚠️ 容易混：它只管**检查更新 / 下载更新包**的出网；网关**转发上游**走的是**账号级**
+  「出网代理」（在添加账号那里配）。界面上写清了这句。
+- 本地校验：允许 `http/https/socks5` 前缀，或直接 `主机:端口`。
+
+**② 版本信息补全（`api/system_info.rs` 的六个块）**
+原来 SystemInfoSheet 只用了 app/runtime/deployment/security/stats 的一小部分，现在补齐：
+- **开关读数**（`features`）：调试模式 / 指纹脱敏 / CORS / 开发者角色兼容 / 保活换行丢弃 /
+  自动续写（带轮数）/ models.dev / 面板登录人机验证 / 关注 beta —— 「改完设置回来对一眼」用。
+- **安全与计数**：管理员已注册 / 面板登录 / 未注册闸门 / 拒绝无 Key / 允许无 Key 裸跑 /
+  GitHub 令牌（`githubTokenOrigin` 为 `env` 时显示「来自环境变量」）/ 更新出网代理 /
+  账号与限流中 / 在途与累计请求 / 事件日志 / 待迁移旧数据。
+- **许可与源码**：开源许可 / 版权 / 源代码 / 数据库 schema 与库中版本（`schemaVersion`
+  / `dbSchemaVersion`）。
+- **运行细节**：PID / 启动时间 / WebView 内核 / 容器内运行 / 开发构建 / 详细日志。
+- **更新能力**（`deployment.updateCapability`）：mode / packageKind / installSupported / reason。
+- ⚠️ 布尔读数用 `flag()` 助手，口径是 **`=== false` 才算关**（后端多项默认开），
+  不能用 `=== true`——否则取不到值时会把「默认开」显示成「关」。
+
+**③ 反馈入口（无端点，纯外链）**
+桌面端「反馈与需求」的三个 GitHub issue 模板（`bug_report.yml` / `feature_request.yml` /
+`provider_request.yml`），手机端用 `lib/community.ts` 的 `openExternal` 打开
+（APK 内同窗跳转、PWA 新标签页）。
+
+**④ 顺带修的一个 CI 脆弱点**（提交 `8b42e16`，与设置无关但影响出包）
+批 1 那次运行里 **Plugins 作业失败**了，原因是 `scripts/fetch-official-packs.py`
+下载官方骨架包时 GitHub CDN 返回 **504 Gateway Time-out**，而那一步没有重试 ——
+结果插件作业整个挂掉、deb 丢掉预置插件包（体积从 21MB 掉回 12.8MB）。
+已给 `download()` 加退避重试（4 次，2/6/14 秒），并改成**先写 `.part` 再改名**，
+避免半个 zip 被后面当成好文件用。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,188.43 kB。
+
 #### 批次进度
 
 | 批次 | 内容 | 状态 |
@@ -693,9 +733,9 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 | 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | **已完成**（`b9d8206`） |
 | 批 2a | 系统提示词（全局 / 分提供商 / 网关三段） | **已完成**（`2324be6`） |
 | 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | **已完成**（`f54e0a2`） |
-| 批 3 | 连接与安全（CORS/人机验证）+ 数据与存储（用量/保留） | **已完成**（`48c88bc`） |
-| 批 4 | models.dev 元数据 + 插件出站设置（ZCode/令牌池/Cline 头） | **已完成**（本次）；**宫格布局推迟**（理由见上） |
-| 批 5 | 更新出网代理 / beta / GitHub 访问 / 版本信息补全 / 反馈入口 | 待开始 |
+| 批 3 | 连接与安全 + 数据与存储 | **已完成**（`48c88bc`） |
+| 批 4 | models.dev 元数据 + 插件出站设置 | **已完成**（`fc1b5b9`）；宫格布局推迟 |
+| 批 5 | 更新出网代理 + 版本信息补全 + 反馈入口 | **已完成**（本次） |
 | 批 6 | 云同步 / cc-switch 导入 / 局域网访问（**需改 Rust，待用户拍板**） | 待开始 |
 
 
