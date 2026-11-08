@@ -19,6 +19,7 @@ import { DataStorageSheet } from './data-storage-sheet'
 import { ModelMetadataSheet } from './model-metadata-sheet'
 import { PluginSettingsSheet } from './plugin-settings-sheet'
 import { UpdateProxySheet } from './update-proxy-sheet'
+import { CloudSyncSheet } from './cloud-sync-sheet'
 import { openExternal } from '../lib/community'
 
 /**
@@ -78,6 +79,7 @@ export function SettingsPage() {
   const [modelMetadataOpen, setModelMetadataOpen] = useState(false)
   const [pluginSettingsOpen, setPluginSettingsOpen] = useState(false)
   const [updateProxyOpen, setUpdateProxyOpen] = useState(false)
+  const [cloudSyncOpen, setCloudSyncOpen] = useState(false)
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
   const [supervisorBusy, setSupervisorBusy] = useState('')
   const currentLocale = locale()
@@ -304,6 +306,14 @@ export function SettingsPage() {
             <div className='m-grow'>
               <div className='m-t1'>{t('数据与存储')}</div>
               <div className='m-t2'>{t('占用用量 · 日志保留策略')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setCloudSyncOpen(true)}>
+            <span className='m-logo'><Icon name='refresh' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('云同步')}</div>
+              <div className='m-t2'>{t('把账号与网关 Key 同步到 WebDAV / S3')}</div>
             </div>
             <span className='m-chev'><Icon name='chev' /></span>
           </Button>
@@ -716,6 +726,7 @@ export function SettingsPage() {
       {modelMetadataOpen ? <ModelMetadataSheet onClose={() => setModelMetadataOpen(false)} /> : null}
       {pluginSettingsOpen ? <PluginSettingsSheet onClose={() => setPluginSettingsOpen(false)} /> : null}
       {updateProxyOpen ? <UpdateProxySheet onClose={() => setUpdateProxyOpen(false)} /> : null}
+      {cloudSyncOpen ? <CloudSyncSheet onClose={() => setCloudSyncOpen(false)} /> : null}
     </div>
   )
 }

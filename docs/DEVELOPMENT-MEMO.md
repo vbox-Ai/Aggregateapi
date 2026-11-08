@@ -725,6 +725,37 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,188.43 kB。
 
+#### 记忆点 · 步骤 6（批 6：云同步；局域网访问与 cc-switch 导入推迟）
+
+新增：`api/cloud-sync.ts`、`pages/cloud-sync-sheet.tsx`。
+改动：`SettingsPage.tsx` —— 「安全与数据」组补「云同步」行。
+
+**云同步（`api/cloud_sync.rs`，7 条端点）**
+- `GET/PUT /api/cloud-sync`、`POST /test`、`GET /remote`、`POST /upload`、`POST /download`、
+  `POST /import-key`。
+- **PUT 是整份表单**（不是 patch），缺字段按空串；**密码类字段空串 = 沿用库里那份**
+  （所以密码框留空保存不会清掉已存密码，不需要塞伪占位值）。
+- GET 只回 `hasPassword` / `hasSecretKey` / `hasSyncPassword` 布尔，**不回显密码**；
+  `syncPassword` 在保存时必填 → 前端在「首次配置且没填」时提前拦下。
+- 服务商二选一：WebDAV 要 `baseUrl` + `username`；S3 要 `region` + `bucket` + `accessKeyId`
+  （+ 可选的 `endpoint`）。另有 `remoteRoot` / `profile` 两个归类字段。
+- **三种操作风险不同，界面按等级处理**：测试连接 / 读取远端 = 只读出网，随便点；
+  上传 = `confirmDialog`（覆盖远端）；**从云端恢复 = 强确认**（整体替换本机账号与 Key，
+  网关替换前会自动备份到 `backups/`）。
+- **409 = 远端带独立密钥而本机没有** → 界面引导去下面的「导入密钥」填同步密码。
+- 与「整库备份」的分工写进了界面说明：备份是**全库**快照、手动换文件；云同步只带
+  **账号与网关 Key**，可自动、可跨设备。
+- `status` 各字段是 `Option`，缺省时**键不出现**，所以按可选处理。
+
+**推迟两项（都不是遗漏，是明确不在这轮做）**
+1. **局域网访问** —— 要改 Rust：supervisor 现在硬编码 `.env("AGENT2API_HOST", "127.0.0.1")`，
+   开放后同网段设备可访问网关。这是**安全取舍**，需要用户拍板；顺带端口可配置也在这条链路上。
+2. **cc-switch 导入**（`GET /api/import/cc-switch`）—— 它读的是**网关主机**上的 cc-switch 库；
+   iOS 上网关跑在手机里，根本没有那份数据（`available:false` 也是 200）。手机端已有
+   「粘贴导入凭证」这条路，所以它在本项目里价值很低，等真有桌面网关场景再说。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,201.61 kB。
+
 #### 批次进度
 
 | 批次 | 内容 | 状态 |
@@ -735,8 +766,10 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 | 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | **已完成**（`f54e0a2`） |
 | 批 3 | 连接与安全 + 数据与存储 | **已完成**（`48c88bc`） |
 | 批 4 | models.dev 元数据 + 插件出站设置 | **已完成**（`fc1b5b9`）；宫格布局推迟 |
-| 批 5 | 更新出网代理 + 版本信息补全 + 反馈入口 | **已完成**（本次） |
-| 批 6 | 云同步 / cc-switch 导入 / 局域网访问（**需改 Rust，待用户拍板**） | 待开始 |
+| 批 5 | 更新出网代理 + 版本信息补全 + 反馈入口 | **已完成**（`709e1f2`） |
+| 批 6 | 云同步 | **已完成**（本次）；局域网访问 / cc-switch 推迟 |
+
+**全部批次已完成**（除三项明确推迟：宫格布局、局域网访问、cc-switch 导入）。
 
 
 ## 4. 常用事实
