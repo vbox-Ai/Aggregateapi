@@ -483,12 +483,55 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
    `retryIntervalSeconds` 0–300 默认 5；`noRetryStatusCodes` 100–599 ≤50 项默认 `[402]`；
    四项超时 1–3600 默认 30/300/300/300；图片压缩 256–8192/40–95/0–10240 默认 2048/80/512。
 
+#### 记忆点 · 步骤 1（批 1：转发行为设置）
+
+新增文件：
+- `mobile/src/api/forwarding.ts` —— 6 组端点的类型化封装 + `changedKeys(draft, baseline)`
+  工具（这几个端点都是「省略 = 不改」，只发差异既省一次写盘，也避免用本地默认值覆盖服务端）。
+- `mobile/src/pages/ForwardingPage.tsx` —— 一页装六块：排队等待 / 重试 / 上游超时 /
+  请求图片压缩 / 兼容与排障（开发者角色兼容 + 调试模式）。
+
+改动文件：`lib/routes.ts`（加 `forwarding`）、`App.tsx`（SCREENS 注册 + import）、
+`MorePage.tsx`（「转发链路」组加「转发设置」，图标 `bolt`）。
+
+**实现要点（下次加设置页照这个模子）**
+- **数值区块**：每块自己的「保存」按钮（放在 `SectionHead` 的 `action`，文案在保存时切成
+  「保存中…」）。整页共用 `busy` + `error` 两个状态，但校验失败只影响当前块。
+- **开关区块**：点一下**立即生效**（iOS 设置页习惯），失败**回滚开关**并报错。
+- **保存壳**：`const save = async <T,>(section, action, apply) => …` —— 泛型写法别用
+  `Promise<never>`；`apply` 用**后端返回值**回填，不做乐观更新。
+- 文本草稿与基线**分开存**：draft 用 `string`（允许空串等中间态），保存时 `parseNumber`
+  统一校验「整数 + 范围」，越界**报错而不静默改值**；`changedKeys` 比对的是解析后的数值
+  与 GET 回来的基线。
+- 错误码 chips：输入框回车/逗号成 chip，去重、排序、上限 50、范围 100–599。
+- 两个布尔端点的默认值是「开」，解析口径是**只有字面 `false` 才算关**（`!== false`），
+  不能用 `!== true`。
+- ⚠️ `putDebug` 的响应**只带开关**，回填要**合并**（`{...current, ...saved}`），
+  直接替换会把 `count`/`limit` 读数抹掉 —— 这是我写完自查时抓到的 bug。
+
+**契约细节（上游 `server/src/server/api/*.rs`）**
+- `GET/PUT /api/queue`：`queueMaxWaits` 0–10 默认 2、`queueWaitSeconds` 0–120 默认 0。
+- `GET/PUT /api/retry`：`retryCount` 0–10 默认 3、`retryCrossProviderCount` 0–10 默认 5
+  （键名是历史措辞，语义=**换账号次数**）、`retryIntervalSeconds` 0–300 默认 5、
+  `noRetryStatusCodes` 100–599 ≤50 项默认 `[402]`。
+- `GET/PUT /api/timeouts`：四项 1–3600，默认 30/300/300/300。
+- `GET/PUT /api/image-compress`：**四项都不接受 `null`**（传 null 直接 400），
+  开关默认开；2048 / 80 / 512。
+- `GET/PUT /api/developer-role-compat`：`developerRoleCompat` 必填，默认开。
+- `GET/PUT /api/debug`：`debugMode` 必填默认关；只读 `count`/`limit`（上限 500）。
+
+**验证**：`pnpm exec tsc --noEmit` + `pnpm run build` 均 exit 0；`mobile.js` 1,129.33 kB
+（批 1 前基线 1,114.25 kB）。
+
+**待真机验收**：改一个数值只发那一个键；越界被前端拦下；关掉调试模式后重进页仍是关的；
+切服务器后旧响应不覆盖页面。
+
 #### 批次进度
 
 | 批次 | 内容 | 状态 |
 |---|---|---|
-| 步骤 0 | UI 设计分析 + 契约提取 + 方案 | **已完成**（本次） |
-| 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | 待开始 |
+| 步骤 0 | UI 设计分析 + 契约提取 + 方案 | **已完成**（`67fd625`） |
+| 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | **已完成**（本次） |
 | 批 2 | 系统提示词 + 指纹脱敏 | 待开始 |
 | 批 3 | CORS / 机器人校验 / 数据保留 / 存储用量 | 待开始 |
 | 批 4 | models.dev / 宫格布局 / ZCode 版本 / 验证码池 / Cline 头 | 待开始 |
