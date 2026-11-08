@@ -13,6 +13,7 @@ import { CommunitySheet } from '../components/CommunitySheet'
 import { SystemInfoSheet } from '../components/SystemInfoSheet'
 import { ChangePasswordSheet } from './change-password-sheet'
 import { BackupRestoreSheet } from './backup-restore-sheet'
+import { ResetLibrarySheet } from './reset-library-sheet'
 import { supervisorStart, supervisorStatus as fetchSupervisorStatus, supervisorStop, type SupervisorStatus } from '../api/supervisor'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -42,6 +43,7 @@ export function SettingsPage() {
   const [clientIdentification, setClientIdentification] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
   const [supervisorBusy, setSupervisorBusy] = useState('')
   const currentLocale = locale()
@@ -371,6 +373,32 @@ export function SettingsPage() {
               <Icon name='chev' />
             </span>
           </Button>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => store.push('logs')}>
+            <span className='m-logo'>
+              <Icon name='log' />
+            </span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('导出运行日志')}</div>
+              <div className='m-t2'>{t('在运行日志页可导出本页记录、复制原始文本')}</div>
+            </div>
+            <span className='m-chev'>
+              <Icon name='chev' />
+            </span>
+          </Button>
+          {packaged ? (
+            <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setResetOpen(true)}>
+              <span className='m-logo' style={{ color: 'var(--m-danger)' }}>
+                <Icon name='trash' />
+              </span>
+              <div className='m-grow'>
+                <div className='m-t1' style={{ color: 'var(--m-danger)' }}>{t('清空整库')}</div>
+                <div className='m-t2'>{t('删除账号 / Key / 日志与设置，并重置管理员')}</div>
+              </div>
+              <span className='m-chev'>
+                <Icon name='chev' />
+              </span>
+            </Button>
+          ) : null}
         </Card>
       </div>
 
@@ -536,6 +564,7 @@ export function SettingsPage() {
       <SystemInfoSheet open={systemInfo} onClose={() => setSystemInfo(false)} />
       {passwordOpen ? <ChangePasswordSheet onClose={() => setPasswordOpen(false)} /> : null}
       {backupOpen ? <BackupRestoreSheet onClose={() => setBackupOpen(false)} onChanged={() => store.refresh(true)} /> : null}
+      {resetOpen ? <ResetLibrarySheet onClose={() => setResetOpen(false)} /> : null}
     </div>
   )
 }

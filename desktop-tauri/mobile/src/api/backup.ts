@@ -1,4 +1,4 @@
-import { authHeaders, refreshPanelAuthIfExpiring, url } from './client'
+import { apiCall, authHeaders, refreshPanelAuthIfExpiring, url } from './client'
 import { fileBridge } from '../lib/download'
 import { t } from '../i18n'
 
@@ -67,4 +67,45 @@ export async function uploadBackup(file: File, password: string): Promise<void> 
     const data = await response.json().catch(() => null)
     throw new Error((data as { message?: string })?.message || t('恢复备份失败'))
   }
+}
+
+/**
+ * 恢复进度。
+ *
+ * 网关把阶段与文案都放在后端（`db/backup.rs` 的 `RestorePhase::label/percent`）——
+ * 恢复要读文件、解密、在暂存库执行 SQL、拍安全备份、覆盖主库、重载内存态，
+ * 30 秒到几分钟；接口在结束时才返回，界面不轮询就只有一个转圈按钮，
+ * 用户既看不到进展也不知道要等多久。
+ *
+ * 与 `/api/update/progress` 同一套：500ms 轮询。没跑过恢复时是
+ * `{active:false, phase:''}`。
+ */
+export type RestoreProgress = {
+  active?: boolean
+  /** 阶段文案，直接来自后端 */
+  phase?: string
+  percent?: number
+  done?: boolean
+  failed?: boolean
+  error?: string | null
+  startedAt?: number
+  finishedAt?: number
+}
+
+export function fetchRestoreProgress(): Promise<RestoreProgress> {
+  return apiCall<RestoreProgress>('/api/backup/restore/progress')
+}
+
+/** 导出密码规则（与 `archive::validate_password` 对齐：≥12 字、≤1024 字节） */
+export function validateExportPassword(password: string): string | null {
+  if ([...password].length < 12) return t('备份密码需要至少 12 位')
+  if (new TextEncoder().encode(password).length > 1024) return t('备份密码不能超过 1024 字节')
+  return null
+}
+
+/** 恢复密码规则：.a2ab 需要密码，旧 .sql 可以留空；两者都不能超过 1024 字节 */
+export function validateRestorePassword(password: string, isSql: boolean): string | null {
+  if (new TextEncoder().encode(password).length > 1024) return t('备份密码不能超过 1024 字节')
+  if (!password && !isSql) return t('请输入备份密码；旧 SQL 备份可以留空')
+  return null
 }
