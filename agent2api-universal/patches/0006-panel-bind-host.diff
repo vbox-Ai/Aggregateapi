@@ -1,0 +1,37 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/mod.rs b/desktop-tauri/src-tauri/server/src/server/mod.rs
+index 63ec13e..14f15f4 100644
+--- a/desktop-tauri/src-tauri/server/src/server/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/mod.rs
+@@ -1027,6 +1027,29 @@ pub fn start(state: &ServerState) -> Result<oneshot::Sender<()>, PortConflict> {
+     // 不会留下半启动状态）。
+-    let panel_listener = match panel_port {
+-        Some(port) => {
+-            let addr = SocketAddr::new(state.host, port);
++    let panel_listener = match panel_port {
++        Some(port) => {
++            // 面板监听地址可以单独指定（`AGENT2API_PANEL_HOST`，默认沿用主 host）。
++            // 用途：主监听放开到 0.0.0.0（局域网 / 容器要连网关）时，把管理面
++            // 钉在回环 —— 外面只看得到 `/v1`（要网关 Key），看不到 `/api/*`。
++            //
++            // 值非法时**不降级成主 host**（那在局域网形态下等于把管理面一起
++            // 出网），而是退回回环并留一条日志：宁可管理面够不到，也不要意外
++            // 暴露。桌面壳不设这个变量，行为与改动前逐字一致。
++            let panel_host = std::env::var("AGENT2API_PANEL_HOST")
++                .ok()
++                .filter(|value| !value.trim().is_empty())
++                .and_then(|value| match value.trim().parse::<IpAddr>() {
++                    Ok(host) => Some(host),
++                    Err(_) => {
++                        logging::log(
++                            "[Config]",
++                            &format!(
++                                "AGENT2API_PANEL_HOST 不是合法的 IP 地址: {value}；面板退回回环监听"
++                            ),
++                        );
++                        Some(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
++                    }
++                })
++                .unwrap_or(state.host);
++            let addr = SocketAddr::new(panel_host, port);
+             let listener = std::net::TcpListener::bind(addr)
+                 .map_err(|error| PortConflict::from_bind_error(port, &error, None))?;

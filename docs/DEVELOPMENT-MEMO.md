@@ -1281,7 +1281,57 @@ Claude Code 的配置）并不存在；`bridge` 档面板原文也写明「推�
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,282.95 kB。
 
-#### 六项缺口最终状态
+#### 记忆点 · 步骤 21（① 局域网访问 a–d：supervisor + 上游补丁，**服务端能力就绪**）
+
+**做了什么**（默认行为逐字不变，开关默认关）：
+
+| 位置 | 改动 |
+|---|---|
+| `agent2api-ios/ios-ffi/src/bin/agent2api-supervisor.rs` | 不再硬编码 `AGENT2API_HOST`；新增 `GET /lan`、`POST /lan?enabled=0\|1`；`/status` 增报 `panelPort`/`lan`/`host` |
+| `agent2api-universal/patches/0006-panel-bind-host.diff` | 上游 `server/mod.rs` 加 `AGENT2API_PANEL_HOST`（默认沿用主 host），使面板能单独钉在回环 |
+
+**★ 差点把别人的代码回退掉**：我本地那份 `agent2api-supervisor.rs` 是**旧版**
+（11790 字节），仓库里是 14362 字节（多了 `factory-reset`）。动手前先比对
+blob SHA-1 才发现 —— **本地树是部分检出，改任何文件前必须先与仓库比 sha**，
+否则会把别人后来的改动一起推回去。已取仓库版为基准。
+
+**契约/事实（读代码确认，不是猜）**：
+- supervisor **根本不读** `AGENT2API_HOST`（只读 PROXY_HOME/PROXY_PORT/SUPERVISOR_PORT/SERVER_BIN/UI_DIR），L161 写死 `127.0.0.1`；
+- **控制口 3066 也硬编码绑回环**（`TcpListener::bind(("127.0.0.1", control_port))`）→ 这条**不动**：否则开局域网等于把 `/start`、`/stop`、`/factory-reset` 一起送出去；
+- 上游两个 listener **共用 `state.host`**（`SocketAddr::new(state.host, port)` / `(state.host, panel_port)`）→ 光有 env **无法**做到「网关出网 + 面板留本机」，所以必须加 `AGENT2API_PANEL_HOST`；
+- headless 形态 `AGENT2API_HOST` **默认 0.0.0.0**（`bin/agent2api-server.rs:335`）——iOS 上之所以只听回环，正是因为 supervisor 传了 127.0.0.1；
+- CI 检出的上游版本 = `git tag -l 'v*' --sort=-v:refname | head -1` = **v3.4.2**，补丁就是打在这个检出上。
+
+**设计取舍**：桌面端有「局域网访问 + 同时开放网页管理面板」两个开关（后者默认关）；
+手机端**只做第一个**，开局域网时把面板搬到 3067 并绑 `127.0.0.1` —— 少一个开关就少
+一种配错的可能，而手机上的管理面本来也不必给局域网。**比桌面端默认更严**。
+开关落 `<home>/supervisor.json`（本 bin 自己读写），读失败一律按**关**处理（安全默认）。
+写开关时顺手把网关 stop+start（等于桌面端「改动需要重启应用生效」），
+App 一次调用即可，不用自己编排 stop/start 的中间失败态。
+
+**自己审出的两个错（本地没有编译器，只能靠审）**：
+1. `is_running()` 里我在 `child` 借用未结束时调 `guard.take()` → **E0499**
+   （原 `status_json` 用 `child_state` 变量就是为绕开这件事）。改成先记结论、出了
+   `if let` 再动 `guard`。
+2. 生成补丁时 hunk 头**数错**：`@@ -1027,5` 应为 `-1027,6`（漏了前导上下文行）。
+   改成**由 body 反推计数**（`old_n = body 里 ' '/'-' 行数`），不再手算。
+
+**验证（本机没有 git / cargo / rustc —— 这是真实约束，不能假装编译过）**：
+- 写了离线校验器（本机脚本 `verify-diff.py`，未入仓库）：解析 unified diff →
+  逐行核对上下文/删除行与目标文件是否**逐字相同** → 重建整文件比 `index` 的
+  pre/post blob SHA-1。
+- `0006` 对 `mod.rs@v3.4.2`：**PASS**（`hunk @1027: -6 +29 OK`），pre blob
+  `63ec13e` 与上游官方值一致。
+- **对照组**：既有 `0005` 对 `altcha.rs@v3.4.2` 也是 PASS —— 证明校验器会过也会挂，
+  不是空转；同时反证 v3.4.2 就是既有补丁的目标版本。
+- Rust 编译与补丁实际应用**只能靠 CI 验证**（CI 打补丁失败会 `exit 1` 并提示重新
+  生成，不会静默）。
+
+**待办**：①e iOS App 从 `/status` 取 `panelPort` 加载 WebView（回落 3065）+ 原生桥加
+`lan` op；①f 手机端设置页加入口（前置校验照抄桌面端：已注册管理员 + 至少一把启用
+Key）。
+
+#### 六项缺口最终状态（上一批：步骤 16–20）
 
 | # | 内容 | 结果 |
 |---|---|---|
