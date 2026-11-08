@@ -7,6 +7,7 @@ import { storeApiKey } from '../api/client'
 import { baseLabel, serverIdentity } from '../lib/servers'
 import { t } from '../i18n'
 import { Alert, AlertDescription, AppFrame, Button, Field as UiField, FieldLabel, Input, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@ui'
+import { supervisorFactoryReset } from '../api/supervisor'
 
 /**
  * 登录 / 首次注册（APK 独立整屏页）。
@@ -399,11 +400,15 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
                 disabled={resetting || resetPhrase.trim() !== t('重置')}
                 onClick={() => {
                   if (resetting) return
-                  setResetting(true)
-                  setResetError('')
-                  callSupervisor('factory-reset')
-                    .catch(failure => setResetError(failure instanceof Error ? failure.message : String(failure)))
-                    .finally(() => setResetting(false))
+                    setResetting(true)
+                    setResetError('')
+                    supervisorFactoryReset()
+                      .then(() => {
+                        // 原生侧成功后 reload 页面；先清掉本地会话，免得带着旧令牌再回登录页
+                        try { localStorage.clear() } catch { /* 忽略 */ }
+                      })
+                      .catch(failure => setResetError(failure instanceof Error ? failure.message : String(failure)))
+                      .finally(() => setResetting(false))
                 }}
               >
                 {resetting ? t('重置中…') : t('清空整库并重置管理员')}
@@ -414,27 +419,6 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
       ) : null}
     </AppFrame>
   )
-}
-
-/**
- * 调原生壳上的 supervisor（127.0.0.1:3066）。
- *
- * 跨端口 fetch 会被 CORS 拦，所以只能走 `webkit.messageHandlers.a2aControl`；
- * PWA / 浏览器里没有这个桥，界面会如实告知。
- */
-export function callSupervisor(op: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const handlers = (window as Window & {
-      webkit?: { messageHandlers?: { a2aControl?: { postMessage: (msg: unknown) => void } } }
-    })?.webkit?.messageHandlers?.a2aControl
-    if (!handlers) {
-      reject(new Error(t('当前形态不支持：请用 iOS App 打开面板')))
-      return
-    }
-    handlers.postMessage({ op })
-    // 原生侧成功后会 reload 页面，这里只等桥投递成功
-    resolve()
-  })
 }
 
 /** 带标签的输入框（整屏表单里标签比 placeholder 更稳：输入后仍看得见） */

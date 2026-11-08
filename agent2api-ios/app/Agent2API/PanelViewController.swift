@@ -688,9 +688,9 @@ extension PanelViewController: WKScriptMessageHandler {
         }
         if message.name == "a2aControl" {
             guard let body = message.body as? [String: Any],
-                  let op = body["op"] as? String,
-                  op == "factory-reset" else { return }
-            factoryResetSupervisor()
+                  let op = body["op"] as? String else { return }
+            let id = (body["id"] as? String) ?? ""
+            supervisorCall(op: op, id: id)
             return
         }
         guard message.name == Bridge.messageName,
@@ -716,35 +716,58 @@ extension PanelViewController: WKScriptMessageHandler {
         }
     }
 
-    /// 删库重注册：调 supervisor 的 `POST /factory-reset`（会停网关、删库、再拉起）。
-    /// 成功后页面回到首次注册；失败把原因打到状态条上。
-    func factoryResetSupervisor() {
-        guard let url = URL(string: "http://127.0.0.1:3066/factory-reset") else { return }
+    /// 调 supervisor（127.0.0.1:3066）。跨端口 fetch 会被 CORS 拦，只能走原生桥。
+    ///
+    /// `op` → HTTP 方法 + 路径：
+    ///   · `status` → GET  /status
+    ///   · `start`  → POST /start
+    ///   · `stop`   → POST /stop
+    ///   · `factory-reset` → POST /factory-reset（成功后页面回首次注册）
+    /// 结果通过 `a2a-control-result` 事件回给 JS（携带调用时的 id 以区分并发调用）。
+    func supervisorCall(op: String, id: String) {
+        var url = URL(string: "http://127.0.0.1:3066/status")
+        if op == "start" || op == "stop" || op == "factory-reset" {
+            url = URL(string: "http://127.0.0.1:3066/\(op)")
+        }
+        guard let url else {
+            reportSupervisorError(op: op, id: id, message: "控制端口地址非法")
+            return
+        }
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = (op == "status") ? "GET" : "POST"
         request.timeoutInterval = 30
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error {
-                    self.jsErrors.append("重置失败：\(error.localizedDescription)")
-                    self.statusBar.isHidden = false
-                    self.statusLabel.text = self.summary + "\n— 重置 —\n" + self.jsErrors.joined(separator: "\n")
+                    self.reportSupervisorError(op: op, id: id, message: error.localizedDescription)
                     return
                 }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                if status == 200 {
+                let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                let payload = status == 200 ? text : "HTTP \(status) \(text)"
+                if op == "factory-reset" && status == 200 {
                     // 库没了，页面里的本地会话也一并清掉，直接回首次注册
                     self.webView.evaluateJavaScript("try{localStorage.clear()}catch(e){}", completionHandler: nil)
                     self.webView.reload()
-                } else {
-                    let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                    self.jsErrors.append("重置失败：HTTP \(status) \(text)")
-                    self.statusBar.isHidden = false
-                    self.statusLabel.text = self.summary + "\n— 重置 —\n" + self.jsErrors.joined(separator: "\n")
                 }
+                self.deliverSupervisorResult(op: op, id: id, ok: status == 200, payload: payload)
             }
         }.resume()
+    }
+
+    private func reportSupervisorError(op: String, id: String, message: String) {
+        jsErrors.append("supervisor \(op) 失败：\(message)")
+        statusBar.isHidden = false
+        statusLabel.text = summary + "\n— supervisor —\n" + jsErrors.joined(separator: "\n")
+        deliverSupervisorResult(op: op, id: id, ok: false, payload: message)
+    }
+
+    private func deliverSupervisorResult(op: String, id: String, ok: Bool, payload: String) {
+        guard let js = String(payload: "{\"ok\":\(ok),\"payload\":\"\(payload)\"}").replacingOccurrences(
+            of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") else { return }
+        let body = "window.dispatchEvent(new CustomEvent('a2a-control-result',{detail:{\"op\":\"\(op)\",\"id\":\"\(id)\",\"ok\":\(ok),\"payload\":\"\(js)\",\"raw\":\(js)}})})"
+        webView.evaluateJavaScript(body, completionHandler: nil)
     }
 }
 

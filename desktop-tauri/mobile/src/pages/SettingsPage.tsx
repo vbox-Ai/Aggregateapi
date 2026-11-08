@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PageIntro, SectionHead, IconButton } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { ThemeSwitch } from './MorePage'
@@ -13,6 +13,7 @@ import { CommunitySheet } from '../components/CommunitySheet'
 import { SystemInfoSheet } from '../components/SystemInfoSheet'
 import { ChangePasswordSheet } from './change-password-sheet'
 import { BackupRestoreSheet } from './backup-restore-sheet'
+import { supervisorStart, supervisorStatus as fetchSupervisorStatus, supervisorStop, type SupervisorStatus } from '../api/supervisor'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
@@ -41,11 +42,69 @@ export function SettingsPage() {
   const [clientIdentification, setClientIdentification] = useState(false)
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
+  const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
+  const [supervisorBusy, setSupervisorBusy] = useState('')
   const currentLocale = locale()
   const options = localeOptions()
+  const identity = serverIdentity()
+
+  /** supervisor 状态（网关是否在跑）—— 只读读数，失败不打扰 */
+  const loadSupervisor = async () => {
+    if (supervisorBusy) return
+    try {
+      const { status } = await fetchSupervisorStatus()
+      if (serverIdentity() === identity) setSupervisor(status)
+    } catch {
+      /* 读不到就保持上一次的读数；用户可点「刷新状态」重试 */
+    }
+  }
+
+  const startGateway = async () => {
+    if (supervisorBusy) return
+    setSupervisorBusy('start')
+    try {
+      await supervisorStart()
+      if (serverIdentity() !== identity) return
+      const { status } = await fetchSupervisorStatus()
+      if (serverIdentity() === identity) setSupervisor(status)
+      store.toast(t('网关已启动'))
+      void store.refresh(true)
+    } catch (failure) {
+      if (serverIdentity() === identity) store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      if (serverIdentity() === identity) setSupervisorBusy('')
+    }
+  }
+
+  const stopGateway = async () => {
+    if (supervisorBusy) return
+    setSupervisorBusy('stop')
+    try {
+      await supervisorStop()
+      if (serverIdentity() !== identity) return
+      const { status } = await fetchSupervisorStatus()
+      if (serverIdentity() === identity) setSupervisor(status)
+      store.toast(t('网关已停止'))
+    } catch (failure) {
+      if (serverIdentity() === identity) store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      if (serverIdentity() === identity) setSupervisorBusy('')
+    }
+  }
 
   // 本页没有自己的列表请求：下拉只需重拉会话（网关状态来自它）
   const pull = usePullToRefresh({ onRefresh: () => store.refresh(true) })
+
+  // supervisor 读数与服务器切换绑定；失败静默，界面里保留上一次的读数
+  useEffect(() => {
+    if (!packaged) return
+    let cancelled = false
+    fetchSupervisorStatus()
+      .then(({ status }) => { if (!cancelled && serverIdentity() === identity) setSupervisor(status) })
+      .catch(() => {})
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity, packaged])
 
   const install = async () => {
     setInstalling(true)
@@ -252,6 +311,48 @@ export function SettingsPage() {
               </span>
             </Button>
           )}
+        </Card>
+      </div>
+
+      <div className='m-section'>
+        <SectionHead title={t('服务')} />
+        <Card className='m-card'>
+          <div className='m-row'>
+            <span className='m-logo'>
+              <Icon name='bolt' />
+            </span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('网关服务')}</div>
+              <div className='m-t2 m-mono' style={{ fontSize: 11.5 }}>
+                {supervisor
+                  ? supervisor.gateway === 'running' ? t('运行中') : t('已停止')
+                  : t('读取中…')}
+              </div>
+            </div>
+            {supervisor ? (
+              <Badge variant={supervisor.gateway === 'running' ? 'success' : 'secondary'} shape='tag'>
+                <BadgeDot />
+                {supervisor.gateway === 'running' ? t('运行中') : t('已停止')}
+              </Badge>
+            ) : null}
+          </div>
+          {supervisor && supervisor.port ? (
+            <div className='m-row'>
+              <span className='m-k'>{t('控制端口')}</span>
+              <span className='m-v m-mono' style={{ fontSize: 11.5 }}>{supervisor.port}</span>
+            </div>
+          ) : null}
+          <div className='m-ck-actions'>
+            <Button size='sm' variant='outline' disabled={Boolean(supervisorBusy) || supervisor?.gateway !== 'stopped'}
+              onClick={() => void startGateway()}>
+              {supervisorBusy === 'start' ? t('启动中…') : t('启动网关')}
+            </Button>
+            <Button size='sm' variant='outline' disabled={Boolean(supervisorBusy) || supervisor?.gateway !== 'running'}
+              onClick={() => void stopGateway()}>
+              {supervisorBusy === 'stop' ? t('停止中…') : t('停止网关')}
+            </Button>
+            <Button size='sm' variant='ghost' disabled={Boolean(supervisorBusy)} onClick={() => void loadSupervisor()}>{t('刷新状态')}</Button>
+          </div>
         </Card>
       </div>
 
