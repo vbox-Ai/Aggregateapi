@@ -1135,6 +1135,43 @@ routingBreakerSuccessThreshold
 · **路由组写入**要网关补一条 `PUT /api/routing/groups`（现在只有 `GET`）—— 需改 Rust；
 · **画布布局**是桌面交互范式（手机端用列表/分组折叠表达同一份数据）。
 
+#### 记忆点 · 步骤 16（深度缺口 ① 撤回 + ② 请求原始报文）
+
+**先说撤回**：我在 `docs/mobile-ui/DEPTH-GAP.md` 里把「代理订阅」列为缺口 #1，**这是错的**。
+去 `gw-src/http.rs` 取契约时看到：
+
+```rust
+.route("/api/subscriptions", any(retired_proxy_feature))
+.route("/api/subscriptions/{*rest}", any(retired_proxy_feature))
+```
+
+`retired_proxy_feature()` 直接返回 **410 Gone + `proxy_pool::RETIRED_HINT`** ——
+**代理订阅是网关主动下线的功能**，不是遗漏。已把文档里那条划掉并写明判据。
+
+**★ 教训被修正了一次**：步骤 13 我总结的是「差集/关键词只能产生候选，判定必须回查实现」。
+这次说明还要再进一步 —— **回查实现时要看「处理函数本身是否已下线」**。
+`/api/subscriptions` 明明是一条存在的路由，但它的处理函数是「已退休」占位。
+所以判据应当是三层：① 路由存在？② 处理函数是真实现还是占位/410？③ 前端是否调用？
+
+**② 请求原始报文（已完成）**
+- 契约（源码级，`stats_api.rs` 的 `stats_request_raw`）：
+  `GET /api/stats/requests/raw?id=` → `{id, requestBody, responseBody, truncated}`；
+  400 缺 id；**404 = 正常状态**（正文只在调试模式开启期间的请求上采集，也可能已被清理）。
+- 新增 `api/request-raw.ts`：把 404 归一成 `{found:false}`（当错误处理会在界面上报红，
+  而它其实是「本来就没有」）；`prettify()` 对 <200k 字符的 JSON 做缩进。
+- 新增 `components/RequestRawPanel.tsx`，接进请求日志的「请求详情」抽屉：
+  **按需加载**（正文上限 32MB，一点开就拉会让抽屉变慢、白花流量）；
+  **显示截断前 6000 字符 + 「复制全文」**（WebView 渲染几万字符会卡；要完整内容的
+  场景是贴给别人，不是屏上读）；`truncated` 显示「旧版本保存，可能不完整」。
+- 请求日志页补了 `row.id` 才渲染（没有 id 拉不到正文）。
+
+**顺带发现的三个同模块端点**（已写进 DEPTH-GAP，值得单独排期）：
+`POST /api/stats/requests/terminate?id=`（**终止一条在途请求** —— 手机上很实用）、
+`GET /api/stats/requests/clear-preview`（清理预览）、
+`POST /api/stats/requests/compact`（压缩库，重复触发 409）。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,265.80 kB。
+
 ## 4. 常用事实
 
 - 手机端 API client：`desktop-tauri/mobile/src/api/client.ts` 的 `apiCall`。

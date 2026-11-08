@@ -25,7 +25,7 @@
 
 | # | 板块 | 缺什么 | 网关接口 | 证据 |
 |---|---|---|---|---|
-| 1 | **网络代理** | **代理订阅**（订阅地址、拉取、节点更新） | `/api/subscriptions`（含 `{*rest}`） | `/api/subscriptions` 零出现；云同步的同步范围文案里明写「代理池 / 订阅」——它是一等功能 |
+| ~~1~~ | ~~网络代理~~ | ~~代理订阅~~ | ~~`/api/subscriptions`~~ | **❌ 撤回：这条是网关主动下线的功能** —— `http.rs` 里 `/api/subscriptions` 与 `/api/subscriptions/{*rest}` 的处理函数都是 `retired_proxy_feature()`，返回 **410 Gone** + `proxy_pool::RETIRED_HINT`。不是遗漏，实现它没有意义。（记下来：我上一版把它列为缺口是错的，判据同样是「回查实现」不够——还要看**处理函数本身**是否已下线。） |
 | 2 | **模型管理** | **自定义模型的增删** | `POST /api/models/custom`、`/custom/remove` | 「自定义模型」「/api/models/custom」均零出现；手机端只有「自定义提供商」 |
 | 3 | **请求日志** | **请求/响应原始报文查看** | `GET /api/stats/requests/raw` | 零出现。手机端只有「保存上游原始报文」这个**开关**（转发设置里），看不到内容 |
 | 4 | **工具服务 / Agent** | **MCP / Skill 的安装** | `/api/tools/install-mcp`、`install-skill`、`install-targets`、`install-info` | `install-mcp` 零出现；`MCP` 只作为名词出现在标签/读数里 |
@@ -34,6 +34,12 @@
 | 7 | **Agent 配置** | **应用 / 导入**（`/api/agents/apply`、`/import`、`/profiles`、`/{id}/resources*`） | 同上 | `agents/apply` 零出现；手机端只用了 `/api/agents`、`/preview`、`/restore` ——**要按真机核对后再下结论** |
 | 8 | **模型映射** | **新增映射**（手机端能删不能加？） | `POST /api/models/mappings` | 手机端只调 `/api/models/mappings/remove`；新增那条零出现 —— 同样是「需先核实」项 |
 | 9 | **添加账号** | 部分登录方式（短信 / OAuth 专用完成端点） | `/api/session/login/sms/{send,verify}`、`/oauth/{start,captcha-config}`、`/kuku/complete` 等 13 条 | 手机端只用了通用的 `/login/start|cancel|callback`；**哪些家需要专用端点要对着 provider 清单看** |
+
+**顺带发现（不在原清单里，值得单独排期）**：`stats_api.rs` 里还有三条手机端没用、
+但对「人在外面出问题」很实用的端点 ——
+`POST /api/stats/requests/terminate?id=`（**终止一条在途请求**）、
+`GET /api/stats/requests/clear-preview`（清理预览）、
+`POST /api/stats/requests/compact`（压缩数据库，重复触发 409）。
 
 ## 3. 明确不算缺口（记下来免得以后重复排查）
 
@@ -50,11 +56,11 @@
 
 ## 4. 建议的处理顺序（按「手机端价值 / 风险」）
 
-1. **代理订阅（#1）** —— 手机端价值高（订阅常在手机上加），只读+拉取为主，风险低；
-2. **请求原始报文（#3）与调试报文（#5）** —— 排查问题最需要，且都是只读；
-3. **自定义模型增删（#2）** —— 中等风险（写模型配置），但功能明确；
+1. ~~**代理订阅（#1）**~~ —— **撤回，见上表**：该功能已下线（410）；
+2. **请求原始报文（#2）与调试报文（#3）** —— 排查问题最需要，且都是只读；
+3. **自定义模型增删（#4）** —— 中等风险（写模型配置），但功能明确；
 4. **日志下载（#6）** —— 低风险，纯导出；
-5. **MCP/Skill 安装（#4）、Agent 应用（#7）** —— 需要先核对着实现再动；
+5. **MCP/Skill 安装（#5）、Agent 应用（#7）** —— 需要先核对着实现再动；
 6. **映射新增（#8）、短信/OAuth 登录（#9）** —— 先核实是否真缺。
 
 ## 5. 仍然挂着、需要改 Rust 的两项

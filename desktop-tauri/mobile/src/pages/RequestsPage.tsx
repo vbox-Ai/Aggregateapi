@@ -13,6 +13,7 @@ import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
 import { MetricGrid, MetricCard } from '@ui'
 import { DateRangeFilter } from '../components/DateRangeFilter'
+import { RequestRawPanel } from '../components/RequestRawPanel'
 import { requestApiKeyLabel, requestClientLabel } from '../../../ui-shared/model-api-key'
 import { ClientIdentificationDetail } from '../../../ui-shared/client-identification-detail'
 import { clientIdentificationApi } from '../api/client-identification'
@@ -463,6 +464,9 @@ function RequestSheet({ row, onClose }: { row: RequestRow | null; onClose: () =>
               ) : null}
 
               {row.error ? <Alert variant='destructive'>{row.error}</Alert> : null}
+
+              {/* 原始报文：按需加载，见 components/RequestRawPanel */}
+              {row.id ? <RequestRawPanel id={row.id} /> : null}
             </>
           ) : null}
         </SheetBody>
