@@ -37,7 +37,7 @@ for f in \
     /usr/local/bin/agent2api-supervisor; do
     if [ -n "$f" ] && [ -x "$f" ]; then SUPERVISOR="$f"; break; fi
 done
-[ -n "$SUPERVISOR" ] || { log "ERROR: 鎵句笉鍒?agent2api-supervisor"; exit 1; }
+[ -n "$SUPERVISOR" ] || { log "ERROR: 找不到 agent2api-supervisor"; exit 1; }
 
 BIN=""
 for f in \
@@ -46,7 +46,7 @@ for f in \
     /usr/local/bin/agent2api-server; do
     if [ -n "$f" ] && [ -x "$f" ]; then BIN="$f"; break; fi
 done
-[ -n "$BIN" ] || { log "ERROR: 鎵句笉鍒?agent2api-server"; exit 1; }
+[ -n "$BIN" ] || { log "ERROR: 找不到 agent2api-server"; exit 1; }
 
 UI=""
 for u in \
@@ -55,7 +55,7 @@ for u in \
     /usr/local/share/agent2api/ui; do
     if [ -n "$u" ] && [ -f "$u/m.html" ]; then UI="$u"; break; fi
 done
-[ -n "$UI" ] || { log "ERROR: 鎵句笉鍒伴潰鏉?UI"; exit 1; }
+[ -n "$UI" ] || { log "ERROR: 找不到面板 UI"; exit 1; }
 
 APP=""
 for a in \
@@ -190,7 +190,7 @@ for l in /bin/launchctl /usr/bin/launchctl \
         case " $LCTLS " in *" $l "*) ;; *) LCTLS="$LCTLS $l" ;; esac
     fi
 done
-[ -n "$LCTLS" ] || { log "ERROR: 鎵句笉鍒?launchctl"; exit 1; }
+[ -n "$LCTLS" ] || { log "ERROR: 找不到 launchctl"; exit 1; }
 
 # 系统 launchctl 优先；RootHide 的 jbroot launchctl 有时会把作业装进 user/501
 GOOD_LCTL=""
