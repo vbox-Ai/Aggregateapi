@@ -199,6 +199,13 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "shell 脚本编码与语法校验通过"
 
+      - name: 校验手机端自洽（图标 / i18n 参数 / 跳转 / 端点拼写）
+        run: |
+          set -euo pipefail
+          # 这四类问题 TypeScript 一个都不拦：图标名写错渲染成空白、t() 少传参数会
+          # 原样显示 {count}、跳转目标不存在会静默回首页、端点拼错只在运行时 404。
+          python3 scripts/check-mobile-ui.py
+
       - name: 构建手机面板 UI（从源码，覆盖上游预编译产物）
         run: |
           set -euo pipefail
