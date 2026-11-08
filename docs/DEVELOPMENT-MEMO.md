@@ -1417,7 +1417,7 @@ Key」这种正常顺序也挡住。
   「这个 App 版本还不会应用局域网开关，请升级 App」，而不是弹一句「已开启」骗人。
 - **旧 deb + 新 App**：旧 supervisor 的 `/status` 不带 `lan`，那一行**根本不渲染**
   （能力探测），点了也不会出错。
-⇒ 真机测试前**两个都要装**；只装 deb 时开关会提示需要升级 App。
+⇒ **只装 deb 就够了（我先前在这儿写错了）。** 这个 deb 是**一体包**：`control` 里写着 `Section: Applications` 与 `app + launchd daemon`，包内含 `var/jb/Applications/Agent2API.app/`（App 二进制 253,824 B）与 `var/jb/Library/LaunchDaemons/*.plist` —— 装完 App 图标就出来，**App 也跟着一起换**。IPA 只是「另一种装 App 的途径」（侧载 / TrollStore），不是额外必需。（上面这种错配只在「deb 与 IPA 分开装、且 App 比 deb 旧」时才可能出现。）
 
 #### ① 局域网访问 —— 完成情况
 
@@ -1588,10 +1588,12 @@ Swift PanelViewController.swift: panelPort / panelBaseURL / syncPanelPort
 
 #### 真机验证清单（① 局域网访问 + ② 路由组编辑）
 
-**前提：deb 与 IPA 都要装。** 只装 deb 时，「局域网访问」那一行会显示出来但点了会提示
-「这个 App 版本还不会应用局域网开关，请升级 App」——**不会锁死面板**（旧 App 不会把
-开关写进去）。只装 IPA 而 deb 是旧的时，那一行**根本不渲染**（旧 supervisor 的
-`/status` 不带 `lan`）。
+**前提：装 deb 就行**（一体包：App + 守护进程 + 网关 + supervisor + 面板界面）。
+IPA 只在你想「侧载 / TrollStore 单独装 App」时才需要。
+
+只有**分开装**的时候才要小心版本错配：
+- 新 deb + 旧 App：那一行会显示，但点了提示「需要升级 App」，且**不会写设置**（不锁面板）；
+- 旧 deb + 新 App：那一行**根本不渲染**（旧 supervisor 的 `/status` 不带 `lan`）。
 
 **① 局域网访问**
 
@@ -2095,3 +2097,54 @@ cargo / xcodebuild，所以最后一道验证放在**可安装的包**上：直�
 
 **同时被这次事件验证有效的做法**：把待补内容落成**文件**（附页）而不是留在会话里 ——
 即使真的推不了，内容也不会丢。这次附页最终并入了本文件。
+
+#### 记忆点 · 步骤 40（更正：deb 是一体包 —— 只装 deb 就够；顺带解开步骤 38 那个谜）
+
+**用户的一句话纠正了我两轮错误回答**：「我一直只装 deb，装完桌面就有图标」。查下去他对、
+我错：
+
+`control` 文件里写得明明白白：
+```
+Package: com.chiyu.agent2api
+Description: Agent2API gateway + panel (app + launchd daemon)
+Section: Applications
+```
+包内结构（rootless 变体）：
+```
+var/jb/Applications/Agent2API.app/Agent2API        253,824 B   ← App 本体
+var/jb/Applications/Agent2API.app/Info.plist
+var/jb/Applications/Agent2API.app/Icon-*.png
+var/jb/Library/LaunchDaemons/com.chiyu.agent2api.plist        ← 守护进程
+var/jb/usr/local/bin/agent2api-server  agent2api-supervisor   ← 网关 + 监督进程
+var/jb/usr/local/{bin,share/agent2api}/ui/m/mobile.js         ← 面板界面（两份）
+```
+脚本名本来也是 `build-allinone-deb.sh`。⇒ **deb = App + 守护进程 + 网关 + supervisor + 界面，
+一体**；IPA 只是「另一种装 App 的途径」（侧载 / TrollStore），**不是额外必需**。
+
+**★ 我为什么会错，这是重点**：我说「deb 里没有 App」的依据，是 `verify-deb.py` 输出的
+4 个文件 —— 而那 4 个是**我自己按文件名过滤出来的**（只挑 `agent2api-supervisor` /
+`agent2api-server` / `mobile.js`）。**我从没列过整包内容。** 一个只筛自己要看的文件的
+脚本，其输出**不能**用来断言「包里没有别的东西」。教训：**要先列全量清单，再做过滤**。
+
+**deb 里的 App 就是新 App（有证据）**：
+
+| 标记 | b276（旧 deb）| b290（新 deb）|
+|---|---|---|
+| `panelPort`（①e 新增：解析 `/status` 的新字段）| 0 | **3** |
+| `panelBaseURL`（①e 新增：让面板跟着端口走）| 0 | **1** |
+
+⇒ 装新 deb **同时**把 App 换新，所以 ① 也能只靠 deb 测（前提是不要另外把旧 IPA 装回去）。
+
+**★ 顺带解开步骤 38 那个「字面量不见了」的谜**：我当时拿 `lan access = `（`log(&format!(...))`
+的一段）当标记，查不到就报了 FAIL，并把机制记为「未查清」。这次查 App 二进制时发现了
+**关键反例**：`/status` —— 一个**必然存在、且每次轮询都会用到**的旧字面量 —— 在 App 二进制里
+**也是 0**（`/start`、`/factory-reset` 同样是 0，甚至连源码里就是拼出来的）。
+
+⇒ 结论：**短字符串字面量可能以指令立即数（分散在 mov/movk 里）的形式编进代码，而不以连续
+字节存在数据段。** 所以「按字节搜不到某字面量」**不能**推出「这段代码不在二进制里」。
+这也正是步骤 38 那个现象的成因 —— 不是我的代码丢了，是我的**检索手段**不适配。
+
+**可用的标记要满足两条**（`verify-deb.py` 注释里已写）：①新旧包对照过（旧 0、新非 0）；
+②**实测在二进制里真的能查到**。这次实测可用的：`panelPort`、`panelBaseURL`、
+`supervisor.json`、`AGENT2API_PANEL_PORT`、`missing enabled=0|1`、`AGENT2API_PANEL_HOST`、
+两条 UI 文案；**不可用**：`/status`、`/lan?enabled=`、`lan access = ` 这类短串/插值片段。
