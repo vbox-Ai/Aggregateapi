@@ -538,11 +538,21 @@ export function SettingsPage() {
               </div>
               <Switch
                 checked={Boolean(supervisor.lan)}
-                disabled={lanBusy || supervisorBusy !== ''}
+                // 网关没在跑时**不许改**：这个开关改的是子进程的启动参数，落盘后
+                // 由 supervisor 重启网关生效；网关本来就没跑时不会重启，但
+                // `/status` 会立刻报出新 `panelPort`（3067），App 跟着重载就会
+                // 打开一个**没人监听**的端口 —— 面板直接消失，得靠重试按钮才能
+                // 回来。与其让用户经历这个，不如先启动网关再改。
+                disabled={lanBusy || supervisorBusy !== '' || supervisor.gateway !== 'running'}
                 aria-label={t('局域网访问')}
                 onCheckedChange={next => void toggleLan(next === true)}
               />
             </div>
+          ) : null}
+          {packaged && supervisor?.lan !== undefined && supervisor.gateway !== 'running' ? (
+            <p className='m-ck-note' style={{ color: 'var(--m-warn)' }}>
+              {t('先启动网关才能改这一项：改动会重启网关，而网关没在跑时改它会让你正在看的这个面板失去连接。')}
+            </p>
           ) : null}
           {packaged && supervisor && supervisor.lan !== undefined ? (
             <p className='m-ck-note'>
