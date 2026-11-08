@@ -14,6 +14,7 @@ import { t } from '../i18n'
 import { MetricGrid, MetricCard } from '@ui'
 import { DateRangeFilter } from '../components/DateRangeFilter'
 import { RequestRawPanel } from '../components/RequestRawPanel'
+import { DebugTrafficPanel } from '../components/DebugTrafficPanel'
 import { requestApiKeyLabel, requestClientLabel } from '../../../ui-shared/model-api-key'
 import { ClientIdentificationDetail } from '../../../ui-shared/client-identification-detail'
 import { clientIdentificationApi } from '../api/client-identification'
@@ -465,8 +466,13 @@ function RequestSheet({ row, onClose }: { row: RequestRow | null; onClose: () =>
 
               {row.error ? <Alert variant='destructive'>{row.error}</Alert> : null}
 
-              {/* 原始报文：按需加载，见 components/RequestRawPanel */}
-              {row.id ? <RequestRawPanel id={row.id} /> : null}
+              {/* 两个正文面板都按需加载：请求与响应正文（stats/raw）+ 调试报文（debug/traffic） */}
+              {row.id ? (
+                <>
+                  <RequestRawPanel id={row.id} />
+                  <DebugTrafficPanel id={row.id} />
+                </>
+              ) : null}
             </>
           ) : null}
         </SheetBody>

@@ -1172,6 +1172,68 @@ routingBreakerSuccessThreshold
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,265.80 kB。
 
+#### 记忆点 · 步骤 17（深度缺口 ③ 调试报文 + **② 的命名纠正**）
+
+**★ 先纠正步骤 16 的一个错误**：我把 `/api/stats/requests/raw` 显示的面板叫「原始报文」，
+**命名反了**。桌面端请求详情有四个标签页：
+
+| 标签 | 数据源 |
+|---|---|
+| 请求详情 | 列表行自身 |
+| **路由回放** | `route` 判定（≈ 我 R2 做的追踪） |
+| **预览对话** | **`/api/stats/requests/raw`** —— 两侧正文交给 `wbConversationPreview.render()` 拼成对话预览 |
+| **原始报文** | **`/api/debug/traffic?id=`** —— 请求头 / 请求体 / 响应头 / 响应体**四段** |
+
+所以 ② 那个面板已改名为「**请求与响应正文**」（手机端不搬对话预览渲染器：它要按提供商
+解析消息结构，属于「另做一套对话 UI」的量级；排查问题时真正要看的是原文）。
+
+**★ 一个省事的契约来源（值得记）**：桌面 `ui-islands/src` 里**没有** `debug/traffic` 的
+消费代码，本地也没有 `debug_api.rs` 源码。但**已发布的网关二进制里内嵌了面板的 JS**，
+里面有完整的桥与消费方实现（压缩过但可读），直接挖出：
+
+```js
+getDebugTraffic: function (id) { return call('GET','/api/debug/traffic?id=' + encodeURIComponent(id)); }
+wGe = [{label:'请求头',pick:e=>hL(e.requestHeaders)}, {label:'请求体',…requestBody},
+       {label:'响应头',…responseHeaders}, {label:'响应体',…String(e.responseBody||'')}]
+function SGe(e){ return [e.requestHeaders,e.requestBody,e.responseHeaders,e.responseBody]
+  .some(v => typeof v==='string' ? v.trim()!=='' : v!=null) }   // 四段全空 = 没保存
+function hL(e){ if(e==null) return ''; if(typeof e==='string') return e;
+  try{ return JSON.stringify(e,null,2) }catch{ return '' } }
+```
+
+字段名、四段顺序、标签、归一函数、空态判据**全部照抄**，不是猜的。
+（这个技巧值得复用：**二进制里的面板 JS 是端点契约的权威来源**，比翻 Rust 源码还快。）
+
+**顺带确认**：`terminateStatsRequest(id)` 也在桥里 —— `POST /api/stats/requests/terminate?id=`，
+桌面端的确认文案是「确定终止这条正在转发的请求？上游连接会立即断开，明细将记为
+「请求已被手动终止」。」这条**手机端还没做**，已记进 DEPTH-GAP 的「顺带发现」。
+
+**实现**：
+- 新增 `api/debug-traffic.ts`（契约 + `hasTraffic` / `normalizeTrafficValue` / `trafficSections`，
+  与面板侧同判据同归一）；
+- 新增 `components/TextBlock.tsx`（**抽出来共用**：显示截断前 6000 字符 + 「复制全文」+
+  「复制」走 `copyText` 带 execCommand 兜底），②③ 两个面板都用它；
+- 新增 `components/DebugTrafficPanel.tsx`：按需加载 + URL/提供商/上游状态码一行 +
+  四段 + 「这段没有保存」空态 + `truncated` 提示；
+- 请求详情抽屉里两个面板并列渲染。
+
+**判空口径**：`/api/stats/requests/raw` 与 `/api/debug/traffic` 都可能是「200 但没有内容」
+或 404 —— **两者都归一到 `{found:false}`**，界面上给一句解释（报文只在调试模式开启期间采集、
+也可能已被清理），而不是红色报错。网关的错误文案本身也说了这两种都是正常状态。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,268.92 kB。
+
+#### 六项缺口进度
+
+| # | 内容 | 状态 |
+|---|---|---|
+| ① | 代理订阅 | **撤回**：`/api/subscriptions` 返回 410（`retired_proxy_feature`），功能已下线 |
+| ② | 请求与响应正文（`stats/requests/raw`） | ✅ `fd76921` |
+| ③ | 调试报文（`debug/traffic`） | ✅ 本次 |
+| ④ | 自定义模型增删（`models/custom`） | 待做 |
+| ⑤ | 日志下载（`logs/download`） | 待做 |
+| ⑥ | MCP / Skill 安装（`tools/install-*`） | 待做 |
+
 ## 4. 常用事实
 
 - 手机端 API client：`desktop-tauri/mobile/src/api/client.ts` 的 `apiCall`。
