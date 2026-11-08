@@ -194,6 +194,32 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - **未验证**：Rust supervisor 与 Swift 本环境无工具链，需 CI（ios job）编译确认；
   删库仅删 `config_dir` 下 `agent2api.db*` 与 `*.key`，路径来自 supervisor 的 `home`。
 
+### Phase 3.3：自定义提供商（已完成）
+- 提交：`45976fa43d4943399112f8c4e0f08b2ef9576b02`
+- 上游契约（`api/custom_providers.rs` + `core/custom_providers.rs`）：
+  - `GET  /api/custom-providers`                    → `{ providers: [...] }`（按创建时间升序）
+  - `POST /api/custom-providers`                    → body `{name, protocol, baseUrl, apiKey, ...}`
+    **一次事务建齐提供商 + 首个账号**（失败回滚提供商，不留半成品）
+  - `POST /api/custom-providers/update`             → `{id, name?, protocol?, baseUrl?, enabled?}`（缺省不动）
+  - `POST /api/custom-providers/remove`             → `{id}`（级联删名下账号 + 从各 Key 白名单摘除）
+  - `POST /api/custom-providers/fetch-models`        → `{providerId}`，服务端代理拉上游清单（不落盘）
+  - `POST /api/custom-providers/models`             → `{providerId, models, mappings}`，整表替换
+- 提供商对象字段：`id / name / protocol / baseUrl / enabled / createdAt / models / mappings`
+  （另有 `urlSuffix / headers / anthropicToolType / clientEmulation / balanceScheme` 预置修正项，手机端不展示）
+- 改动文件：
+  - `desktop-tauri/mobile/src/api/custom-providers.ts`（新增）：六个调用 + `PROTOCOL_OPTIONS`
+  - `desktop-tauri/mobile/src/pages/CustomProvidersPage.tsx`（新增）：
+    - 列表：名称 / 协议 / 地址 / 启停 / 编辑 / 拉取模型 / 删除
+    - 新建：名称 + 协议 + Base URL + API Key，一次提交
+    - 编辑：名称 + 协议 + 地址 + 启停
+    - 拉取模型：两步式（拉取不落盘 → 勾选 → 整表保存）
+  - `desktop-tauri/mobile/src/App.tsx`：注册 `custom-providers` 屏幕
+  - `desktop-tauri/mobile/src/lib/routes.ts`：加入 `SCREEN_IDS`
+  - `desktop-tauri/mobile/src/pages/MorePage.tsx`：「更多 → 转发链路」加入口
+- 验证：typecheck / build 通过；`mobile.js` 1093.75 → 1103.71 kB。
+- 备注：删除提供商级联删账号且不可恢复，有二次确认；预置修正项（urlSuffix 等）
+  手机端不做 UI，留给需要它们的人用桌面端。
+
 ### Phase 3.4：请求 / 日志导出（已完成）
 - 提交：`752d9bf960c07756a59960e27c9c63dc3bf1a242`
 - 现状确认：手机端 RequestsPage 已具备时间范围 / 状态 / 提供商 / 重试 / 在途筛选与详情，
