@@ -1566,6 +1566,26 @@ Swift PanelViewController.swift: panelPort / panelBaseURL / syncPanelPort
 时间预算也对过：`set_lan` 内含 stop+start（最多等 15s 健康检查），Swift 请求超时 30s、
 桥超时 35s —— 不会误判超时。
 
+#### 记忆点 · 步骤 27（「CI 过了」到底等于过了哪些检查）
+
+逐层把 CI 的检查点与**本地能跑的等价命令**对上，免得以后用含糊的「CI 过了」当证据：
+
+| 层 | CI 位置（iOS 任务） | 等价本地命令 | 结果 |
+|---|---|---|---|
+| 上游补丁 0006 | **第 4 步** 打补丁 | 本机 `verify-diff.py`（模拟 `git apply`） | ✅ **run 278 第 4 步 success**（离线校验器事前的预测得到独立确认）|
+| supervisor Rust | **第 9 步** 编网关守护进程 | 本机**无 cargo**，跑不了 | 待 |
+| 手机端自检 | 第 14 步 | 同一个 `scripts/check-mobile-ui.py` | ✅ 本地已过 |
+| 手机端类型 + 构建 | 第 15 步 `cd desktop-tauri/mobile && npm run build` | `tsc --noEmit` + `vite build` | ✅ 本地已过 —— 且 `build` 的定义就是 `tsc --noEmit && vite build`，**两层等价** |
+| App（Swift） | **第 16 步** 打 IPA | 本机**无 Xcode**，跑不了 | 待 |
+
+**改动确实会进包**（读命令确认，不是推测）：
+- 第 15 步把新编的 `desktop-tauri/ui/m` **覆盖进上游 checkout** → deb / IPA 打包用的就是我们新编的 `mobile.js`（我的 TS 改动全在这条链上）；
+- 第 9 步的 supervisor 编出来拷到 `out/ios/`，再由 `build-allinone-deb.sh --supervisor …` 打进 deb（我的 Rust 改动在这条链上）；
+- 第 16 步 `xcodebuild` 编 App（我的 Swift 改动在这条链上）。
+
+⇒ 一句话：**手机端那两层本地就能做全等验证；Rust 与 Swift 两层只有 CI 能验**，
+所以涉及这两层时不许说「验证通过」，只能说「等 CI 的第 9 / 16 步」。
+
 #### 六项缺口最终状态（上一批：步骤 16–20）
 
 | # | 内容 | 结果 |
