@@ -44,11 +44,12 @@ const FEEDBACK_LINKS = [
     url: 'https://github.com/aimod-cc/Agent2API/issues/new?template=provider_request.yml',
   },
 ] as const
-import { supervisorStart, supervisorStatus as fetchSupervisorStatus, supervisorStop, type SupervisorStatus } from '../api/supervisor'
+import { supervisorSetLan, supervisorStart, supervisorStatus as fetchSupervisorStatus, supervisorStop, type SupervisorStatus } from '../api/supervisor'
+import { panelStatus } from '../api/client'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
-import { Card, Button, Badge, BadgeDot, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle } from '@ui'
+import { Card, Button, Badge, BadgeDot, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle, Switch } from '@ui'
 import { ClientIdentificationPanel } from '../../../ui-shared/client-identification-panel'
 import { clientIdentificationApi } from '../api/client-identification'
 
@@ -82,6 +83,7 @@ export function SettingsPage() {
   const [cloudSyncOpen, setCloudSyncOpen] = useState(false)
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
   const [supervisorBusy, setSupervisorBusy] = useState('')
+  const [lanBusy, setLanBusy] = useState(false)
   const currentLocale = locale()
   const options = localeOptions()
   const identity = serverIdentity()
@@ -127,6 +129,42 @@ export function SettingsPage() {
       if (serverIdentity() === identity) store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
     } finally {
       if (serverIdentity() === identity) setSupervisorBusy('')
+    }
+  }
+
+  /**
+   * 局域网访问开关。
+   *
+   * **前置条件照抄桌面端**：必须先注册面板管理员 —— 开了之后管理接口就要求
+   * 管理员会话或网关 Key，没有管理员等于把管理面敞开。桌面端是拒绝开启 +
+   * 提示，这里同样**拒绝**并说明原因。
+   *
+   * 「一把启用的网关 Key 都没有」**不是**拦截条件而是**后果**：那种情况下
+   * `/v1` 会拒绝服务，直到创建第一把（见下方说明文字，与桌面端同一口径）。
+   *
+   * supervisor 写完会**按新开关重启网关**，面板端口随之变化；原生壳会重新
+   * 加载页面（`syncPanelPort`），所以这里的提示会被那次重载带走 —— 正常。
+   */
+  const toggleLan = async (next: boolean) => {
+    if (supervisorBusy || lanBusy) return
+    setLanBusy(true)
+    try {
+      if (next) {
+        const status = await panelStatus()
+        if (serverIdentity() !== identity) return
+        if (!status.registered) {
+          store.toast(t('请先在面板注册管理员，再开启局域网访问'), 'err')
+          return
+        }
+      }
+      const updated = await supervisorSetLan(next)
+      if (serverIdentity() !== identity) return
+      if (updated) setSupervisor(updated)
+      store.toast(next ? t('已开启局域网访问，网关正在重启…') : t('已关闭局域网访问，网关正在重启…'))
+    } catch (failure) {
+      if (serverIdentity() === identity) store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      if (serverIdentity() === identity) setLanBusy(false)
     }
   }
 
@@ -455,6 +493,45 @@ export function SettingsPage() {
               <span className='m-k'>{t('控制端口')}</span>
               <span className='m-v m-mono' style={{ fontSize: 11.5 }}>{supervisor.port}</span>
             </div>
+          ) : null}
+          {supervisor && supervisor.lan && supervisor.panelPort ? (
+            <div className='m-row'>
+              <span className='m-k'>{t('面板端口')}</span>
+              <span className='m-v m-mono' style={{ fontSize: 11.5 }}>{supervisor.panelPort}</span>
+            </div>
+          ) : null}
+          {/* 能力探测：只有 supervisor 真的报了 `lan` 字段才显示这一行。
+              老版 daemon、以及控制桥没实现 `lan` op 的形态（例如某些 APK 壳）
+              会自动隐藏 —— 不摆一个按下去必然报错的开关。
+              另外 `packaged` 之外（浏览器 / PWA）没有 supervisor，也不显示。 */}
+          {packaged && supervisor && supervisor.lan !== undefined ? (
+            <div className='m-row'>
+              <span className='m-logo'>
+                <Icon name='globe' />
+              </span>
+              <div className='m-grow'>
+                <div className='m-t1'>{t('局域网访问')}</div>
+                <div className='m-t2'>
+                  {supervisor.lan ? t('已开启 · 网关监听所有网卡') : t('已关闭 · 只监听 127.0.0.1')}
+                </div>
+              </div>
+              <Switch
+                checked={Boolean(supervisor.lan)}
+                disabled={lanBusy || supervisorBusy !== ''}
+                aria-label={t('局域网访问')}
+                onCheckedChange={next => void toggleLan(next === true)}
+              />
+            </div>
+          ) : null}
+          {packaged && supervisor && supervisor.lan !== undefined ? (
+            <p className='m-ck-note'>
+              {t('默认只监听 127.0.0.1，只有本机能访问。开启后网关改听所有网卡，同一局域网内的设备可以把 API 地址指向本机 IP 一起使用。出于安全考虑，开启前必须先注册一个面板管理员：管理接口从此要求管理员会话或网关 Key。管理面板仍留在本机（搬到一个只听回环的独立端口），局域网只看到网关。一把启用的网关 Key 都没有时，转发接口会拒绝服务，直到创建第一把。改动会重启网关生效。')}
+            </p>
+          ) : null}
+          {packaged && supervisor?.lan ? (
+            <p className='m-ck-note'>
+              {t('注意：局域网里只有网关可见；面板搬到独立端口后，若你用的是「网关 Key」方式登录本面板，需要重新填一次 Key。')}
+            </p>
           ) : null}
           <div className='m-ck-actions'>
             <Button size='sm' variant='outline' disabled={Boolean(supervisorBusy) || supervisor?.gateway !== 'stopped'}

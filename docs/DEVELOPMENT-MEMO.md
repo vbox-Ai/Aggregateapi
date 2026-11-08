@@ -1361,6 +1361,53 @@ localStorage + 原生 `a2aSession` 桥，就是为这件事）。
 
 **待办**：①f 手机端设置页加入口。
 
+#### 记忆点 · 步骤 23（①f 手机端局域网开关 —— ① 完成）
+
+**改动**：
+- `api/supervisor.ts`：`SupervisorStatus` 增 `panelPort`/`lan`/`host`；
+  `supervisorCall(op, enabled?)` 支持 `lan` op（**不传 `enabled` 时不能把 `undefined`
+  传进去** —— 原生侧用「有没有这个键」区分读/写）；新增 `supervisorLanState()`、
+  `supervisorSetLan(enabled)`。
+- `pages/SettingsPage.tsx`「服务」卡片：局域网访问开关 + 状态文案 + 说明 + 面板端口行。
+
+**★ 我纠正了自己写在目标里的一条**：目标写的是「前置校验照抄桌面端（已注册管理员 +
+至少一把启用中的网关 Key）」，但**读桌面原文发现只有前者是硬性前置**：
+
+> 出于安全考虑，**开启前必须先注册一个面板管理员**：管理接口从此要求管理员会话或
+> 网关 Key…；**一把启用的网关 Key 都没有时，转发接口也会拒绝服务**，直到创建第一把。
+
+后半句是**后果说明**，不是拦截条件。所以这里只拦截「未注册管理员」，缺 Key 的情况
+用说明文字告知（与桌面端同口径），**不擅自加拦截** —— 加拦截会把「先开局域网、再建
+Key」这种正常顺序也挡住。
+
+**★ 加了能力探测，而不是无条件显示开关**：`packaged` 也覆盖 APK，而 Android 侧的
+控制桥未必实现 `lan` op。所以这一行只在 **supervisor 真的报了 `lan` 字段**时才渲染
+（老版 daemon、没实现的形态自动隐藏）—— 不摆一个按下去必然报错的开关。`status_json`
+无论网关是否在跑都会带 `lan`（它读的是设置文件），所以探测不受启停影响。
+
+**又一次自己审出的错**：`Switch` 没导入就用了 —— 我先前用 `import[^;]*\bSwitch\b`
+检查过「已导入」，但那个正则被同文件里的 **`ThemeSwitch`** 骗了（它在另一行 import 里，
+`import … Switch` 的形式匹配上了）。`tsc` 直接报 `TS2304 Cannot find name 'Switch'`。
+**教训：这类「字符出现过」的检查不能替代类型检查，写完就跑 tsc。**
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；
+`mobile.js` 1,285.23 kB。
+
+#### ① 局域网访问 —— 完成情况
+
+| 子项 | 内容 | 状态 |
+|---|---|---|
+| a | supervisor 读 `AGENT2API_HOST`（默认 127.0.0.1），控制口仍硬编码回环 | ✅ `ee591a8` |
+| b | 持久化设置 + `GET/POST /lan`（loopback-only） | ✅ `ee591a8` |
+| c | 补丁 `0006-panel-bind-host.diff` 加 `AGENT2API_PANEL_HOST` | ✅ `ee591a8` |
+| d | 开启时网关 `0.0.0.0:3065`、面板 `3067` 绑回环、`/status` 报 `panelPort`/`lan`/`host` | ✅ `ee591a8` |
+| e | App 跟随面板端口 + `a2aControl` 的 `lan` op | ✅ `1901b26` |
+| f | 手机端设置页开关（能力探测 + 管理员前置校验 + 桌面警告文案） | ✅ 本次 |
+
+**待 CI 确认（本地无 Rust/Swift 工具链，只能靠 CI）**：①补丁能打上；②supervisor 与
+App 能编译。**待真机核对**：开关打开后局域网设备能否真的访问 `http://<手机IP>:3065/v1`
+（需要真机 + 同网段另一台设备）；面板留在 3067 是否如预期不可从局域网访问。
+
 #### 六项缺口最终状态（上一批：步骤 16–20）
 
 | # | 内容 | 结果 |

@@ -13,6 +13,12 @@ export type SupervisorStatus = {
   supervisor?: string
   gateway?: string
   port?: number
+  /** 管理面板所在端口。默认与 `port` 相同；开了局域网访问后是独立端口（面板绑回环） */
+  panelPort?: number
+  /** 局域网访问开关（默认 false = 只监听 127.0.0.1） */
+  lan?: boolean
+  /** 网关实际监听的地址：`0.0.0.0`（局域网开）或 `127.0.0.1` */
+  host?: string
   heartbeat?: number
 }
 
@@ -36,8 +42,21 @@ function listen(): void {
   })
 }
 
-/** 调 supervisor；返回响应体原文 */
-export function supervisorCall(op: 'status' | 'start' | 'stop' | 'factory-reset'): Promise<string> {
+/**
+ * 调 supervisor；返回响应体原文。
+ *
+ * `op` 与 supervisor 控制口的对应（见 `agent2api-supervisor.rs` 的文件头）：
+ *   · `status` → GET  /status
+ *   · `start`  → POST /start
+ *   · `stop`   → POST /stop
+ *   · `factory-reset` → POST /factory-reset
+ *   · `lan` → 传了 `enabled` 就 POST `/lan?enabled=1|0`（写开关并按需重启网关），
+ *              不传就 GET `/lan`（读开关）
+ */
+export function supervisorCall(
+  op: 'status' | 'start' | 'stop' | 'factory-reset' | 'lan',
+  enabled?: boolean,
+): Promise<string> {
   listen()
   const id = `${Date.now()}-${nextId++}`
   const handlers = (window as Window & {
@@ -49,7 +68,9 @@ export function supervisorCall(op: 'status' | 'start' | 'stop' | 'factory-reset'
   return new Promise<string>((resolve, reject) => {
     waiters.set(id, { resolve, reject })
     try {
-      handlers.postMessage({ op, id })
+      // 只有 `lan` 带参数：不传 `enabled` 时**不能**传 `undefined` 进去，
+      // 原生侧用「有没有这个键」区分读和写。
+      handlers.postMessage(enabled === undefined ? { op, id } : { op, id, enabled })
     } catch (error) {
       waiters.delete(id)
       reject(error instanceof Error ? error : new Error(String(error)))
@@ -64,6 +85,33 @@ export function supervisorCall(op: 'status' | 'start' | 'stop' | 'factory-reset'
     }, 35_000)
   })
 }
+
+/** 读局域网访问开关（GET /lan）；读不到返回 null */
+export async function supervisorLanState(): Promise<boolean | null> {
+  const raw = await supervisorCall('lan')
+  try {
+    return Boolean((JSON.parse(raw) as { lan?: boolean }).lan)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 写局域网访问开关（POST `/lan?enabled=1|0`）。
+ *
+ * supervisor 会**按新开关重启网关**并把新状态回给我们；开了局域网后面板会搬到
+ * 独立端口（绑回环），页面所在的 Origin 随之变化 —— 由原生壳负责重新加载，
+ * 面板不用管。
+ */
+export async function supervisorSetLan(enabled: boolean): Promise<SupervisorStatus | null> {
+  const raw = await supervisorCall('lan', enabled)
+  try {
+    return JSON.parse(raw) as SupervisorStatus
+  } catch {
+    return null
+  }
+}
+
 
 /** 读状态并解析 JSON；解析失败把原文交还给调用方 */
 export async function supervisorStatus(): Promise<{ status: SupervisorStatus | null; raw: string }> {
