@@ -26,7 +26,10 @@ ICON_DEF = re.compile(r'^  ([a-zA-Z0-9_]+):', re.M)
 I18N_CALL = re.compile(r"\bt\('")
 PLACEHOLDER = re.compile(r'\{(\w+)\}')
 NAV_CALL = re.compile(r"store\.(?:push|go)\(\s*'([^']+)'")
-MORE_ENTRY = re.compile(r"\{ id: '([^']+)'")
+# MorePage 的**条目**长这样：`{ id: 'keys', label: t('网关 Key'), icon: 'key' }`；
+# 而分组长这样：`{ id: 'system', title: t('系统'), entries: [...] }`。
+# 用 `label:` 把两者分开 —— 否则分组 id 会被当成跳转目标（第一版就这么误报了）。
+MORE_ENTRY = re.compile(r"\{ id: '([^']+)',\s*label:")
 SCREEN_IDS = re.compile(r"export const SCREEN_IDS = \[(.*?)\]\s*as const", re.S)
 ENDPOINT = re.compile(r"['\"`](/api/[A-Za-z0-9_./-]+)['\"`]")
 

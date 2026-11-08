@@ -835,6 +835,46 @@ git ls-files '*.sh' | xargs -n1 bash -n       # 等价于 CI 的脚本语法闸�
 supervisor 里 `/factory-reset`、`/start`、`/stop`、`/status`、`/heartbeat` 都在；
 **没有预置插件包**（0 个 pack.json）。CDN 恢复后已触发带包重建（run 252）。
 
+#### 记忆点 · 步骤 9（宫格显隐排序 —— 原计划推迟项，用本地偏好解掉）
+
+**先纠正一个判断**：之前我把「宫格布局」推迟，理由是「`sidebarLayout` 键与桌面共用、
+凭猜写进去可能改坏桌面面板」。后来去读了桌面的 `ui-islands/src/islands/sidebar-pane.tsx`，
+它把手写类型放在文件头，形状是明确的：
+
+```ts
+type LayoutGroup = { id: string; label: string; custom: boolean; hidden: boolean; items: string[] }
+type Layout = { groups: LayoutGroup[]; hidden: string[] }
+```
+
+`items` 是**桌面菜单的 key**（由经典脚本 `ui/sidebar-layout.js` 的 `MENUS` 表定义，
+接口挂在 `window.wbSidebarLayout`，读写走 `/api/sidebar-layout` + 本地 localStorage 缓存）。
+
+**于是「用桌面的形状 + 手机的 id」和「在同一个对象里塞 `mobileGrid` 子键」两条路都不好**：
+前者会让桌面侧边栏出现认不出的条目，后者会被桌面 `normalizeLayout()` 重建对象时丢掉
+（手机这边的偏好就会莫名其妙被重置）。
+
+**最终做法（提交见下）**：宫格显隐排序是**本机界面偏好**，与主题、语言同性质，
+所以存 localStorage（`agent2api.mobile.gridLayout`，与既有 `agent2api.mobile.*` 命名一致），
+**完全不碰服务端那个共用键**。代价是不跨设备同步 —— 对手机上的菜单布局偏好是可接受的。
+
+新增：`lib/grid-layout.ts`（纯函数：读/写/重排/显隐/恢复默认）、
+`pages/grid-layout-sheet.tsx`（分组内 ↑↓ 排序 + 逐条显隐开关 + 恢复默认）。
+改动：`MorePage.tsx`（分组加稳定 `id`、按偏好渲染、页头加一个「自定义宫格」按钮）、
+`Icon.tsx`（补 `down`，原来只有 `up`）。
+
+**取舍记录**：只做**条目级**显隐与**组内**排序，不做分组级显隐与自建分组（那是桌面
+侧边栏才需要的层级）；「设置」条目标 `fixed` 不可隐藏 —— 否则用户把入口藏没了就找不回来。
+
+**★ 自检工具第一次真正发挥作用**：新代码写完跑 `scripts/check-mobile-ui.py`，
+它直接抓出两个**编译不报错**的问题：
+1. `Icon` 里没有 `down` —— 「下移」按钮会渲染成空白（补了 path）；
+2. 工具**自己**的误报：它把 MorePage 的分组 id（`{ id: 'system', title: … }`）
+   当成了跳转目标。把条目正则收紧成 `\{ id: 'x',\s*label:` 之后，分组与条目就分开了
+   （条目必有 `label`，分组必有 `title`）。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`scripts/check-mobile-ui.py` exit 0；
+`mobile.js` 1,206.11 kB。
+
 
 ## 4. 常用事实
 

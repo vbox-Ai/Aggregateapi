@@ -8,6 +8,8 @@ import { getPlugins } from '../api/plugins'
 import { useEffect, useState } from 'react'
 import { t } from '../i18n'
 import { Card, Button, SegmentedControl } from '@ui'
+import { GridLayoutSheet } from './grid-layout-sheet'
+import { applyGridPrefs, isHidden, readGridPrefs, type GridPrefs } from '../lib/grid-layout'
 
 /**
  * 更多。
@@ -17,7 +19,7 @@ import { Card, Button, SegmentedControl } from '@ui'
  * 角标（待签数、限流数），不用点进去才知道有事。
  */
 
-type Entry = { id: string; label: string; icon: IconName; badge?: string }
+type Entry = { id: string; label: string; icon: IconName; badge?: string; fixed?: boolean }
 
 export function MorePage() {
   const { session } = useStore()
@@ -58,8 +60,9 @@ export function MorePage() {
   // 本页没有自己的列表请求：下拉只需重拉会话（角标与网关状态都来自它）
   const pull = usePullToRefresh({ onRefresh: () => store.refresh(true) })
 
-  const groups: Array<{ title: string; entries: Entry[] }> = [
+  const groups: Array<{ id: string; title: string; entries: Entry[] }> = [
     {
+      id: 'forward',
       title: t('转发链路'),
       entries: [
         { id: 'checkin', label: t('签到中心'), icon: 'checkin' },
@@ -75,6 +78,7 @@ export function MorePage() {
       ],
     },
     {
+      id: 'diagnose',
       title: t('诊断'),
       entries: [
         { id: 'requests', label: t('请求日志'), icon: 'request', badge: limited ? String(limited) : undefined },
@@ -83,15 +87,31 @@ export function MorePage() {
       ],
     },
     {
+      id: 'system',
       title: t('系统'),
       entries: [
         { id: 'plugins', label: t('网关插件'), icon: 'plugin', badge: session?.accounts?.hiddenAccounts?.total ? String(session.accounts.hiddenAccounts.total) : undefined },
-        { id: 'settings', label: t('设置'), icon: 'settings' },
+        { id: 'settings', label: t('设置'), icon: 'settings', fixed: true },
         { id: 'report', label: t('报表'), icon: 'chart' },
       ],
     },
-    ...(pluginPages.length ? [{ title: t('插件页面'), entries: pluginPages }] : []),
+    ...(pluginPages.length ? [{ id: 'plugins-ui', title: t('插件页面'), entries: pluginPages }] : []),
   ]
+
+  /**
+   * 宫格显隐与排序：本机偏好（localStorage），详见 `lib/grid-layout.ts` 的说明 ——
+   * 不写服务端的 `sidebarLayout` 键，那个键的 items 是桌面菜单 id，混用会互相污染。
+   */
+  const [gridPrefs, setGridPrefs] = useState<GridPrefs>(() => readGridPrefs())
+  const [gridOpen, setGridOpen] = useState(false)
+
+  const renderedGroups = groups
+    .map(group => ({ ...group, entries: applyGridPrefs(group.id, group.entries, gridPrefs) }))
+    .filter(group => group.entries.length > 0)
+  const hiddenCount = groups.reduce(
+    (sum, group) => sum + group.entries.filter(entry => isHidden(gridPrefs, entry.id)).length,
+    0,
+  )
 
   return (
     <div className='m-page' ref={pull.bindRef}>
@@ -99,13 +119,18 @@ export function MorePage() {
       <PageHead
         title={t('更多')}
         subtitle={t('转发链路 · 诊断 · 系统')}
-        actions={<IconButton name='settings' label={t('设置')} onClick={() => store.push('settings')} />}
+        actions={
+          <>
+            <IconButton name='grid' label={t('自定义宫格')} onClick={() => setGridOpen(true)} />
+            <IconButton name='settings' label={t('设置')} onClick={() => store.push('settings')} />
+          </>
+        }
       />
 
       <div className='m-section' style={{ marginTop: 0 }}>
         <Card className='m-card' style={{ padding: '10px 0' }}>
-          {groups.map((group, index) => (
-            <div key={group.title} style={{ padding: index ? '8px 0 4px' : '0 0 4px' }}>
+          {renderedGroups.map((group, index) => (
+            <div key={group.id} style={{ padding: index ? '8px 0 4px' : '0 0 4px' }}>
               <div style={{ padding: '0 20px 4px', fontSize: 11.5, fontWeight: 600, color: 'var(--m-text-3)', letterSpacing: '.02em' }}>
                 {group.title}
               </div>
@@ -228,6 +253,23 @@ export function MorePage() {
           {t('手机端可管理所连接网关的账号、签到与插件，并使用提供商声明的动态登录入口；其余既有添加入口、编辑凭证和改写客户端配置仍需桌面面板。')}
         </Card>
       </div>
+
+      {gridOpen ? (
+        <GridLayoutSheet
+          groups={groups.map(group => ({
+            id: group.id,
+            title: group.title,
+            items: group.entries.map(entry => ({
+              id: entry.id,
+              label: entry.label,
+              icon: entry.icon,
+              fixed: entry.fixed,
+            })),
+          }))}
+          onClose={() => setGridOpen(false)}
+          onChange={setGridPrefs}
+        />
+      ) : null}
     </div>
   )
 }

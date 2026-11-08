@@ -65,6 +65,8 @@ const PATHS: Record<string, string> = {
   info: '<circle cx="12" cy="12" r="8.4"/><path d="M12 11v5.2M12 7.8v.2"/>',
   clock: '<circle cx="12" cy="12" r="8.4"/><path d="M12 7.6V12l3 1.8"/>',
   up: '<path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"/>',
+  // `up` 的镜像（宫格排序用）。图标集是精简的，缺一个就补一个，不搬整套桌面图标。
+  down: '<path d="M12 5v14M6.5 13.5 12 19l5.5-5.5"/>',
   bolt: '<path d="M13.4 3 5.6 13.4h5.2L10.2 21l8.2-10.6h-5.4z"/>',
   globe: '<circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8"/>',
   eye:
