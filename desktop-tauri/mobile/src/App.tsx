@@ -27,6 +27,7 @@ import { CustomProvidersPage } from './pages/CustomProvidersPage'
 import { RoutingPage } from './pages/RoutingPage'
 import { ForwardingPage } from './pages/ForwardingPage'
 import { PromptPage } from './pages/PromptPage'
+import { SanitizePage } from './pages/SanitizePage'
 import type { ScreenId } from './lib/routes'
 import { NavBar } from './components/NavBar'
 import { t } from './i18n'
@@ -73,6 +74,7 @@ const SCREENS: Record<ScreenId, ScreenDef> = {
   'routing': { title: t('路由配置'), component: RoutingPage },
   'forwarding': { title: t('转发设置'), component: ForwardingPage },
   'prompt': { title: t('系统提示词'), component: PromptPage },
+  'sanitize': { title: t('指纹脱敏'), component: SanitizePage },
 }
 
 export function App() {

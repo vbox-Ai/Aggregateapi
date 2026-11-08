@@ -235,6 +235,14 @@ export function SettingsPage() {
             </div>
             <span className='m-chev'><Icon name='chev' /></span>
           </Button>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => store.push('sanitize')}>
+            <span className='m-logo'><Icon name='shield' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('指纹脱敏')}</div>
+              <div className='m-t2'>{t('剥离上游审核黑名单指纹 · 词表')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
         </Card>
       </div>
 

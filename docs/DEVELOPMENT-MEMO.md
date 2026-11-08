@@ -559,7 +559,47 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,142.94 kB。
 
-#### 记忆点 · 步骤 2b（批 2 下半：指纹脱敏）—— 待做
+#### 记忆点 · 步骤 2b（批 2 下半：指纹脱敏）
+
+新增：`mobile/src/api/sanitize.ts`、`mobile/src/pages/SanitizePage.tsx`。
+改动：`lib/routes.ts`（加 `sanitize`）、`App.tsx`（注册 + import）、`SettingsPage.tsx`
+（「转发与内容」组补第三行「指纹脱敏」）。
+
+**★ 这块最危险的地方：三个键的「省略 / null / 空数组」语义互不相同**
+
+| 键 | 省略 | `null` | `[]` |
+|---|---|---|---|
+| `sanitizeBlacklistFingerprints` | 不改 | 类型错误 400 | — |
+| `sanitizeFingerprintRules` | **不改** | **恢复内置词表** | 空词表 |
+| `sanitizeFingerprintProviders` | **不改** | **清空 → 等于全部提供商**（会落盘） | 全部提供商 |
+
+所以：**只想改开关时，body 里绝不能出现 `sanitizeFingerprintProviders`** —— 传 `null`
+不是「不改」，而是「应用到全部提供商」并立刻落盘（上游 `sanitize.rs:92-125`）。
+代码里用「键不存在」表达不改，别用 null 占位。
+
+**其他契约要点**
+- 词表是**整表替换**：改一条也要把完整数组发回去 → 界面上的增/删/改都走
+  `saveRules(整个数组)` 一条路径。
+- 规则 8 个字段：`id`（1–64，`[A-Za-z0-9_-]`，词表内唯一）、`name`（1–128）、
+  `enabled`（默认 true）、`matchType`（`literal`/`regex`，默认 literal）、`pattern`
+  （必填 ≤4096）、`replacement`（默认空串 ≤4096）、`repeat`（默认 false）、`roles`（默认空数组）。
+- **`repeat` 只允许用在「正则匹配 + 替换内容为空」的删除规则上**，界面上按这个条件
+  把开关置灰，切换匹配方式或填了替换内容时自动复位。
+- `roles` 空数组 = 沿用旧规则的全字段行为；指定角色时只改对应消息的正文。
+- `GET` 回 `defaultRules`（内置全量）/`customRules`（true = 当前是自定义词表）/
+  `providerOptions`（含 `count`/`category`/`source`）/`roleOptions`/`limits`。
+- `[]` 的语义是「全部提供商，**包含以后新增的插件与自定义家**」，界面上必须说清（我
+  在「应用提供商」分段里直接写了这句）。
+- 替换文本**不解释 `$` 捕获组**（上游 `regex::NoExpand`）—— 界面注明了这点，免得用户
+  以为能写 `$1`。
+
+**本地校验**：`validateRule()` 与上游 `RuleSet::compile` 同口径（id 格式与唯一性、
+名称/匹配/替换长度、repeat 组合、正则语法用 `new RegExp` 试编译），先在本地拦下，
+用户不必为一眼能看出的错误等一次往返。
+
+**顺手补的**：删除规则加 `confirmDialog`（词表整表替换，删了没有撤销）。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,154.68 kB。
 
 #### 批次进度
 
@@ -567,8 +607,8 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 |---|---|---|
 | 步骤 0 | UI 设计分析 + 契约提取 + 方案 | **已完成**（`67fd625`） |
 | 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | **已完成**（`b9d8206`） |
-| 批 2a | 系统提示词（全局 / 分提供商 / 网关三段） | **已完成**（本次） |
-| 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | 待开始 |
+| 批 2a | 系统提示词（全局 / 分提供商 / 网关三段） | **已完成**（`2324be6`） |
+| 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | **已完成**（本次） |
 | 批 3 | CORS / 机器人校验 / 数据保留 / 存储用量 | 待开始 |
 | 批 4 | models.dev / 宫格布局 / ZCode 版本 / 验证码池 / Cline 头 | 待开始 |
 | 批 5 | 更新出网代理 / beta / GitHub 访问 / 版本信息补全 / 反馈入口 | 待开始 |
