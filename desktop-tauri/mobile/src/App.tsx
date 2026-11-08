@@ -26,6 +26,7 @@ import { PluginPageView } from './pages/PluginPageView'
 import { CustomProvidersPage } from './pages/CustomProvidersPage'
 import { RoutingPage } from './pages/RoutingPage'
 import { ForwardingPage } from './pages/ForwardingPage'
+import { PromptPage } from './pages/PromptPage'
 import type { ScreenId } from './lib/routes'
 import { NavBar } from './components/NavBar'
 import { t } from './i18n'
@@ -71,6 +72,7 @@ const SCREENS: Record<ScreenId, ScreenDef> = {
   'custom-providers': { title: t('自定义提供商'), component: CustomProvidersPage },
   'routing': { title: t('路由配置'), component: RoutingPage },
   'forwarding': { title: t('转发设置'), component: ForwardingPage },
+  'prompt': { title: t('系统提示词'), component: PromptPage },
 }
 
 export function App() {

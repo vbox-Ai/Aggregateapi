@@ -217,6 +217,28 @@ export function SettingsPage() {
       </div>
 
       <div className='m-section'>
+        <SectionHead title={t('转发与内容')} />
+        <Card className='m-card'>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => store.push('forwarding')}>
+            <span className='m-logo'><Icon name='bolt' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('转发设置')}</div>
+              <div className='m-t2'>{t('排队 · 重试 · 超时 · 图片压缩 · 兼容与排障')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => store.push('prompt')}>
+            <span className='m-logo'><Icon name='spark' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('系统提示词')}</div>
+              <div className='m-t2'>{t('模式 · 正文 · 分提供商覆盖 · 网关装配')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
+        </Card>
+      </div>
+
+      <div className='m-section'>
         <SectionHead title={t('接入')} />
         <Card className='m-card'>
           <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setClientIdentification(true)}>

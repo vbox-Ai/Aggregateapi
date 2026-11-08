@@ -526,13 +526,49 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 **待真机验收**：改一个数值只发那一个键；越界被前端拦下；关掉调试模式后重进页仍是关的；
 切服务器后旧响应不覆盖页面。
 
+#### 记忆点 · 步骤 2a（批 2 上半：系统提示词）
+
+新增：`mobile/src/api/prompt.ts`、`mobile/src/pages/PromptPage.tsx`。
+改动：`lib/routes.ts`（加 `prompt`）、`App.tsx`（注册 + import）、`SettingsPage.tsx`
+（**新增「转发与内容」组**，放「转发设置」与「系统提示词」两行 —— 原计划说「设置 → 网关组」
+但这个手机端设置页**没有网关分组**，所以新起一组）。
+
+页面按网关的三层结构组织：
+1. **全局**：`SegmentedControl` 三档（透传 / 自定义 / 追加）+ 正文 `Textarea` + 保存；
+   下方只读展示生效来源（`promptSource`: none/builtin/file/inline）、行数、`promptFileError`。
+2. **分提供商覆盖**：已配的家列成行（模式 · 来源 · 行数），点进抽屉改模式与正文，
+   抽屉里另有「跟随默认」= 发 `promptProviders[id]: null` 把这家的覆盖删掉；「添加」走搜索抽屉。
+3. **网关自带提示词**：只列 `promptProviderOptions[].gatewayBlocks` 非空的家，
+   行内开关 = `promptGateway[id]`（**键缺失 = 默认装**，所以读的时候要
+   `hasOwnProperty` 判断而不是 `=== true`）；「编辑三段」抽屉里三个 `Textarea`
+   （identity/stable/dynamic，段名是上游常量 `GatewayBlocks::FIELDS`）+「恢复官方原文」= 发 null。
+
+**契约要点（上游 `api/prompt.rs`）**
+- `GET/PUT /api/prompt`，**PUT 响应与 GET 同形**，直接用返回值刷新界面，不必再 GET。
+- 写入是**稀疏部分更新**，三个 map 只发要改的那一家：`promptProviders[id]=null` 删这家、
+  `promptGateway[id]=null` 回默认、`promptGatewayText[id]=null` 回官方原文。
+- `promptText` **空串 = 清除**界面正文（不是「不改」），`null` 才是「不改」。
+- 生效口径：只有 `custom`/`append` 才读文件；正文非空时以正文为准（`inline`），否则读文件
+  （`file`），读不到回落内置（`builtin`）；`passthrough` 下 `promptSource` 恒为 `none`。
+- 三段必须**各自成块**（上游按结构校验，并成一段会报错）；动态段支持占位符
+  `{cwd} {platform} {shell} {os_version} {git} {provider} {model}`。
+- 降级状态**不落盘**（进程内），`clearDegrade: true` 是独立动作，与配置写入互不影响。
+
+**手机端取舍**：`promptFile`（提示词文件路径）**不可编辑**，只读展示 —— 那是桌面端指向本地
+文件的能力，手机上没有对应概念。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,142.94 kB。
+
+#### 记忆点 · 步骤 2b（批 2 下半：指纹脱敏）—— 待做
+
 #### 批次进度
 
 | 批次 | 内容 | 状态 |
 |---|---|---|
 | 步骤 0 | UI 设计分析 + 契约提取 + 方案 | **已完成**（`67fd625`） |
-| 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | **已完成**（本次） |
-| 批 2 | 系统提示词 + 指纹脱敏 | 待开始 |
+| 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | **已完成**（`b9d8206`） |
+| 批 2a | 系统提示词（全局 / 分提供商 / 网关三段） | **已完成**（本次） |
+| 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | 待开始 |
 | 批 3 | CORS / 机器人校验 / 数据保留 / 存储用量 | 待开始 |
 | 批 4 | models.dev / 宫格布局 / ZCode 版本 / 验证码池 / Cline 头 | 待开始 |
 | 批 5 | 更新出网代理 / beta / GitHub 访问 / 版本信息补全 / 反馈入口 | 待开始 |
