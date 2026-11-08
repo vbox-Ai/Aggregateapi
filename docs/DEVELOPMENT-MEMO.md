@@ -1316,8 +1316,7 @@ App 一次调用即可，不用自己编排 stop/start 的中间失败态。
 2. 生成补丁时 hunk 头**数错**：`@@ -1027,5` 应为 `-1027,6`（漏了前导上下文行）。
    改成**由 body 反推计数**（`old_n = body 里 ' '/'-' 行数`），不再手算。
 
-**验证（本机没有 git / cargo / rustc —— 这是真实约束，不能假装编译过）**：
-- 写了离线校验器（本机脚本 `verify-diff.py`，未入仓库）：解析 unified diff →
+**验证（本机没有 git / cargo / rustc —— 这是真实约束，不能假装编译过）**：- 写了离线校验器（本机脚本 `verify-diff.py`，未入仓库）：解析 unified diff →
   逐行核对上下文/删除行与目标文件是否**逐字相同** → 重建整文件比 `index` 的
   pre/post blob SHA-1。
 - `0006` 对 `mod.rs@v3.4.2`：**PASS**（`hunk @1027: -6 +29 OK`），pre blob
@@ -1326,6 +1325,21 @@ App 一次调用即可，不用自己编排 stop/start 的中间失败态。
   不是空转；同时反证 v3.4.2 就是既有补丁的目标版本。
 - Rust 编译与补丁实际应用**只能靠 CI 验证**（CI 打补丁失败会 `exit 1` 并提示重新
   生成，不会静默）。
+
+**★ 补一道跨文件的环境变量名核对（能抓住安全后果的那类拼写错）**：
+`AGENT2API_PANEL_HOST` 必须在**两个**地方逐字一致 —— supervisor 设置它、补丁给
+`mod.rs` 加的读者读取它。**如果这里拼错，补丁等于不存在**：面板不会单独绑回环，
+而是跟着 `AGENT2API_HOST` 一起听 `0.0.0.0`，**管理面直接出网**（不是「功能不好用」
+那么轻的后果）。三方核对结果：
+
+| 变量 | supervisor 设 | 谁读 |
+|---|---|---|
+| `AGENT2API_PANEL_HOST` | ✅ | **只有补丁读**（补丁的全部作用就是加这个读者） |
+| `AGENT2API_PANEL_PORT` | ✅ | upstream `bin/agent2api-server.rs` 读 |
+| `AGENT2API_HOST` | ✅ | 同一个 bin 读 |
+
+三者逐字一致，没有拼写错位。顺带确认 upstream bin 还会读 `AGENT2API_ALLOW_NO_KEY`
+（就是「允许无 Key 裸跑」那个开关）。
 
 **待办**：①f 手机端设置页加入口（前置校验照抄桌面端：已注册管理员 + 至少一把启用
 Key）。
