@@ -1530,6 +1530,42 @@ App 能编译。**待真机核对**：开关打开后局域网设备能否真的
 **验证**：与仓库版逐行 diff 只有**本次这三处**（①e 的改动已在仓库里，所以不出现在
 diff 中），无夹带改动；Swift 编译仍待 CI。
 
+#### 记忆点 · 步骤 26（CI 验证点定位 + 符号唯一性核对）
+
+**CI 里到底哪几步验证这次改动**（iOS 任务的步骤清单，从已成功的 run 273 读出）：
+
+| 步 | 名称 | 验证什么 |
+|---|---|---|
+| 4 | 打补丁（插件宿主闸门 + 能力表端点） | **补丁 0006 能否打上**（失败即 `exit 1` 并提示重新生成） |
+| 9 | 编网关守护进程（Mach-O，launchd 用） | **supervisor 能否编译**（`cargo build --bin agent2api-supervisor`） |
+| 14 | 校验手机端自洽（图标 / i18n 参数 / 跳转 / 端点拼写） | 与本地**同一个** `check-mobile-ui.py` |
+| 16 | 打 IPA + 打包 deb（rootless / rootful 两版） | **Swift 能否编译** + 出包 |
+
+⇒ 以后要说「Rust/Swift 编译过了」，就引这几步的日志，别用别的间接证据。
+
+**符号唯一性核对**（来回改多次最容易留下重复声明，只在编译期才炸）：
+
+```
+Rust  supervisor.rs: PANEL_LOOPBACK_PORT / SETTINGS_FILE / settings_path / lan_enabled /
+                     gateway_host / panel_port / is_running / query_flag / set_lan
+                     —— 均 声明 1 次、被引用（无死代码）
+Swift PanelViewController.swift: panelPort / panelBaseURL / syncPanelPort
+                     —— 均 声明 1 次、被引用
+调用点：supervisorCall(op:id:enabled:) 唯一一处调用带上了 enabled（L747）
+```
+
+**① 端到端链路复核**（从点开关到面板换端口，逐跳对过一遍）：
+界面 `supervisorSetLan(true)` → 桥投 `{op:'lan',enabled:true}` → Swift 拼
+`POST /lan?enabled=1`（**拼字符串**，不用 `appendingPathComponent`，否则 `?` 会被编码）
+→ supervisor `query_flag` → `set_lan` 落盘 + stop/start → `start_child` 读开关后设
+`HOST=0.0.0.0` + `PANEL_PORT=3067` + `PANEL_HOST=127.0.0.1` → 网关按补丁把面板绑回环
+→ `/status` 回 `panelPort=3067,lan=true,host=0.0.0.0` → Swift 收到 200 → 派发
+`a2a-control-result` → JS 校验 `updated.lan === next` 通过 → 延时 1s 做
+`syncPanelPort(reloadIfChanged:true)` → WebView 重载到 3067（会话由 `restoreScript`
+在文档加载前注回，不丢登录）。
+时间预算也对过：`set_lan` 内含 stop+start（最多等 15s 健康检查），Swift 请求超时 30s、
+桥超时 35s —— 不会误判超时。
+
 #### 六项缺口最终状态（上一批：步骤 16–20）
 
 | # | 内容 | 结果 |
