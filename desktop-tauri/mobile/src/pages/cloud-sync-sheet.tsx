@@ -7,6 +7,11 @@ import {
   Input,
   Label,
   SegmentedControl,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Sheet,
   SheetBody,
   SheetContent,
@@ -35,6 +40,13 @@ import {
   type CloudSyncSettings,
   type RemoteManifest,
 } from '../api/cloud-sync'
+import {
+  CLOUD_SYNC_DEFAULTS,
+  matchS3Preset,
+  matchWebdavPreset,
+  S3_PRESETS,
+  WEBDAV_PRESETS,
+} from '../lib/cloud-sync-presets'
 
 /**
  * 云同步。
@@ -73,14 +85,23 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
     syncPassword: '',
     enabled: false,
     autoSync: false,
-    remoteRoot: '',
-    profile: '',
+    // 与桌面端 emptyForm() 一致：这两个不是空串，空串会被当成「根目录 / 无档案名」
+    remoteRoot: CLOUD_SYNC_DEFAULTS.remoteRoot,
+    profile: CLOUD_SYNC_DEFAULTS.profile,
   })
+  /** 有未保存改动时拦住上传/下载：那两个动作走的是**已保存**的配置，不是屏幕上这份 */
+  const [dirty, setDirty] = useState(false)
   // 单独存「导入密钥」用的密码，避免与同步密码混在一起
   const [keyPassword, setKeyPassword] = useState('')
 
+  const patch = (changes: Partial<CloudSyncForm>) => {
+    setForm(current => ({ ...current, ...changes }))
+    setDirty(true)
+  }
+
   const applySettings = useCallback((next: CloudSyncSettings) => {
     setSettings(next)
+    setDirty(false)
     setForm(current => ({
       ...current,
       provider: next.provider === 's3' ? 's3' : 'webdav',
@@ -97,8 +118,8 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
       syncPassword: '',
       enabled: next.enabled === true,
       autoSync: next.autoSync === true,
-      remoteRoot: next.remoteRoot || '',
-      profile: next.profile || '',
+      remoteRoot: next.remoteRoot || CLOUD_SYNC_DEFAULTS.remoteRoot,
+      profile: next.profile || CLOUD_SYNC_DEFAULTS.profile,
     }))
   }, [])
 
@@ -163,8 +184,12 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
   })
 
   const upload = async () => {
+    if (dirty) {
+      setError(t('请先保存设置再同步：上传用的是已保存的配置，不是屏幕上这份。'))
+      return
+    }
     const ok = await confirmDialog(
-      t('会把本机的账号与网关 Key 上传到云端，覆盖远端那一份。确定吗？'),
+      t('会把本机的账号与网关配置同步到云端，覆盖远端那一份。确定吗？'),
       { title: t('上传到云端'), confirmText: t('上传'), destructive: true },
     )
     if (!ok) return
@@ -177,8 +202,12 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
   }
 
   const download = async () => {
+    if (dirty) {
+      setError(t('请先保存设置再同步：恢复用的是已保存的配置，不是屏幕上这份。'))
+      return
+    }
     const ok = await confirmDialog(
-      t('会用云端那一份**整体替换**本机的账号与网关 Key（网关会先把当前数据备份到 backups/）。本机现有的账号会被覆盖。确定恢复吗？'),
+      t('会用云端那一份**整体替换**本机的账号与网关配置（网关会先把当前数据备份到 backups/）。本机现有的账号会被覆盖。事件日志、请求明细、调试报文与面板登录态保持不变。确定恢复吗？'),
       { title: t('从云端恢复'), confirmText: t('替换并恢复'), destructive: true },
     )
     if (!ok) return
@@ -186,14 +215,21 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
       try {
         const result = await downloadCloudSync()
         void load()
+        // 安全备份的位置要说出来：用户想知道「万一覆盖错了还能不能回去」
+        const note = result.safetyBackup
+          ? t('，替换前的数据已备份为 {name}', { name: result.safetyBackup })
+          : ''
         return result.deviceName
-          ? t('已恢复来自「{device}」的快照', { device: result.deviceName })
-          : t('已从云端恢复')
+          ? t('已恢复来自「{device}」的快照{note}', { device: result.deviceName, note })
+          : t('已从云端恢复{note}', { note })
       } catch (cause) {
-        // 409 = 远端带密钥封装而本机没有 → 引导去导入密钥
+        // 409 = 远端带了另一把账号密钥而本机没有。这里刻意把「怎么办」写全 ——
+        // 笼统提示「需要密钥」会让用户在本机反复试同步密码，而密钥根本不在这边。
         const status = (cause as { status?: number })?.status
         if (status === 409) {
-          throw new Error(t('云端那份带了独立密钥，请先在下面「导入密钥」里填入同步密码。'))
+          throw new Error(
+            t('远端快照用了另一把账号密钥，且没有携带密钥文件，本机无法解密。请回到原来那台机器重新上传一次（在那边开启密钥随快照上传），或在本机用「导入密钥」填入那份同步密码。'),
+          )
         }
         throw cause
       }
@@ -210,6 +246,8 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
 
   const readiness = remoteReadiness(manifest)
   const status = settings?.status || {}
+  const webdavPreset = matchWebdavPreset(form.webdavBaseUrl)
+  const s3Preset = matchS3Preset(form.s3Region)
 
   return (
     <Sheet open onOpenChange={open => { if (!open) onClose() }}>
@@ -223,6 +261,11 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
 
           {!loading ? (
             <>
+              <Alert variant='default'>
+                <AlertDescription>
+                  {t('同步的是账号、网关配置、自定义提供商、Agent 配置、代理池 / 订阅、签到与余额记录；事件日志、请求明细、调试报文与面板登录态不在范围内（它们是本机的运行痕迹）。上传的账号凭证仍是加密形态，解密用的密钥由「同步密码」单独加密后一并上传——同步密码不会存到云端，换机下载时要重新输入。')}
+                </AlertDescription>
+              </Alert>
               {/* 总开关 */}
               <Card className='m-card'>
                 <div className='m-row'>
@@ -233,20 +276,27 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
                   <Switch
                     checked={form.enabled}
                     aria-label={t('启用云同步')}
-                    onCheckedChange={value => setForm({ ...form, enabled: value === true })}
+                    onCheckedChange={value => patch({ enabled: value === true })}
                   />
                 </div>
                 <div className='m-row'>
                   <div className='m-grow'>
                     <div className='m-t1'>{t('自动同步')}</div>
-                    <div className="m-t2">{t('网关按自己的节奏把变更推到云端')}</div>
+                    <div className="m-t2">
+                      {t('本地账号、配置、签到与余额记录变化后自动上传（合并 1 秒内的连续改动，最长 10 秒传一次；内容没变时不发请求）。')}
+                    </div>
                   </div>
                   <Switch
                     checked={form.autoSync}
                     aria-label={t('自动同步')}
-                    onCheckedChange={value => setForm({ ...form, autoSync: value === true })}
+                    onCheckedChange={value => patch({ autoSync: value === true })}
                   />
                 </div>
+                {!form.enabled ? (
+                  <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, padding: '0 14px 12px' }}>
+                    {t('关闭总开关后，手动上传 / 下载也会被拒绝。')}
+                  </p>
+                ) : null}
               </Card>
 
               {/* 服务商 */}
@@ -261,38 +311,80 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
                   ]}
                   value={form.provider}
                   aria-label={t('服务商')}
-                  onValueChange={value => setForm({ ...form, provider: value as CloudProvider })}
+                  onValueChange={value => patch({ provider: value as CloudProvider })}
                 />
 
                 {form.provider === 'webdav' ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                    <div>
+                      <Label htmlFor='cs-webdav-preset'>{t('预设')}</Label>
+                      <Select
+                        value={webdavPreset.id}
+                        onValueChange={value => {
+                          const preset = WEBDAV_PRESETS.find(item => item.id === value)
+                          // 预设只做一件事：把地址填成模板，之后用户自己改
+                          if (preset?.baseUrl) patch({ webdavBaseUrl: preset.baseUrl })
+                        }}
+                      >
+                        <SelectTrigger id='cs-webdav-preset' aria-label={t('预设')}>
+                          <SelectValue>{webdavPreset.label}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WEBDAV_PRESETS.map(item => (
+                            <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <Field id='cs-webdav-url' label={t('服务器地址')} value={form.webdavBaseUrl}
-                      placeholder='https://dav.example.com/remote.php/dav/files/me'
-                      onChange={value => setForm({ ...form, webdavBaseUrl: value })} />
+                      placeholder='https://dav.example.com/dav/'
+                      onChange={value => patch({ webdavBaseUrl: value })} />
                     <Field id='cs-webdav-user' label={t('用户名')} value={form.webdavUsername}
-                      onChange={value => setForm({ ...form, webdavUsername: value })} />
+                      onChange={value => patch({ webdavUsername: value })} />
                     <Field id='cs-webdav-pass' label={t('密码')} value={form.webdavPassword} type='password'
-                      placeholder={settings?.webdav?.hasPassword ? t('留空 = 沿用已保存的密码') : t('还没设置')}
-                      onChange={value => setForm({ ...form, webdavPassword: value })} />
+                      placeholder={settings?.webdav?.hasPassword ? t('留空 = 沿用已保存的密码') : t('第三方应用密码')}
+                      onChange={value => patch({ webdavPassword: value })} />
                     <Field id='cs-webdav-ua' label={t('自定义 User-Agent（可选）')} value={form.webdavUserAgent}
-                      onChange={value => setForm({ ...form, webdavUserAgent: value })} />
+                      onChange={value => patch({ webdavUserAgent: value })} />
+                    {webdavPreset.hint ? <PresetHint text={webdavPreset.hint} /> : null}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                    <div>
+                      <Label htmlFor='cs-s3-preset'>{t('预设')}</Label>
+                      <Select
+                        value={s3Preset.id}
+                        onValueChange={value => {
+                          const preset = S3_PRESETS.find(item => item.id === value)
+                          if (preset) patch({ s3Region: preset.regionPlaceholder })
+                        }}
+                      >
+                        <SelectTrigger id='cs-s3-preset' aria-label={t('预设')}>
+                          <SelectValue>{s3Preset.label}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {S3_PRESETS.map(item => (
+                            <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <Field id='cs-s3-region' label={t('区域（Region）')} value={form.s3Region}
-                      onChange={value => setForm({ ...form, s3Region: value })} />
+                      placeholder={s3Preset.regionPlaceholder}
+                      onChange={value => patch({ s3Region: value })} />
                     <Field id='cs-s3-bucket' label={t('存储桶（Bucket）')} value={form.s3Bucket}
-                      onChange={value => setForm({ ...form, s3Bucket: value })} />
+                      onChange={value => patch({ s3Bucket: value })} />
                     <Field id='cs-s3-key' label={t('Access Key ID')} value={form.s3AccessKeyId}
-                      onChange={value => setForm({ ...form, s3AccessKeyId: value })} />
+                      onChange={value => patch({ s3AccessKeyId: value })} />
                     <Field id='cs-s3-secret' label={t('Secret Access Key')} value={form.s3SecretAccessKey} type='password'
                       placeholder={settings?.s3?.hasSecretKey ? t('留空 = 沿用已保存的密钥') : t('还没设置')}
-                      onChange={value => setForm({ ...form, s3SecretAccessKey: value })} />
+                      onChange={value => patch({ s3SecretAccessKey: value })} />
                     <Field id='cs-s3-endpoint' label={t('Endpoint（可选）')} value={form.s3Endpoint}
                       placeholder={t('自建 / 兼容服务才需要')}
-                      onChange={value => setForm({ ...form, s3Endpoint: value })} />
+                      onChange={value => patch({ s3Endpoint: value })} />
                     <Field id='cs-s3-ua' label={t('自定义 User-Agent（可选）')} value={form.s3UserAgent}
-                      onChange={value => setForm({ ...form, s3UserAgent: value })} />
+                      onChange={value => patch({ s3UserAgent: value })} />
+                    {s3Preset.hint ? <PresetHint text={s3Preset.hint} /> : null}
                   </div>
                 )}
               </Card>
@@ -305,16 +397,16 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Field id='cs-root' label={t('远程根目录')} value={form.remoteRoot}
                     placeholder={t('留空 = 根目录')}
-                    onChange={value => setForm({ ...form, remoteRoot: value })} />
+                    onChange={value => patch({ remoteRoot: value })} />
                   <Field id='cs-profile' label={t('档案')} value={form.profile}
                     placeholder={t('多套配置用不同档案名区分')}
-                    onChange={value => setForm({ ...form, profile: value })} />
+                    onChange={value => patch({ profile: value })} />
                   <Field id='cs-syncpass' label={t('同步密码')} value={form.syncPassword} type='password'
-                    placeholder={settings?.hasSyncPassword ? t('留空 = 沿用已保存的密码') : t('首次配置必须设置')}
-                    onChange={value => setForm({ ...form, syncPassword: value })} />
+                    placeholder={settings?.hasSyncPassword ? t('留空 = 沿用已保存的密码') : t('至少 8 位，换机下载时需要')}
+                    onChange={value => patch({ syncPassword: value })} />
                 </div>
                 <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 6 }}>
-                  {t('密码框留空保存 = 沿用库里那一份，不会清掉。远端存的是密文，解密密钥留在本机。')}
+                  {t('密码框留空保存 = 沿用库里那一份，不会清掉。远端存的是密文，解密密钥留在本机；换机下载时要重新输入这份同步密码。')}
                 </p>
               </Card>
 
@@ -365,6 +457,14 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
                         </div>
                       </div>
                     ) : null}
+                    {settings.remotePath ? (
+                      <div className='m-card-pad' style={{ borderTop: '1px solid var(--m-line)' }}>
+                        <div className='m-t2' style={{ marginBottom: 2 }}>{t('远端路径')}</div>
+                        <div className='m-mono' style={{ fontSize: 11.5, wordBreak: 'break-all' }}>
+                          {settings.remotePath}
+                        </div>
+                      </div>
+                    ) : null}
                   </Card>
                 </>
               ) : null}
@@ -401,6 +501,12 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
                           <span className='m-v m-mono'>{manifest.appVersion}</span>
                         </div>
                       ) : null}
+                      {manifest.createdAt ? (
+                        <div className='m-row'>
+                          <span className='m-k'>{t('生成时间')}</span>
+                          <span className='m-v'>{manifest.createdAt}</span>
+                        </div>
+                      ) : null}
                       {manifest.incompatibleReason ? (
                         <div className='m-row'>
                           <span className='m-k'>{t('不兼容原因')}</span>
@@ -426,7 +532,7 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
                   </Button>
                 </div>
                 <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 6 }}>
-                  {t('上传会覆盖远端那一份；恢复会用云端那一份整体替换本机账号与网关 Key（替换前网关会自动留下安全备份）。同步范围只有账号与网关 Key，不含日志与整库设置。')}
+                  {t('上传内容含加密后的账号凭证与网关配置，会覆盖远端同一路径下的旧快照；事件日志、请求明细与调试报文不会上传。远端该路径下还没有快照时，本次就是首次上传。')}
                 </p>
               </Card>
 
@@ -493,5 +599,14 @@ function Field({
         onChange={event => onChange(event.currentTarget.value)}
       />
     </div>
+  )
+}
+
+/** 预设自带的说明（坚果云要第三方应用密码、群晖要先开 WebDAV 服务这类） */
+function PresetHint({ text }: { text: string }) {
+  return (
+    <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, margin: 0 }}>
+      {text}
+    </p>
   )
 }
