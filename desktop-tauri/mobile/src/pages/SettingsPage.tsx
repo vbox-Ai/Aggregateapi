@@ -160,6 +160,17 @@ export function SettingsPage() {
       const updated = await supervisorSetLan(next)
       if (serverIdentity() !== identity) return
       if (updated) setSupervisor(updated)
+      // 装包顺序的坑：**新 deb + 旧 App（IPA）**。旧 App 的 `a2aControl` 没有
+      // `lan` 这个 op（它的 switch 认不出来的 op 会退化成 GET /status），所以
+      // 开关看起来能点、实际什么都没发生 —— 更糟的是它也不会跟着换面板端口。
+      // 这里用「要求的状态没生效」把这种情况认出来，明说需要升级 App，
+      // 而不是给一句「已开启」让人以为成功了。
+      // （反过来「旧 deb + 新 App」不会出错：旧 supervisor 的 /status 不带 `lan`，
+      //  界面上这一行根本不会渲染。）
+      if (updated && Boolean(updated.lan) !== next) {
+        store.toast(t('这个 App 版本还不会应用局域网开关（缺少 a2aControl 的 lan op）：请升级 App 后再试'), 'err')
+        return
+      }
       store.toast(next ? t('已开启局域网访问，网关正在重启…') : t('已关闭局域网访问，网关正在重启…'))
     } catch (failure) {
       if (serverIdentity() === identity) store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
