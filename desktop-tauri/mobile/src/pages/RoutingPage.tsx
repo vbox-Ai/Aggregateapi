@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Card, Input, Label, SegmentedControl, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
+import { Button, Card, Input, Label, SegmentedControl, Switch } from '@ui'
 import { PageHead, Empty, ErrorNote, SectionHead } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { serverIdentity } from '../lib/servers'
 import { store } from '../state/store'
 import { t } from '../i18n'
-import { fetchRouting, fetchRoutingQueue, putRouting, type RoutingSettings, type RoutingQueue } from '../api/routing'
+import { fetchRouting, fetchRoutingQueue, putRouting, stickyHint, strategyHint, ROUTING_LIMITS, type RoutingPatch, type RoutingSettings, type RoutingQueue } from '../api/routing'
 import { providerLabel } from '../lib/providers'
 import { RoutingReplayView } from './routing-replay'
 import { RoutingWorkspaceView } from './routing-workspace'
+import { RoutingStickySheet } from './routing-sticky-sheet'
 
 /**
  * 路由配置。
@@ -28,6 +29,7 @@ import { RoutingWorkspaceView } from './routing-workspace'
  */
 export function RoutingPage() {
   const identity = serverIdentity()
+  const [stickyOpen, setStickyOpen] = useState(false)
   const [mode, setMode] = useState<'strategy' | 'workspace' | 'replay'>('strategy')
   const [settings, setSettings] = useState<RoutingSettings | null>(null)
   const [queue, setQueue] = useState<RoutingQueue | null>(null)
@@ -65,19 +67,35 @@ export function RoutingPage() {
   const pull = usePullToRefresh({ onRefresh: () => { void loadSettings(); void loadQueue(model) } })
 
   const save = async () => {
-    if (busy || !draft) return
+    if (busy || !draft || !settings) return
+    // 只发**变过**的键：后端对不认识的键静默忽略，全量发反而容易掩盖键名写错
+    const patch: RoutingPatch = {}
+    if (draft.routingStrategy !== settings.routingStrategy) patch.routingStrategy = draft.routingStrategy
+    if (draft.routingSticky !== settings.routingSticky) patch.routingSticky = draft.routingSticky
+    if (draft.routingFailoverBackoff !== settings.routingFailoverBackoff) patch.routingFailoverBackoff = draft.routingFailoverBackoff
+    if (draft.routingSink !== settings.routingSink) patch.routingSink = draft.routingSink
+    if (draft.routingBreakerEnabled !== settings.routingBreakerEnabled) patch.routingBreakerEnabled = draft.routingBreakerEnabled
+    if (draft.routingBreakerThreshold !== settings.routingBreakerThreshold) patch.routingBreakerThreshold = draft.routingBreakerThreshold
+    if (draft.routingBreakerTimeoutSeconds !== settings.routingBreakerTimeoutSeconds) patch.routingBreakerTimeoutSeconds = draft.routingBreakerTimeoutSeconds
+    if (draft.routingBreakerSuccessThreshold !== settings.routingBreakerSuccessThreshold) patch.routingBreakerSuccessThreshold = draft.routingBreakerSuccessThreshold
+    if (!Object.keys(patch).length) {
+      store.toast(t('没有改动'))
+      return
+    }
     setBusy('save')
     setError('')
     try {
-      const next = await putRouting({
-        strategy: draft.strategy,
-        sticky: draft.sticky,
-        failoverBackoff: draft.failoverBackoff,
-      })
+      const next = await putRouting(patch)
       if (serverIdentity() !== identity) return
       setSettings(next)
       setDraft(next)
-      store.toast(t('路由设置已保存，下一个请求生效'))
+      // 粘性档位一变，后端会把现有会话绑定全部清掉（`clear_route_sticky`），
+      // 所以这句提示得说清「绑定没了」，不能只说「下个请求生效」
+      store.toast(
+        patch.routingSticky
+          ? t('已保存：粘性档位变了，现有会话绑定已被解除')
+          : t('路由设置已保存，下一个请求生效'),
+      )
       void loadQueue(model)
     } catch (cause) {
       if (serverIdentity() === identity) setError(cause instanceof Error ? cause.message : String(cause))
@@ -140,34 +158,85 @@ export function RoutingPage() {
         {error ? <ErrorNote text={error} /> : null}
         {!settings ? <Card className='m-card'><Empty text={t('正在读取路由设置…')} /></Card> : null}
         {settings && draft ? <Card className='m-card m-card-pad'>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <Label htmlFor='routing-strategy'>{t('选路策略')}</Label>
-              <Select value={draft.strategy} onValueChange={value => setDraft({ ...draft, strategy: value as RoutingSettings['strategy'] })}>
-                <SelectTrigger className='w-full' aria-label={t('选路策略')}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='order'>{t('固定顺序（按队列顺序逐个尝试）')}</SelectItem>
-                  <SelectItem value='rotate'>{t('轮转（每个请求换下一位）')}</SelectItem>
-                  <SelectItem value='provider'>{t('按提供商（同一家优先）')}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label>{t('路由策略')}</Label>
+              <SegmentedControl
+                options={[
+                  { value: 'order', label: t('顺序优先') },
+                  { value: 'rotate', label: t('负载均衡') },
+                  { value: 'provider', label: t('家内轮询') },
+                ]}
+                value={draft.routingStrategy}
+                aria-label={t('路由策略')}
+                onValueChange={value => setDraft({ ...draft, routingStrategy: value as RoutingSettings['routingStrategy'] })}
+              />
+              <p className='m-ck-note' style={{ marginTop: 4 }}>{strategyHint(draft.routingStrategy)}</p>
             </div>
             <div>
-              <Label htmlFor='routing-sticky'>{t('会话粘滞')}</Label>
-              <Select value={draft.sticky} onValueChange={value => setDraft({ ...draft, sticky: value as RoutingSettings['sticky'] })}>
-                <SelectTrigger className='w-full' aria-label={t('会话粘滞')}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='off'>{t('关闭')}</SelectItem>
-                  <SelectItem value='on'>{t('开启（同一会话优先用同一个账号）')}</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label>{t('会话粘性')}</Label>
+              <SegmentedControl
+                options={[
+                  { value: 'auto', label: t('自动') },
+                  { value: 'session', label: t('会话内') },
+                  { value: 'turn', label: t('每轮') },
+                  { value: 'off', label: t('关闭') },
+                ]}
+                value={draft.routingSticky}
+                aria-label={t('会话粘性')}
+                onValueChange={value => setDraft({ ...draft, routingSticky: value as RoutingSettings['routingSticky'] })}
+              />
+              <p className='m-ck-note' style={{ marginTop: 4 }}>{stickyHint(draft.routingSticky)}</p>
+              {draft.routingSticky !== settings.routingSticky ? (
+                <p style={{ fontSize: 11.5, color: 'var(--m-warn)', lineHeight: 1.7, marginTop: 4 }}>
+                  {t('改动这一档会解除现有的全部会话绑定（网关会在保存时清空）。')}
+                </p>
+              ) : null}
             </div>
             <div>
-              <Label htmlFor='routing-backoff'>{t('失败后退避（毫秒）')}</Label>
-              <Input id='routing-backoff' type='number' min={0} step={100}
-                value={String(draft.failoverBackoff)}
-                onChange={event => setDraft({ ...draft, failoverBackoff: Number(event.currentTarget.value) || 0 })} />
+              <span className='m-ck-note' style={{ display: 'block', marginBottom: 6 }}>{t('粘滞绑定')}</span>
+              <Button variant='outline' size='sm' onClick={() => setStickyOpen(true)}>
+                {t('查看与解除')}
+              </Button>
             </div>
+          </div>
+
+          <div style={{ marginTop: 16, fontSize: 12, fontWeight: 600 }}>{t('自愈保护')}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+            <ProtectionSwitch
+              label={t('失败退避')} hint={t('转发失败的账号暂时休息，避免连续请求反复撞到同一故障。')}
+              checked={draft.routingFailoverBackoff}
+              onChange={value => setDraft({ ...draft, routingFailoverBackoff: value })}
+            />
+            <ProtectionSwitch
+              label={t('限流垫底')} hint={t('曾被限流的账号暂时排到队尾，三十分钟后或转发成功后恢复。')}
+              checked={draft.routingSink}
+              onChange={value => setDraft({ ...draft, routingSink: value })}
+            />
+            <ProtectionSwitch
+              label={t('熔断保护')} hint={t('连续失败达到阈值时暂时让位，恢复后再重新参与。')}
+              checked={draft.routingBreakerEnabled}
+              onChange={value => setDraft({ ...draft, routingBreakerEnabled: value })}
+            />
+            {draft.routingBreakerEnabled ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 2 }}>
+                <NumberField
+                  id='routing-breaker-threshold' label={t('失败阈值')} value={draft.routingBreakerThreshold}
+                  min={ROUTING_LIMITS.breakerThreshold.min} max={ROUTING_LIMITS.breakerThreshold.max}
+                  onChange={value => setDraft({ ...draft, routingBreakerThreshold: value })}
+                />
+                <NumberField
+                  id='routing-breaker-timeout' label={t('熔断时长（秒）')} value={draft.routingBreakerTimeoutSeconds}
+                  min={ROUTING_LIMITS.breakerTimeoutSeconds.min} max={ROUTING_LIMITS.breakerTimeoutSeconds.max}
+                  onChange={value => setDraft({ ...draft, routingBreakerTimeoutSeconds: value })}
+                />
+                <NumberField
+                  id='routing-breaker-success' label={t('恢复阈值')} value={draft.routingBreakerSuccessThreshold}
+                  min={ROUTING_LIMITS.breakerSuccessThreshold.min} max={ROUTING_LIMITS.breakerSuccessThreshold.max}
+                  onChange={value => setDraft({ ...draft, routingBreakerSuccessThreshold: value })}
+                />
+              </div>
+            ) : null}
           </div>
         </Card> : null}
       </div>
@@ -198,6 +267,81 @@ export function RoutingPage() {
       </div>
         </>
       ) : null}
+
+      {stickyOpen ? <RoutingStickySheet model={model || undefined} onClose={() => setStickyOpen(false)} /> : null}
+    </div>
+  )
+}
+
+/** 自愈保护的一个开关（label + 说明 + Switch） */
+function ProtectionSwitch({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string
+  hint: string
+  checked: boolean
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className='m-t1' style={{ fontSize: 12.5 }}>{label}</div>
+        <div className='m-t2' style={{ lineHeight: 1.6 }}>{hint}</div>
+      </div>
+      <Switch
+        checked={checked}
+        aria-label={label}
+        onCheckedChange={value => onChange(value === true)}
+      />
+    </div>
+  )
+}
+
+/**
+ * 数值字段。
+ *
+ * 失焦时才夹到范围内：边输边夹会把「1」这种中间态改成「10」，
+ * 用户想输 15 就会打成 105。后端范围见 `api/routing.ts` 的 ROUTING_LIMITS。
+ */
+function NumberField({
+  id,
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: number
+  min: number
+  max: number
+  onChange: (value: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => { setDraft(String(value)) }, [value])
+  return (
+    <div>
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type='number'
+        inputMode='numeric'
+        min={min}
+        max={max}
+        value={draft}
+        onChange={event => setDraft(event.currentTarget.value)}
+        onBlur={() => {
+          const parsed = Number(draft)
+          const clamped = Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : value
+          setDraft(String(clamped))
+          if (clamped !== value) onChange(clamped)
+        }}
+      />
+      <p className='m-ck-note' style={{ marginTop: 2 }}>{t('范围 {min}~{max}', { min, max })}</p>
     </div>
   )
 }

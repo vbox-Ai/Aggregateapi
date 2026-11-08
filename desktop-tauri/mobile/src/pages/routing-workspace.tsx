@@ -79,8 +79,8 @@ type Workspace = {
   providers?: WorkspaceProvider[]
   accounts?: WorkspaceAccount[]
   queue?: { strategy?: string; sticky?: string; pickedId?: string; ordered?: WorkspaceQueueEntry[]; blocked?: WorkspaceQueueEntry[] }
-  settings?: RoutingSettings & { routingStrategy?: string; routingSticky?: string }
-  globalSettings?: RoutingSettings & { routingStrategy?: string; routingSticky?: string }
+  settings?: RoutingSettings
+  globalSettings?: RoutingSettings
   accountStates?: Record<string, { model?: string; resetAt?: number; limitedModels?: number }>
   metrics?: {
     available?: boolean
@@ -154,8 +154,8 @@ export function RoutingWorkspaceView() {
   const states = data?.accountStates || {}
   const limited = Object.entries(states).filter(([, value]) => (value?.limitedModels || 0) > 0)
   const runningCount = (id: string) => (metrics.accountRunning?.[id] || 0) + (metrics.accountConnections?.[id] || 0)
-  const strategy = data?.settings?.routingStrategy || data?.settings?.strategy || '—'
-  const sticky = data?.settings?.routingSticky || data?.settings?.sticky || '—'
+  const strategy = data?.settings?.routingStrategy || '—'
+  const sticky = data?.settings?.routingSticky || '—'
   const globallyBlocked = globalMode && (!data?.globalAccountControl || Boolean(data?.legacyGlobalParticipation))
 
   return (

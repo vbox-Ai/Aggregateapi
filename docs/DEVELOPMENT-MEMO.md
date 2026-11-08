@@ -999,6 +999,62 @@ S3 按 `region` 与预设占位区域匹配；匹配不上就是「自定义」�
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,235.81 kB。
 
+#### 记忆点 · 步骤 13（路由 R3 + **修掉一个已发布的静默 bug**）
+
+**★ 先说 bug：我的「策略与预演」半边从上线起就是坏的。**
+
+做 R3 时顺手核对桌面端粘性档位，发现它写的是 `'turn'`，而我的类型是
+`'off' | 'on'` —— **`on` 这个值根本不存在**。于是去读本地那份 Rust 源码
+（`upstream-v3.4.2/routing_api.rs`），才发现更严重的问题：
+
+`PUT /api/routing` 读的是 `config::KEY_ROUTING_*` 这组常量，**形状是**：
+
+```
+routingStrategy · routingSticky · routingFailoverBackoff · routingSink
+routingBreakerEnabled · routingBreakerThreshold · routingBreakerTimeoutSeconds
+routingBreakerSuccessThreshold
+```
+
+而我写的是 `strategy` / `sticky` / `failoverBackoff` / `breakerTimeout` / `breakerSuccess`。
+后端对**不认识的键静默忽略**（`RoutingPatch::default()` 全 None）—— 所以：
+
+- 保存「成功」但什么都没改（前端还弹了「已保存」）；
+- 读回来没有对应字段可填，下拉是空的；
+- `failoverBackoff` 我当**毫秒数**渲染，实际它是**布尔开关**（「失败退避」）。
+  按毫秒发一个数字，后端会回 400「必须是布尔值」。
+
+**核对方法（可复用）**：把已发布二进制 `agent2api-server` 抠出来做字符串比对——
+`routingStrategy` 等 8 个键**全在**，而 `failoverBackoff` / `breakerTimeout` /
+`breakerSuccess` **全都不在**。加上源码里的校验分支，两条独立证据锁定。
+
+**改对了什么**（`api/routing.ts` 重写 + `RoutingPage` 策略卡片重写）：
+- 键名换成 8 个 `routing*`；
+- 粘性档位 `auto / session / turn / off`（不是 `on`），各带说明；
+  桌面端的档位说明我也搬过来了（`auto` = 五分钟没往来即释放、客户端会话标识优先、
+  内容哈希兜底；`session` = 最长六小时）；
+- **补上原本完全缺失的「自愈保护」**：失败退避 / 限流垫底 / 熔断保护三个开关，
+  熔断开启后才是三个数值（阈值 1~20、时长 10~600 秒、恢复阈值 1~10）；
+- 保存改成**只发变过的键**：后端既然静默忽略未知键，全量发反而会掩盖键名写错
+  （这次就是被掩盖了）；
+- 策略/粘性用 `SegmentedControl`（与桌面端同形态），标签也照抄
+  （顺序优先 / 负载均衡 / 家内轮询）。
+
+**一个必须写进提示的副作用**：粘性档位**一变**，后端会 `clear_route_sticky(None, None)`
+清空全部会话绑定。所以保存后的 toast 我改成「粘性档位变了，现有会话绑定已被解除」，
+而不是笼统的「下个请求生效」—— 否则用户会以为绑定还在。
+
+**R3 会话粘滞（新增 `pages/routing-sticky-sheet.tsx`）**
+- `GET /api/routing/sticky?model=` → `{entries, now, sticky}`；
+  `POST /api/routing/sticky/clear`，三种粒度：`{id, model}` / `{model}` / `{all:true}`。
+- **倒计时按网关时间算**：记一份 `offset = 网关now - 本机now`，每秒用 `本机now + offset`
+  走表。手机时钟与网关差几分钟很常见，直接用 `Date.now()` 会让剩余时间忽长忽短。
+- **「没有绑定」不等于「坏了」**：档位是 `turn` / `off` 时网关本来就不保留跨请求绑定，
+  界面上明说这一句，否则用户会以为功能没生效。
+- 入口放在「策略与预演」的粘滞档位下面（桌面端也是从配置面板打开这个对话框）。
+- 单条解除不发确认框（可撤销性高、列表里逐条点），全部解除才二次确认 —— 与桌面端一致。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,245.06 kB。
+
 
 ## 4. 常用事实
 
