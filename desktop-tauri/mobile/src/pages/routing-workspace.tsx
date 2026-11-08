@@ -8,6 +8,7 @@ import { providerLabel } from '../lib/providers'
 import { t } from '../i18n'
 import { apiCall } from '../api/client'
 import type { RoutingSettings } from '../api/routing'
+import { RoutingProfileSheet } from './routing-profile'
 
 /**
  * 工作空间：此刻的路由状态（只读）。
@@ -105,6 +106,7 @@ export function RoutingWorkspaceView() {
   const [data, setData] = useState<Workspace | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -178,6 +180,11 @@ export function RoutingWorkspaceView() {
             ? t('看的是全局默认：账号启停立即生效，路由配置保存后生效。')
             : t('看的是这个模型的独立配置：保存后才会影响真实请求。')}
         </p>
+        <div style={{ marginTop: 10 }}>
+          <Button variant='outline' size='sm' onClick={() => setProfileOpen(true)}>
+            {t('编辑参与范围')}
+          </Button>
+        </div>
       </Card>
 
       {error ? <div style={{ marginTop: 10 }}><ErrorNote text={error} /></div> : null}
@@ -384,9 +391,16 @@ export function RoutingWorkspaceView() {
           </div>
 
           <p style={{ fontSize: 11, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 10 }}>
-            {t('这一屏是只读的：账号的启用开关在「账号」页改，路由的参与范围在「策略与预演」里保存后生效。')}
+            {t('这一屏是只读的：账号的启用开关在「账号」页改，参与范围点上面的「编辑参与范围」（保存后生效）。')}
           </p>
         </>
+      ) : null}
+
+      {profileOpen ? (
+        <RoutingProfileSheet
+          scope={scope}
+          onClose={() => { setProfileOpen(false); void load() }}
+        />
       ) : null}
     </div>
   )
