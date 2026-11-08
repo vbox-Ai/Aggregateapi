@@ -65,6 +65,7 @@ export function MorePage() {
         { id: 'checkin', label: t('签到中心'), icon: 'checkin' },
         { id: 'models', label: t('模型管理'), icon: 'model' },
         { id: 'agent', label: t('Agent 配置'), icon: 'agent' },
+        { id: 'custom-providers', label: t('自定义提供商'), icon: 'model' },
         { id: 'tools', label: t('工具服务'), icon: 'tools' },
         { id: 'proxies', label: t('网络代理'), icon: 'proxy' },
         { id: 'keys', label: t('网关 Key'), icon: 'key' },

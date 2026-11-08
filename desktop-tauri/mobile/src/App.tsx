@@ -23,6 +23,7 @@ import { ServersPage } from './pages/ServersPage'
 import { CheckinPage } from './pages/CheckinPage'
 import { PluginsPage } from './pages/PluginsPage'
 import { PluginPageView } from './pages/PluginPageView'
+import { CustomProvidersPage } from './pages/CustomProvidersPage'
 import type { ScreenId } from './lib/routes'
 import { NavBar } from './components/NavBar'
 import { t } from './i18n'
@@ -65,6 +66,7 @@ const SCREENS: Record<ScreenId, ScreenDef> = {
     page: store.get().route.params?.page || '',
     onBack: () => store.back(),
   }) },
+  'custom-providers': { title: t('自定义提供商'), component: CustomProvidersPage },
 }
 
 export function App() {
