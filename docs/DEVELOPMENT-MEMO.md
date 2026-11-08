@@ -2148,3 +2148,109 @@ var/jb/usr/local/{bin,share/agent2api}/ui/m/mobile.js         ← 面板界面�
 ②**实测在二进制里真的能查到**。这次实测可用的：`panelPort`、`panelBaseURL`、
 `supervisor.json`、`AGENT2API_PANEL_PORT`、`missing enabled=0|1`、`AGENT2API_PANEL_HOST`、
 两条 UI 文案；**不可用**：`/status`、`/lan?enabled=`、`lan access = ` 这类短串/插值片段。
+
+## 附录 A · iOS 运营要点（并入自 `docs/HANDOVER.md`，该文件已删除）
+
+> 2026-11-09 整理：原 `HANDOVER.md`（2026-11-06，`18464f4`）里的**运营类**知识并入本节，
+> 它的**分析类**内容（当时的功能缺口）已由 `docs/mobile-ui/` 下三份新文档承接。
+> 之所以要并进来：这些是"删掉就会丢"的东西——补丁清单、版本规则、发布流程、运行时布局、
+> 排障入口，记忆点其余部分都没有覆盖。
+
+### A.1 发布流程
+
+```
+Actions → build → Run workflow
+  only    = store      # 只跑 plugins + ios + release
+  publish = true       # 只有 true 才写 Release；push 触发的构建不发布
+```
+
+依次：`plugins`（编两个 iOS 插件包）→ `ios`（deb + IPA，预置插件）→
+`release`（发快照 tag `ios-YYYYMMDD-b<run>`，并覆盖 `v{版本}` / `web-v{版本}` 两个插件通道）。
+
+> **`make_latest` 只能给一个**：快照 `ios-*` 必须 `false`，`v{version}` 必须 `true`。
+> 否则网关 stable 通道查 `/releases/latest` 解析不到 `v{version}`，
+> 面板会显示「当前网关平台暂无插件包」。
+
+### A.2 产物与命名契约
+
+```
+out/ios/Agent2API-<ver>-{rootless,rootful}-iphoneos-{arm64,arm64e}.deb   # 4 只，各 ~22 MB
+out/ios/Agent2API-client.ipa  /  Agent2API-standalone.ipa                 # 只在 Actions artifact 里
+out/packs/agent2api-providers-<pv>-aarch64-unknown-linux-gnu.zip
+out/packs/agent2api-web-providers-<pv>-aarch64-unknown-linux-gnu.zip
+```
+
+命名与路径是**契约**，改动前先看上游 `update.rs` 的 `asset_name()`：
+
+- 资产名 = `{pack_id}-{version}-{target}.zip`；iOS 上 `target` **恒为**
+  `aarch64-unknown-linux-gnu`（网关的 `target_triple()` 对非 win/mac 都返回它）；
+- 插件通道 tag：`v{version}`（providers）、`web-v{version}`（web）。
+
+### A.3 版本规则（最容易错）
+
+| 版本 | 来源 | 用途 |
+|---|---|---|
+| 上游 tag（当前 `v3.4.2`） | `aimod-cc/Agent2API` | 代码基线；每次构建自动取最新 |
+| **`CURRENT_VERSION`** | 上游 `agent2api-server` 的 `CARGO_PKG_VERSION` | 网关自己的版本；**插件包版本必须 ≥ 它**，否则整包不加载、也装不上 |
+| deb / App 的 `3.4.<run>` | 插件清单 `major.minor` + GitHub run_number | **只是构建戳**，与兼容性无关 |
+| App 顶栏括号里的 sha | 本仓库提交 | 定位构建来源 |
+
+`scripts/align-plugin-version.py` 在 plugins / ios / release 三处作业里跑，保证清单版本不低于上游 tag。
+
+### A.4 运行时布局要点
+
+```
+程序（跟着"根"走）
+  <root>/Applications/Agent2API.app
+  <root>/usr/local/bin/agent2api-server          ← daemon，以 root 运行
+  <root>/Library/LaunchDaemons/com.chiyu.agent2api.plist
+  <root>/usr/local/share/agent2api/{ui,packs}
+
+数据（固定，不跟根走）
+  /var/mobile/Library/agent2api/                 ← AGENT2API_PROXY_HOME / HOME
+      agent2api.db  server.log  plugins/
+```
+
+- **daemon 以 root 运行**（plist 不设 `UserName`）；签名用 `plugin-entitlements.plist`
+  （`platform-application` + `no-sandbox` + `get-task-allow` + `skip-library-validation`）。
+  曾设 `mobile` → RootHide 上建不了库，日志报 `[Storage] 数据库不可用`。
+- **数据必须放 `/var/mobile`**：`.jbroot-*` 由 root 创建且名字随机，放里面既读不动、重装还丢。
+- **插件预置**：deb 里带 `usr/local/share/agent2api/packs/{id}/{version}/` + `plugins.json`，
+  `postinst` 拷进 `$DATA/plugins/` 并**写注册表**——注册表是网关判断"装了什么"的唯一来源
+  （它不会自己扫目录）。由 `scripts/stage-plugin-packs.py` 生成。
+- **机器人校验默认关**（`AGENT2API_CAPTCHA_ENABLED=0`）；面板默认只监听 `127.0.0.1`，
+  真正的门槛是账号口令。
+
+### A.5 六个补丁（0001–0005 为既有，0006 为本轮新增）
+
+| 补丁 | 目标 | 一句话 |
+|---|---|---|
+| `0001-plugin-host-ios-exec-gate` | `plugin_host` | iOS 上允许 spawn 插件进程（闸门） |
+| `0002-host-capabilities-endpoint` | `api/host.rs` 等 | 面板拿宿主能力表 |
+| `0003-plugin-index-own-repo-and-no-rollback` | `update.rs` / `packages.rs` | 索引指向本仓库；失败不回滚只记日志 |
+| `0004-plugin-store-own-repo-unsigned` | `update.rs` / `compatibility.rs` / `policy.rs` | 签名要求改为读文档字段；release 一律列全量；镜像通道不再强制验签；补齐路径放行未签名包 |
+| `0005-altcha-secret-stable` | `altcha.rs` | 把 HMAC 密钥固定为进程内唯一（修"前端验证成功、服务端说无效"） |
+| `0006-panel-bind-host.diff` | `server/mod.rs` | 加 `AGENT2API_PANEL_HOST`，使面板能单独钉在回环（本轮 ①c） |
+
+打补丁是 `git apply --3way`，失败会 **fail loudly**（上游改了这些文件就要重新生成补丁）。
+
+### A.6 排障第一步（不用 SSH）
+
+**永远先看 Sileo 的安装日志**：`postinst` 会打印 jbroot、布局、`launchctl bootstrap` 的
+原始报错、`launchctl print` 前 12 行、`ls -l $DATA`、`server.log` 末 60 行。
+
+再看（用 Filza）：`/var/mobile/Library/agent2api/server.log` ← daemon 自己的日志（首选）。
+
+### A.7 历史踩坑摘要（原样保留，都能复现）
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 面板「暂无插件包」 | `/releases/latest` 被 `ios-*` 快照占用 | 补丁 0004 改为一律列全量 + 快照 `make_latest:false` |
+| 2 | 下载完爆红「未通过官方签名校验」 | 镜像通道无条件验签 + 自建包无签名 | 0004 去掉该条件 |
+| 3 | 「需要补齐插件 / 已加载 0 家」 | 插件版本 < 网关 `CURRENT_VERSION` | `align-plugin-version.py` + 预置 |
+| 4 | CI 只有 Windows 红 | 上游 NSIS 模板缺 `RestartManager` 宏 | 改 `--bundles msi`，打包 `continue-on-error` |
+| 5 | macOS 作业 1 秒被取消 | `macos-14` 标签被下线 | 三个 macOS 作业改 `macos-15` |
+| 6 | iOS 被插件作业带崩 | `needs: [plugins]` + 依赖被取消 | ios `if: always()` |
+| 7 | 前端"验证成功"但服务端"无效" | `altcha::secret()` 不可用时每次随机 | 0005 `OnceLock` + 幂等补写 |
+| 8 | 「网关未响应 3065」 | RootHide 上 plist 写死 `/usr/local/...` | postinst 解 jbroot 并改写 plist |
+| 9 | 「数据库不可用」 | 数据在 jbroot 里 + daemon 以 mobile 跑 | 数据固定 `/var/mobile`；daemon 改 root |
