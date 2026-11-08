@@ -194,6 +194,25 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - **未验证**：Rust supervisor 与 Swift 本环境无工具链，需 CI（ios job）编译确认；
   删库仅删 `config_dir` 下 `agent2api.db*` 与 `*.key`，路径来自 supervisor 的 `home`。
 
+### Phase 3.6：系统 / 服务控制（已完成）
+- 提交：`a64a2f87fc21f352e0534df78bc43ef838b25f72`
+- supervisor 控制口契约（`agent2api-ios/ios-ffi/src/bin/agent2api-supervisor.rs`）：
+  `GET /status`、`POST /start`、`POST /stop`、`POST /heartbeat`、`POST /factory-reset`
+  —— 服务控制复用了已有三条，**没改 Rust**。
+- 改动文件：
+  - `agent2api-ios/app/Agent2API/PanelViewController.swift`：
+    - `factoryResetSupervisor()` → 泛化为 `supervisorCall(op:id:)`，按 `op` 选方法与路径
+    - 结果经 `deliverSupervisorResult` 回给 JS（`a2a-control-result` 事件，带 id 配对）
+  - `desktop-tauri/mobile/src/api/supervisor.ts`（新增）：
+    - `supervisorCall(op)`：走 `webkit.messageHandlers.a2aControl`，无桥时如实报错
+    - `supervisorStatus()` / `supervisorStart()` / `supervisorStop()` / `supervisorFactoryReset()`
+  - `desktop-tauri/mobile/src/pages/SettingsPage.tsx`：新增「服务」分组
+    （读数 + 启动/停止/刷新），与服务器切换绑定，读不到静默
+  - `desktop-tauri/mobile/src/pages/LoginPage.tsx`：重置改用共享的 `supervisorFactoryReset`，
+    删掉本地 `callSupervisor`
+- 验证：typecheck / build 通过；`mobile.js` 1087.49 → 1090.50 kB。
+- 备注：`a2aControl` 的 `id` 配对让并发调用互不覆盖；原生侧 35s 无回音判超时。
+
 ## 3. 下一步
 
 ### Phase 1 遗漏检查（已完成复核）
@@ -215,11 +234,33 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 4. **Swift 改动未在本环境编译**：`PanelSessionStore.swift` / `PanelViewController.swift`
    需要在 iOS 构建（CI 或本机 xcodebuild）里验证；本环境只能做静态检查。
 
+### 已知缺口（2026-11-08 复核，前 3 条已解决）
+1. ~~账号逐账号/整库 JSON 导出~~ **已解决**（Phase 2.4）：`GET /api/accounts/export` +
+   `POST /api/accounts/export-files`，手机端直接落盘。
+2. ~~已有账号凭证手工编辑~~ **已解决**（Phase 2.4）：「重新粘贴凭证」= merge 更新同身份账号；
+   注意网关的 `PATCH /{id}` **不含凭证字段**，凭证只能靠导入。
+3. ~~重置管理员~~ **已解决**（Phase 2.5）：supervisor 新增 `POST /factory-reset`
+   （删库重注册），App 侧走 `a2aControl` 桥。
+4. **Swift 改动未在本环境编译**：`PanelSessionStore.swift` / `PanelViewController.swift`
+   需要在 iOS 构建（CI 或本机 xcodebuild）里验证；本环境只能做静态检查。
+5. **Rust supervisor 未在本环境编译**：无 rustc；`/factory-reset` 与既有 `/start|/stop|/status`
+   同一套 `handle()` 分发，逻辑已人工复核。
+
+### 已完成（Phase 2 与 Phase 3 起步）
+- Phase 2.1 插件设置：检查计划 / 更新通道 / 自动更新 / 镜像加速 / 签名策略 / 插件日志入口
+  —— 手机端已有，无需改动。
+- Phase 2.2 插件自定义 UI 页面 —— **已完成**（`cf0ab23`）
+- Phase 2.3 Provider 文档与日志 —— **已完成**（`485b223`）
+- Phase 2.4 账号导出 + 重新粘贴凭证 —— **已完成**（`531e7f4`）
+- Phase 2.5 忘记密码 → 删库重注册 —— **已完成**（`85327f8`）
+- Phase 3.6 服务控制 —— **已完成**（`a64a2f8`）
+
 ### 待继续
-- Phase 2.1：插件设置完整化（镜像/签名/更新策略已在上游，手机端已有入口；可补 GitHub Token 之外的字段）
-- Phase 2.2：插件自定义 UI 页面（动态路由 + iframe 容器）
-- 然后进入 Phase 3：路由、MCP/Skill、自定义提供商、日志高级能力、批量操作
-- Phase 4：移除桌面面板按钮和 `/` 入口
+- Phase 3.5 账号批量/分组（批量启停、删除、备注、排序）
+- Phase 3.4 日志/请求高级能力（请求重放、导出）
+- Phase 3.3 自定义提供商
+- Phase 3.1 路由配置
+- Phase 4 移除桌面面板按钮和 `/` 入口
 
 ### 构建管线修正（2026-11-08，提交 a5195a0）
 发现两个会让改动“不生效/构建失败”的遗漏，已修：
