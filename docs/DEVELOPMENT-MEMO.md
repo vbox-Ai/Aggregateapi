@@ -639,6 +639,52 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 **观察到的事实**：CI 的 macOS runner 排队很久（批 1 的那次运行在推送后 20 分钟仍未开始
 编译），所以**推送与 CI 并行推进**——每批推完立刻接着做下一批，等运行结束后再统一核对。
 
+#### 记忆点 · 步骤 4（批 4：模型元数据 + 插件出站设置）
+
+新增：`api/model-metadata.ts`、`api/plugin-settings.ts`、
+`pages/model-metadata-sheet.tsx`、`pages/plugin-settings-sheet.tsx`。
+改动：`SettingsPage.tsx` —— 「转发与内容」补「模型元数据（models.dev）」，
+「接入」补「插件出站设置」。
+
+**① models.dev 元数据（`api/model_meta.rs`）**
+- `GET/PUT /api/models/metadata` → `{source, updatedAt, count, modelsDevEnabled}`；
+  `source` 三个字面值 `builtin`（内嵌快照）/`cache`（库里缓存）/`network`（本次拉到）。
+- PUT **必须**含 `modelsDevEnabled`；默认**开启**（只有字面 `false` 算关）。
+- **关掉只停联网刷新**：已装载的索引继续用（内存与库里都不清）—— 界面必须写这句，
+  否则用户会以为「关掉就没元数据」。
+- `POST /api/models/metadata/refresh` **无请求体、永远 2xx**，成败看
+  `result.status`（`refreshed`/`skipped`/`failed`），`skipped` 可能带 `retryAt`；
+  **手动刷新有 24 小时间隔**，冷却中回 `skipped` + `retryAt` → 界面要把这个时刻显示出来，
+  否则用户只会看到「没反应」。
+
+**② 插件出站设置（ZCode 版本号 / 验证码令牌池 / Cline 伪装头）**
+- **按插件申报显示**：`GET /api/plugins` 的 `adminPanels` 含 `captcha_pool` /
+  `upstream_headers` 才渲染对应区块（与桌面端 `settings-page.tsx` 同一口径）。
+  插件读不到时按「没有面板」处理（隐藏），别画空面板。ZCode 版本号不属申报面板，总是显示。
+- ZCode 版本号（`zcode_version.rs`）：`{version, envOverride}`；校验「≤32 字符、
+  `[0-9A-Za-z._-]`、**首字符必须数字**」，**空串合法 = 清空覆盖**回落插件内置默认值；
+  环境变量 `ZCODE_APP_VERSION` 优先级更高，非空时界面上的值不生效（要提示）。
+- 验证码令牌池（`zcode_captcha_pool.rs`）：三个整数 1–10 默认 3 / 1000–30000 默认 2500 /
+  1–5 默认 1；**只认 JSON 数字**（字符串 `"2"` 会 400），所以前端要 `Number()` 后再发。
+- Cline 伪装头（`cline_headers.rs`）：`{overrides, defaults, effective}`，PUT 是
+  **整体替换**；≤64 条、头名 ≤128 且要合法、头值 ≤4096；固定头
+  `Authorization`/`Content-Type`/`Accept`/`X-Task-ID`（大小写不敏感）一律 400。
+  **空串值 = 这个头不发；删掉一行 = 回落默认值** —— 这两句语义写进了界面说明。
+  保存前 `confirmDialog`（整体替换会丢掉没列出来的头）。
+
+**③ 推迟：宫格布局（`/api/sidebar-layout`）**
+- 契约已拿到：`GET/PUT {layout}`，**整份替换**，后端只校验顶层是对象；`null`/缺键 = 恢复默认；
+  存在 `kv` 表的 `sidebarLayout` 键，且**在云同步范围内**。
+- **为什么这轮不做**：这个键**与桌面面板共用**，而桌面那份布局的形状由 `ui/sidebar-layout.js`
+  的 MENUS 表定义（宽/窄/分组是桌面概念，插件菜单键还是运行期才有的）。方案里本来就写明
+  「实施前先 GET 看一次真实结构再定 schema」—— 我这边拿不到真机样本，**凭猜写进去可能把
+  桌面面板的布局改坏**（用户现在还在用桌面面板）。它在本系列里是 P3，不值得冒这个险。
+- **将来要做的安全做法**：GET 取回整份对象 → **原样保留所有未知键** → 只在里面加/改一个
+  `mobileGrid` 子键 → 整份 PUT 回去；**绝不发 `null` 或空对象**（那会把桌面布局重置）。
+  另外要把 `MorePage` 的固定三组改成按该子键渲染。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,180.32 kB。
+
 #### 批次进度
 
 | 批次 | 内容 | 状态 |
@@ -647,8 +693,8 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 | 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | **已完成**（`b9d8206`） |
 | 批 2a | 系统提示词（全局 / 分提供商 / 网关三段） | **已完成**（`2324be6`） |
 | 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | **已完成**（`f54e0a2`） |
-| 批 3 | 连接与安全（CORS/人机验证）+ 数据与存储（用量/保留） | **已完成**（本次） |
-| 批 4 | models.dev / 宫格布局 / ZCode 版本 / 验证码池 / Cline 头 | 待开始 |
+| 批 3 | 连接与安全（CORS/人机验证）+ 数据与存储（用量/保留） | **已完成**（`48c88bc`） |
+| 批 4 | models.dev 元数据 + 插件出站设置（ZCode/令牌池/Cline 头） | **已完成**（本次）；**宫格布局推迟**（理由见上） |
 | 批 5 | 更新出网代理 / beta / GitHub 访问 / 版本信息补全 / 反馈入口 | 待开始 |
 | 批 6 | 云同步 / cc-switch 导入 / 局域网访问（**需改 Rust，待用户拍板**） | 待开始 |
 

@@ -16,6 +16,8 @@ import { BackupRestoreSheet } from './backup-restore-sheet'
 import { ResetLibrarySheet } from './reset-library-sheet'
 import { ConnectionSecuritySheet } from './connection-security-sheet'
 import { DataStorageSheet } from './data-storage-sheet'
+import { ModelMetadataSheet } from './model-metadata-sheet'
+import { PluginSettingsSheet } from './plugin-settings-sheet'
 import { supervisorStart, supervisorStatus as fetchSupervisorStatus, supervisorStop, type SupervisorStatus } from '../api/supervisor'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -48,6 +50,8 @@ export function SettingsPage() {
   const [resetOpen, setResetOpen] = useState(false)
   const [connectionOpen, setConnectionOpen] = useState(false)
   const [dataStorageOpen, setDataStorageOpen] = useState(false)
+  const [modelMetadataOpen, setModelMetadataOpen] = useState(false)
+  const [pluginSettingsOpen, setPluginSettingsOpen] = useState(false)
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
   const [supervisorBusy, setSupervisorBusy] = useState('')
   const currentLocale = locale()
@@ -247,6 +251,14 @@ export function SettingsPage() {
             </div>
             <span className='m-chev'><Icon name='chev' /></span>
           </Button>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setModelMetadataOpen(true)}>
+            <span className='m-logo'><Icon name='model' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('模型元数据（models.dev）')}</div>
+              <div className='m-t2'>{t('补齐上游没声明的模型能力与思考档位')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
         </Card>
       </div>
 
@@ -285,6 +297,14 @@ export function SettingsPage() {
             <div className='m-grow'>
               <div className='m-t1'>{t('网关插件')}</div>
               <div className='m-t2'>{t('查看、安装和管理所连接网关的插件')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setPluginSettingsOpen(true)}>
+            <span className='m-logo'><Icon name='bolt' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('插件出站设置')}</div>
+              <div className='m-t2'>{t('ZCode 版本号 · 验证码池 · Cline 伪装头')}</div>
             </div>
             <span className='m-chev'><Icon name='chev' /></span>
           </Button>
@@ -623,6 +643,8 @@ export function SettingsPage() {
       {resetOpen ? <ResetLibrarySheet onClose={() => setResetOpen(false)} /> : null}
       {connectionOpen ? <ConnectionSecuritySheet onClose={() => setConnectionOpen(false)} /> : null}
       {dataStorageOpen ? <DataStorageSheet onClose={() => setDataStorageOpen(false)} /> : null}
+      {modelMetadataOpen ? <ModelMetadataSheet onClose={() => setModelMetadataOpen(false)} /> : null}
+      {pluginSettingsOpen ? <PluginSettingsSheet onClose={() => setPluginSettingsOpen(false)} /> : null}
     </div>
   )
 }
