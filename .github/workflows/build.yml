@@ -374,10 +374,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python3 scripts/fetch-official-packs.py --prefix agent2api-providers --out .cache/official
-          ls -lh .cache/official
+          set -euo pipefail
+          # `--optional`：官方骨架包只是「省得手写 pack.json」的优化，不是必需品。
+          # 拉不到时（实测 CDN 会持续 504，脚本已带加速源回退）只警告、不中断 ——
+          # 否则主包骨架失败会连带跳过后面**网页包**的打包步骤，白丢一批能出的包。
+          if python3 scripts/fetch-official-packs.py --prefix agent2api-providers --out .cache/official --optional; then
+            ls -lh .cache/official
+            echo "SKELETON=ok" >> "$GITHUB_ENV"
+          else
+            echo "::warning::没取到官方骨架包，本次不带预置插件包"
+            echo "SKELETON=missing" >> "$GITHUB_ENV"
+          fi
 
       - name: 打 iOS 插件包
+        if: env.SKELETON == 'ok'
         run: |
           set -euo pipefail
           mkdir -p out/packs
@@ -429,7 +439,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          python3 scripts/fetch-official-packs.py --prefix agent2api-web-providers --out .cache/official
+          if ! python3 scripts/fetch-official-packs.py --prefix agent2api-web-providers --out .cache/official --optional; then
+            echo "::warning::没取到网页包官方骨架，跳过网页插件包"
+            exit 0
+          fi
           OFF_W=$(ls .cache/official/agent2api-web-providers-*.zip | head -1)
           bash scripts/pack-ios-plugins.sh \
             --official "$OFF_W" --binary out/plugins/agent2api-web-providers \

@@ -24,11 +24,12 @@ import urllib.request
 
 API = "https://api.github.com"
 
-# GitHub 的发布资产走 CDN，偶发 5xx / 连接重置。下载这一步失败会拖垮整个
-# 插件作业（进而让 deb 丢掉预置插件包），所以这里带退避重试：
-# 一共试 RETRIES 次，间隔 2s / 6s / 14s。
-RETRIES = 4
-BACKOFF_SECONDS = (2, 6, 14)
+# GitHub 的发布资产走 CDN，实测会出现**持续** 504（不是一次抖动：连试 4 次都 504）。
+# 除了退避重试，还按顺序尝试用户提供的加速前缀 —— CI 里克隆源码已经在用同样两个源。
+# 顺序：直连 → ghfast.top → gh-proxy.com。
+MIRROR_PREFIXES = ("", "https://ghfast.top/", "https://gh-proxy.com/")
+RETRIES_PER_SOURCE = 2
+BACKOFF_SECONDS = (2, 8)
 
 
 def headers() -> dict:
@@ -49,26 +50,30 @@ def get_json(url: str):
 
 
 def download(url: str, dest: pathlib.Path) -> None:
-    """下载到目标路径；失败按退避重试，最后一次仍失败才抛。"""
+    """按「直连 → 加速源」逐个试，每个源退避重试；全失败才抛。"""
     last_error: Exception | None = None
-    for attempt in range(RETRIES):
-        if attempt:
-            delay = BACKOFF_SECONDS[min(attempt - 1, len(BACKOFF_SECONDS) - 1)]
-            print(f"[fetch] 第 {attempt} 次重试，{delay}s 后继续…", flush=True)
-            time.sleep(delay)
-        request = urllib.request.Request(url, headers={"User-Agent": "aggregateapi-ci"})
-        try:
-            with urllib.request.urlopen(request, timeout=600) as response:
-                payload = response.read()
-            # 先写临时文件再改名：中途失败不会留下半个 zip 被后面当成好文件用
-            temp = dest.with_suffix(dest.suffix + ".part")
-            temp.write_bytes(payload)
-            temp.replace(dest)
-            return
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
-            last_error = error
-            print(f"[fetch] 下载失败（第 {attempt + 1}/{RETRIES} 次）：{error}", flush=True)
-    raise RuntimeError(f"下载 {url} 连续 {RETRIES} 次失败：{last_error}")
+    for prefix in MIRROR_PREFIXES:
+        target = f"{prefix}{url}"
+        label = prefix or "直连"
+        for attempt in range(RETRIES_PER_SOURCE):
+            if attempt:
+                delay = BACKOFF_SECONDS[min(attempt - 1, len(BACKOFF_SECONDS) - 1)]
+                print(f"[fetch] {label} 第 {attempt} 次重试，{delay}s 后继续…", flush=True)
+                time.sleep(delay)
+            request = urllib.request.Request(target, headers={"User-Agent": "aggregateapi-ci"})
+            try:
+                with urllib.request.urlopen(request, timeout=600) as response:
+                    payload = response.read()
+                # 先写临时文件再改名：中途失败不会留下半个 zip 被后面当成好文件用
+                temp = dest.with_suffix(dest.suffix + ".part")
+                temp.write_bytes(payload)
+                temp.replace(dest)
+                print(f"[fetch] 下载成功（{label}）", flush=True)
+                return
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as error:
+                last_error = error
+                print(f"[fetch] {label} 下载失败：{error}", flush=True)
+    raise RuntimeError(f"下载 {url} 所有源都失败：{last_error}")
 
 
 def main() -> int:
@@ -78,6 +83,12 @@ def main() -> int:
     parser.add_argument("--suffix", default="aarch64-unknown-linux-gnu.zip")
     parser.add_argument("--out", default=".cache/official")
     parser.add_argument("--pages", type=int, default=5)
+    parser.add_argument(
+        "--optional",
+        action="store_true",
+        help="取不到就只警告并返回 0（骨架包是「省得手写 pack.json」的优化，不是必需品；"
+             "调用方据此跳过打包，而不是让整个作业失败）",
+    )
     args = parser.parse_args()
 
     out = pathlib.Path(args.out)
@@ -107,7 +118,14 @@ def main() -> int:
     release, asset = found
     dest = out / asset["name"]
     print(f"[fetch] tag={release.get('tag_name')} {asset['name']} ({asset['size']} B)")
-    download(asset["browser_download_url"], dest)
+    try:
+        download(asset["browser_download_url"], dest)
+    except RuntimeError as error:
+        if args.optional:
+            print(f"[fetch] WARN: {error}")
+            print("[fetch] WARN: 本次跳过官方骨架包（调用方应据此跳过打包步骤）")
+            return 0
+        raise
     print(f"[fetch] → {dest}")
     return 0
 
