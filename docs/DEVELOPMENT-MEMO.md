@@ -1232,7 +1232,70 @@ function hL(e){ if(e==null) return ''; if(typeof e==='string') return e;
 | ③ | 调试报文（`debug/traffic`） | ✅ 本次 |
 | ④ | 自定义模型增删（`models/custom`） | ✅ 本次 |
 | ⑤ | 日志下载（`logs/download`） | ✅ 本次 |
-| ⑥ | MCP / Skill 安装（`tools/install-*`） | 待做 |
+| ⑥ | MCP / Skill 安装（`tools/install-*`） | ✅ 本次 |
+
+#### 记忆点 · 步骤 20（深度缺口 ⑥ 本机接入 —— 六项收尾）
+
+**契约（两处权威源逐字对齐）**：Rust 源码 `gw-src/tools.rs` 的六个 handler +
+二进制内嵌面板 JS 的同名封装：
+
+```js
+installInfo    = (e)   => GET  /api/tools/install-info?service=<id>
+installTargets = (e,t) => GET  /api/tools/install-targets?service=<id>&protocol=<skill|mcp>
+apiKeys        = ()    => GET  /api/tools/api-keys
+installSkill   = (b)   => POST /api/tools/install-skill   { api_key_id, variant, clients }
+installMcp     = (b)   => POST /api/tools/install-mcp     { service_id, mode?, api_key_id, clients }
+uninstallSkill = (b)   => POST /api/tools/uninstall-skill { service_id, clients }
+uninstallMcp   = (b)   => POST /api/tools/uninstall-mcp   { service_id, clients }
+```
+
+形状：`targets` 项 = `{key, label, installed}`；结果是 `{results: [{label, error, …}]}`
+（面板侧也按 `{label, error}` 拆分成功/失败）；`/api/tools/api-keys` → `{keys:[{id,name,masked}]}`。
+校验也照抄：`mode` 缺省 `http`、只接受 `http|bridge`、**`bridge` 仅视觉分析可用**；
+`variant` 无效 / Key 不可用 / `clients` 为空各有 400。
+
+**★ 一个必须先想清楚的取舍**：手机端工具页原本**主动声明不做**这项
+（「本机客户端的安装在桌面端完成」）。核实后这个取舍有其道理 ——
+skill 档是「由面板安装到**本机客户端目录**」，mcp 档是往客户端配置里写一段，
+**写的都是网关所在主机的文件**。iOS 上网关就在手机里，那些目录（Cursor / Cline /
+Claude Code 的配置）并不存在；`bridge` 档面板原文也写明「推荐在桌面端使用」。
+
+**所以最终实现分成两半，价值差别很大**：
+- **只读那半（任何设备都有用）**：`install-info` 给出**远程 MCP 地址**与工具清单
+  （`web_search` / `web_fetch` / `image_analyze`），可以填进**任意**客户端的 MCP 配置
+  —— 包括手机上的客户端。这部分带「复制地址」。
+- **安装向导那半（有条件有用）**：只有手机端连**桌面网关**时才有意义。
+  界面上留了一句明确提示：「目标是**网关所在主机**上的客户端目录 —— 手机连桌面网关时
+  才有意义；网关就跑在手机上时那些目录通常不存在」，否则用户会以为装完就有用。
+
+**实现**：新增 `api/tools-install.ts`（六个调用 + `splitOutcomes` 按 `{label,error}` 拆分）
+与 `components/LocalAccessSheet.tsx`（接入信息 + 协议切换 skill/MCP + 目标开关
+（**默认勾选已安装的**，与面板侧卸载对话框同一口径）+ Key 选择 + 变体 / 接入方式 +
+安装 / 移除 + 失败逐条列出）；`ToolsPage` 每行加「本机接入」按钮，页头副标题改掉
+（原来写「在桌面端完成」，现在指向每行的入口）。
+
+**又一次踩到同名变量**：`LocalAccessSheet` 里 `const [nextInfo, nextKeys] = await Promise.all(...)`
+之后又写了 `const nextKeys = await fetchToolApiKeys()` —— 重复声明（而且那次 fetch 本身也是多余的，
+`Promise.all` 已经拿到了）。`tsc` 报 `TS2451 Cannot redeclare`。**记下来：写 `Promise.all`
+解构后不要再补一次同一个请求。**
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,282.95 kB。
+
+#### 六项缺口最终状态
+
+| # | 内容 | 结果 |
+|---|---|---|
+| ① | 代理订阅 | **撤回**：`/api/subscriptions` 返回 410（`retired_proxy_feature`），功能已下线 |
+| ② | 请求与响应正文 | ✅ `fd76921` |
+| ③ | 调试报文 | ✅ `1a87975` |
+| ④ | 自定义模型增删 | ✅ `ceea7f3` |
+| ⑤ | 日志文件下载 | ✅ `510a56e` |
+| ⑥ | 本机接入（MCP / Skill） | ✅ 本次 |
+
+三项**待真机核对**（都是「参数/过滤是否如预期」，不阻塞功能）：
+1. 请求回放的查询参数名（步骤 14 记的）；
+2. `/api/logs/download` 的筛选是否真的收窄内容（最坏是下载整份）；
+3. 本机接入的 `targets`/`results` 具体字段（形状取自面板 JS，未在真机跑过）。
 
 #### 记忆点 · 步骤 19（深度缺口 ⑤ 日志文件下载）
 

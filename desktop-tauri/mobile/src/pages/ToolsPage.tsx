@@ -4,6 +4,7 @@ import {
   Input, MultiSelect, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, confirmDialog,
 } from '@ui'
 import { PageIntro, IconButton, Badge, Empty, ErrorNote, SkeletonList } from '../components/ui'
+import { LocalAccessSheet } from '../components/LocalAccessSheet'
 import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
 import { apiCall } from '../api/client'
 import { store } from '../state/store'
@@ -61,6 +62,8 @@ export function ToolsPage() {
   const [editing, setEditing] = useState<ProviderRow | null>(null)
   const [visionOpen, setVisionOpen] = useState(false)
   const [selectionOpen, setSelectionOpen] = useState(false)
+  // 本机接入：打开哪个服务的接入抽屉（null = 关着）
+  const [accessService, setAccessService] = useState<{ id: string; name: string } | null>(null)
 
   const load = async () => {
     try {
@@ -147,7 +150,7 @@ export function ToolsPage() {
 
   return <div className='m-page' ref={pull.bindRef}>
     <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
-    <PageIntro subtitle={t('网络搜索与视觉分析：网关侧配置，改完立即生效。本机客户端的安装在桌面端完成。')}
+        <PageIntro subtitle={t('网络搜索与视觉分析：网关侧配置，改完立即生效。本机接入见每行的「本机接入」。')}
       actions={<IconButton name='refresh' label={t('刷新')} onClick={() => void load()} />} />
     {error ? <ErrorNote text={error} /> : null}
     {loading && !services.length ? <SkeletonList rows={4} height={90} /> : null}
@@ -174,6 +177,14 @@ export function ToolsPage() {
                 <code>{service.endpoint}</code> · v{service.version} · {t('超时 {seconds}s', { seconds: service.timeout_seconds })}
               </div>
             </div>
+            <button
+              type='button'
+              className='m-ghost'
+              style={{ fontSize: 11.5, flex: 'none', padding: '4px 8px' }}
+              onClick={() => { setAccessService({ id: service.id, name: SERVICE_NAME[service.id] || service.id }); }}
+            >
+              {t('本机接入')}
+            </button>
             <Switch checked={service.enabled} disabled={busy === service.key}
               onCheckedChange={checked => void toggle(service, checked === true)} aria-label={t('启用 / 停用此服务')} />
           </div>)}
@@ -262,6 +273,11 @@ export function ToolsPage() {
       onClose={() => setVisionOpen(false)}
       onSaved={() => { setVisionOpen(false); void load() }}
     /> : null}
+      {accessService ? <LocalAccessSheet
+        serviceId={accessService.id}
+        serviceName={accessService.name}
+        onClose={() => setAccessService(null)}
+      /> : null}
   </div>
 }
 
