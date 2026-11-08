@@ -194,6 +194,24 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - **未验证**：Rust supervisor 与 Swift 本环境无工具链，需 CI（ios job）编译确认；
   删库仅删 `config_dir` 下 `agent2api.db*` 与 `*.key`，路径来自 supervisor 的 `home`。
 
+### Phase 3.1：路由配置（已完成）
+- 提交：`b3075aa9d01997efcc6a713f35a09b5ddac1538b`
+- 上游契约（`api/routing_api.rs`）：
+  - `GET  /api/routing`              → 生效的全量路由设置（strategy / sticky / failoverBackoff / sink / breaker*）
+  - `PUT  /api/routing`              → 部分字段 patch（不给 = 不动），保存后下个请求立即生效
+  - `GET  /api/routing/queue?model=` → 队列可见化：候选顺序 + 选中 + 被跳过 + 原因
+    （**排序实现与转发选路是同一个函数** `routing::plan_route`，界面与实际不会分叉）
+- 手机端不做的部分：路由组 / 路由工作空间 / 迁移旧配置 —— 那些走桌面 Tauri 壳
+  （`saveRoutingProfile`），网关没有给它们 HTTP 入口。手机端只做全局策略 + 队列预演。
+- 改动文件：
+  - `desktop-tauri/mobile/src/api/routing.ts`（新增）：`fetchRouting` / `putRouting` / `fetchRoutingQueue`
+  - `desktop-tauri/mobile/src/pages/RoutingPage.tsx`（新增）：
+    - 全局策略：选路策略（order / rotate / provider）+ 会话粘滞 + 失败后退避
+    - 队列预演：模型框留空 = 全部模型；显示候选顺序、选中项、被跳过账号及原因
+    - 模型框用自由输入（会话 provider 摘要不含模型清单，硬凑下拉会误导）
+  - `desktop-tauri/mobile/src/App.tsx` / `lib/routes.ts` / `MorePage.tsx`：注册入口
+- 验证：typecheck / build 通过；`mobile.js` 1103.71 → 1108.69 kB。
+
 ### Phase 3.3：自定义提供商（已完成）
 - 提交：`45976fa43d4943399112f8c4e0f08b2ef9576b02`
 - 上游契约（`api/custom_providers.rs` + `core/custom_providers.rs`）：
