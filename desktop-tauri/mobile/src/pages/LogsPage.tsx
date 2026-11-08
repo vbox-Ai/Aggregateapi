@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Input, SegmentedControl, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle, Switch , Label, Card } from '@ui'
 import { PageIntro, IconButton, Empty, ErrorNote, SkeletonList } from '../components/ui'
 import { store } from '../state/store'
-import { fetchLogs } from '../api/gateway'
+import { fetchLogs, downloadLogsFile } from '../api/gateway'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
 import {
@@ -11,7 +11,7 @@ import {
 } from '../../../ui-shared/logs'
 import { Toggle as UiToggle } from '@ui'
 import { DateRangeFilter } from '../components/DateRangeFilter'
-import { downloadJson, dateStamp } from '../lib/download'
+import { downloadJson, dateStamp, saveBlob } from '../lib/download'
 import { dateRangeQuery, readCustomRange, saveCustomRange, type CustomDates, type DateRange } from '../../../ui-shared/date-range'
 
 const LIMIT = 50
@@ -48,6 +48,7 @@ export function LogsPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const snapshotRef = useRef<number | undefined>(undefined)
   const seqRef = useRef(0)
@@ -147,6 +148,33 @@ export function LogsPage() {
   }
 
   const groups = logGroups(data)
+
+  /**
+   * 下载网关的日志**文件**（与上面「导出」不是一回事）。
+   *
+   * 导出 = 数据库里筛选后的条目落成 JSON；这个 = 网关日志文件原文。
+   * 用当前筛选条件去请求（过滤是否生效待真机核对，不生效也只是下载到整份）。
+   */
+  const downloadFile = async () => {
+    if (downloading) return
+    setDownloading(true)
+    try {
+      const { text, filename } = await downloadLogsFile({
+        view: stateRef.current.view,
+        level: stateRef.current.view === 'debug' ? undefined : stateRef.current.level,
+        category: stateRef.current.category || undefined,
+        keyword: stateRef.current.search,
+        ...dateRangeQuery(stateRef.current.range, stateRef.current.dates),
+      })
+      await saveBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), filename)
+      store.toast(t('已下载日志文件（{n} 字符）', { n: text.length.toLocaleString() }))
+    } catch (failure) {
+      store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   const totalGroups = Number(data?.grouped ?? data?.matched ?? groups.length) || 0
   const pageCount = Math.max(1, Math.ceil(totalGroups / LIMIT))
   const nextPage = (target: number) => {
@@ -175,6 +203,7 @@ export function LogsPage() {
               setPaused(next)
               if (!next && page === 1 && !detail && (bodyRef.current?.scrollTop || 0) <= 20) void load(true)
             }} /><IconButton name='refresh' label={t('查看最新')} onClick={() => void load(true)} />
+            <IconButton name='download' label={t('下载日志文件')} onClick={() => void downloadFile()} />
             <Button variant='outline' size='sm' disabled={exporting || !groups.length} onClick={() => void exportLogs()}>
               {exporting ? t('导出中…') : t('导出')}
             </Button>

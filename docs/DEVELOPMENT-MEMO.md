@@ -1231,8 +1231,39 @@ function hL(e){ if(e==null) return ''; if(typeof e==='string') return e;
 | ② | 请求与响应正文（`stats/requests/raw`） | ✅ `fd76921` |
 | ③ | 调试报文（`debug/traffic`） | ✅ 本次 |
 | ④ | 自定义模型增删（`models/custom`） | ✅ 本次 |
-| ⑤ | 日志下载（`logs/download`） | 待做 |
+| ⑤ | 日志下载（`logs/download`） | ✅ 本次 |
 | ⑥ | MCP / Skill 安装（`tools/install-*`） | 待做 |
+
+#### 记忆点 · 步骤 19（深度缺口 ⑤ 日志文件下载）
+
+**先确认「补的是哪一层」**：日志页原本**已经有**「导出」按钮 —— 它把**当前渲染的分组**
+（数据库里筛选后的条目）落成 JSON，是客户端行为。⑤ 要补的是另一种东西：
+`GET /api/logs/download` 拿**网关日志文件本身**（`Content-Disposition: attachment`，
+保留原始行格式，适合整份贴给上游排查）。**两个动作不是一回事**，所以界面上分成
+「导出」（原有按钮）与「下载日志文件」（新增图标按钮），而不是替换掉原有那个。
+
+**★ 为什么这个端点不能用 `apiCall`**：它回的是**纯文本文件**，不是 `{success,data}` 信封；
+`apiCall` 按 JSON 解析会直接失败。所以用 `resolveUrl` + `authHeaders` 自己发一次
+（`api/client.ts` 已经导出这两个），再 `response.text()`。
+
+**顺手加的健壮性**：
+- 发请求前先 `refreshPanelAuthIfExpiring()`（面板令牌会过期，裸 fetch 不会自动续期）；
+- **回的是 JSON 就当成错误**：读 `content-type`，若是 `application/json` 就解析出
+  `error`/`message` 抛出来，**不会把错误信封当日志存成文件**；
+- 文件名优先从 `Content-Disposition` 取，`filename*=`（RFC 5987，含百分号编码）与
+  `filename="…"` 两种写法都认；取不到才回落 `agent2api-logs-<日期>.log`；
+- 落盘走 `lib/download.ts` 的 `saveBlob`（iOS 走原生 `a2aFile` 桥、浏览器走 `<a download>`）。
+
+**查询参数**沿用列表那一套（`logQueryString(LogQuery)`，来自共享模块 `ui-shared/logs`）。
+⚠️ **待真机核对**：`download_logs` 与 `query_logs` 同模块，路由表里只看到路径，
+**过滤是否生效不确定**。最坏结果是「下载到整份日志」，不影响拿到内容 —— 所以这条
+不阻塞功能，但要在真机上确认一次筛选是否真的收窄了内容。
+
+**踩到的自己造成的错**：改 `LogsPage.tsx` 时我用「把 A 行替换成 B 行」的方式插入代码，
+误删了紧邻的 `const totalGroups = …` 一行（它后面被 `pageCount` 用）。`tsc` 立刻报错
+才发现。**教训：插入代码要用「在 X 后面加」而不是「把 X+Y 换成 X」，别把邻行卷进替换范围。**
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,274.12 kB。
 
 #### 记忆点 · 步骤 18（深度缺口 ④ 自定义模型增删）
 

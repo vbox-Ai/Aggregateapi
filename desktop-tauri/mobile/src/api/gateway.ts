@@ -6,7 +6,8 @@
  * 不在前端另起一套命名 —— 改口径要能一眼看出改的是哪一边。
  */
 
-import { apiCall } from './client'
+import { ApiError, apiCall, authHeaders, refreshPanelAuthIfExpiring, resolveUrl } from './client'
+import { dateStamp } from '../lib/download'
 import type { ProxyUsage } from '../../../ui-shared/proxy-usage'
 import type { CheckinCenter } from '../../../ui-shared/checkin'
 import type { HiddenAccountsSummary } from '../../../ui-shared/plugins'
@@ -323,6 +324,62 @@ export function fetchRequests(
 
 export function fetchLogs(params: LogQuery, signal?: AbortSignal): Promise<LogPage> {
   return apiCall<LogPage>(`/api/logs?${logQueryString({ limit: 60, ...params })}`, { signal })
+}
+
+/**
+ * 下载网关的**运行日志文件**（`api/logs_api::download_logs`）。
+ *
+ * 与「导出」的区别（这是两件不同的事，界面上分成两个动作）：
+ *   · `fetchLogs` + 客户端导出 = 数据库里**筛选后的条目**，落成 JSON；
+ *   · 本函数 = 网关**日志文件本身**（`Content-Disposition: attachment`），
+ *     保留原始行格式，适合整份贴给上游排查。
+ *
+ * ── 为什么不用 `apiCall` ────────────────────────────────────
+ * 这个端点回的是**纯文本文件**，不是 `{success,data}` 信封；`apiCall` 按 JSON 解析
+ * 会直接失败。所以这里用 `resolveUrl` + `authHeaders` 自己发一次，再把正文读出来。
+ *
+ * ⚠️ 查询参数沿用列表那一套（`logQueryString`）——`download_logs` 与 `query_logs`
+ * 同模块，路由表里也只能看到路径。**过滤是否生效待真机核对**：不生效的话最坏结果是
+ * 「下载到的是整份日志」，不影响拿到内容。若后端回的是 JSON（错误信封），这里会
+ * 把里面的错误信息抛出来，不会把 JSON 当日志存成文件。
+ */
+export async function downloadLogsFile(query: LogQuery): Promise<{ text: string; filename: string }> {
+  await refreshPanelAuthIfExpiring()
+  const response = await fetch(resolveUrl(`/api/logs/download?${logQueryString(query)}`), {
+    headers: authHeaders(),
+  })
+  const contentType = response.headers.get('content-type') || ''
+  if (!response.ok || contentType.includes('application/json')) {
+    let message = `导出日志失败（HTTP ${response.status}）`
+    try {
+      const payload = (await response.json()) as { error?: unknown; message?: unknown }
+      const detail = payload?.error ?? payload?.message
+      if (typeof detail === 'string' && detail) message = detail
+    } catch {
+      /* 不是 JSON 就保留状态码文案 */
+    }
+    throw new ApiError(message, response.status)
+  }
+  const text = await response.text()
+  return { text, filename: attachmentName(response.headers.get('content-disposition')) || `agent2api-logs-${dateStamp()}.log` }
+}
+
+/** 从 `Content-Disposition` 取文件名；两种写法都认（`filename*=` 优先，RFC 5987） */
+function attachmentName(header: string | null): string {
+  if (!header) return ''
+  const extended = /filename\*\s*=\s*([^;]+)/i.exec(header)
+  if (extended) {
+    const raw = extended[1].trim().replace(/^"(.*)"$/, '$1')
+    const parts = raw.split("''")
+    const encoded = parts.length > 1 ? parts[1] : raw
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      return encoded
+    }
+  }
+  const plain = /filename\s*=\s*"([^"]+)"/i.exec(header) || /filename\s*=\s*([^;]+)/i.exec(header)
+  return plain ? plain[1].trim() : ''
 }
 
 /* ─── 签到中心 ─────────────────────────────────── */
