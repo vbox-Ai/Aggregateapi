@@ -7,16 +7,27 @@ import { formatInt } from '../lib/format'
 import { providerLabel } from '../lib/providers'
 import { t } from '../i18n'
 import { apiCall } from '../api/client'
-import { stickyLabel, strategyLabel } from '../api/routing'
+import {
+  probeRoutingGroupWrite,
+  stickyLabel,
+  strategyLabel,
+  type RoutingGroupBody,
+  type RoutingGroupMember,
+  type RoutingGroupsPayload,
+} from '../api/routing'
+import { store } from '../state/store'
+import { RoutingGroupEditSheet } from './routing-group-edit-sheet'
 
 /**
  * 路由组（只读）与选路预演。
  *
- * ── 为什么只读 ────────────────────────────────────────────────
- * 网关只有 `GET /api/routing/groups`，**没有保存路由组的 HTTP 路由** ——
- * 组的增删改是桌面壳自己写库的事务（`saveRoutingGroup`）。所以手机端只能看，
- * 想改必须补一条写路由（与「局域网访问」同属需改 Rust 的项）。
- * 界面上明说这一点，否则用户会一直找「新建组」的按钮。
+ * ── 能改什么、不能改什么 ──────────────────────────────────────
+ * 保存走 `PUT /api/routing/groups`（上游 v3.4.2 就有这条路由，见
+ * `api/routing.ts` 的说明 —— 我早前记的「网关没有写路由」是拿旧二进制推的，错的）。
+ * 但手机端**只做安全子集**：组名、说明、成员的参与开关。对外模型 ID、策略、粘性，
+ * 以及成员本身的增删都留在桌面端 —— 那几项直接影响真实转发，改错代价大。
+ * 旧版网关没有这条路由，所以编辑入口先做**零副作用探测**（`probeRoutingGroupWrite`），
+ * 不支持就保持只读并说明原因。
  *
  * ── 预演与「此刻队列」的分工 ──────────────────────────────────
  * `/api/routing/preview` 是**纯预演**：不发送请求、不消耗额度、不推进轮转，
@@ -27,17 +38,12 @@ import { stickyLabel, strategyLabel } from '../api/routing'
  * 组预演才有「请求需要」这一档（桌面端同一取舍：没有组时固定按文本对话算）。
  */
 
-export type RouteMember = { id: string; provider: string; model: string; included: boolean; accounts: string[] }
-
-export type RouteGroup = {
-  id: string
-  name: string
-  model: string
-  description: string
-  strategy: string
-  sticky: string
-  members: RouteMember[]
-}
+/**
+ * 组的形状只有一份定义：在上游契约那边（`api/routing.ts`）。这里只做别名，
+ * 免得线上字段变了而页面这份没跟着变。
+ */
+export type RouteMember = RoutingGroupMember
+export type RouteGroup = RoutingGroupBody
 
 type RouteModelChoice = {
   provider: string
@@ -55,11 +61,7 @@ type RouteModelChoice = {
   }
 }
 
-type RouteGroups = {
-  groups?: Array<{ group: RouteGroup; revision?: string }>
-  newRevision?: string
-  catalog?: RouteModelChoice[]
-}
+type RouteGroups = RoutingGroupsPayload<RouteModelChoice>
 
 type PreviewEntry = {
   id: string
@@ -88,6 +90,11 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
   const [data, setData] = useState<RouteGroups | null>(null)
   const [error, setError] = useState('')
   const [openId, setOpenId] = useState('')
+  /** 编辑抽屉：正在编辑哪个组（连同打开时读到的 revision） */
+  const [editing, setEditing] = useState<{ group: RouteGroup; revision: string } | null>(null)
+  /** 写路由探测结果：null = 还没探测过 */
+  const [writable, setWritable] = useState<boolean | null>(null)
+  const [probeBusy, setProbeBusy] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -102,6 +109,40 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
 
   useEffect(() => { void load() }, [load])
 
+  /**
+   * 打开编辑器。第一次点先做**零副作用探测**（`probeRoutingGroupWrite`：
+   * 拿一个不可能的 revision 去 PUT，revision 检查在写入之前，所以只会 409）。
+   * 旧版网关没有这条路由 → 404/405 → 保持只读并说明原因，而不是让用户改完存不上。
+   * 探测结果缓存起来，之后不再重复问。
+   */
+  const openEditor = async (group: RouteGroup, revision?: string) => {
+    if (probeBusy) return
+    let supported = writable
+    if (supported === null) {
+      setProbeBusy(true)
+      try {
+        supported = await probeRoutingGroupWrite()
+        if (serverIdentity() !== identity) return
+        setWritable(supported)
+      } catch (cause) {
+        if (serverIdentity() === identity) setError(cause instanceof Error ? cause.message : String(cause))
+        return
+      } finally {
+        if (serverIdentity() === identity) setProbeBusy(false)
+      }
+    }
+    if (serverIdentity() !== identity) return
+    if (!supported) {
+      store.toast(t('当前网关不支持保存路由组（缺少 PUT /api/routing/groups），请升级网关后再试'), 'err')
+      return
+    }
+    if (!revision) {
+      store.toast(t('这组的版本号缺失，请刷新列表后重试'), 'err')
+      return
+    }
+    setEditing({ group, revision })
+  }
+
   const groups = data?.groups || []
   const catalogModels = useMemo(() => {
     const set = new Set<string>()
@@ -113,12 +154,12 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
     <div className='m-section'>
       <SectionHead title={t('路由组')} />
       <p className='m-ck-note'>
-        {t('按模型把候选账号分组。手机端只能查看：新增与修改是桌面端写库的操作，网关还没有对应的接口。')}
+        {t('按模型把候选账号分组。手机端可以改组名、说明与成员是否参与；对外模型 ID、策略、粘性以及成员增删在桌面端「路由」画布上改。')}
       </p>
       {error ? <ErrorNote text={error} /> : null}
 
       {groups.length ? (
-        groups.map(({ group }) => {
+        groups.map(({ group, revision }) => {
           const open = openId === group.id
           return (
             <Card key={group.id} className='m-card' style={{ marginBottom: 10 }}>
@@ -170,6 +211,15 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
                     <Button variant='outline' size='sm' onClick={() => onPreviewGroup(group)}>
                       {t('预演这个组')}
                     </Button>
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      style={{ marginLeft: 8 }}
+                      disabled={probeBusy}
+                      onClick={() => void openEditor(group, revision)}
+                    >
+                      {t('编辑')}
+                    </Button>
                   </div>
                 </div>
               ) : null}
@@ -197,6 +247,18 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
             </div>
           </div>
         </Card>
+      ) : null}
+
+      {editing ? (
+        <RoutingGroupEditSheet<RouteModelChoice>
+          group={editing.group}
+          revision={editing.revision}
+          onClose={() => setEditing(null)}
+          onSaved={next => {
+            setData(next)
+            setError('')
+          }}
+        />
       ) : null}
     </div>
   )

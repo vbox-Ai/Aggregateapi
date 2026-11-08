@@ -1,4 +1,4 @@
-import { apiCall } from './client'
+import { ApiError, apiCall } from './client'
 import { t } from '../i18n'
 
 /**
@@ -168,3 +168,98 @@ export function strategyHint(strategy?: string): string {
   if (strategy === 'provider') return t('提供商保持优先顺序，同一提供商的账号轮流承接。')
   return t('可用账号按请求轮换；开启会话粘性时同一会话优先留在原账号。')
 }
+
+/* ─── 路由组（保存 / 删除）──────────────────────── */
+
+/**
+ * 路由组的线上形状（上游 `config::RoutingGroup` / `RoutingMember`）。
+ *
+ * 两条字段层面的硬约束，写错了后端直接 400，不是「宽容处理」：
+ *  · 结构体带 `#[serde(rename_all = "camelCase", deny_unknown_fields)]` ——
+ *    **多一个字段就报错**，所以客户端只能**原样回传**读到的字段集合。
+ *  · `revision` 是**整组内容的 SHA-256**（`config::routing_groups::revision`），
+ *    不是递增版本号：保存时必须回传读到的那个值，否则 409。
+ */
+export type RoutingGroupMember = {
+  id: string
+  provider: string
+  model: string
+  included: boolean
+  accounts: string[]
+}
+
+export type RoutingGroupBody = {
+  id: string
+  name: string
+  model: string
+  description: string
+  strategy: string
+  sticky: string
+  members: RoutingGroupMember[]
+}
+
+/**
+ * `GET/PUT /api/routing/groups` 的返回形状。
+ *
+ * `catalog` 交给调用方定类型（`RoutingGroupsPayload<RouteModelChoice>`）：它是
+ * 「可用模型目录」，各页面读的字段不同，API 层不该替它们决定形状。
+ */
+export type RoutingGroupsPayload<Catalog = unknown> = {
+  groups?: Array<{ group: RoutingGroupBody; revision?: string }>
+  /** 新建组时要回传的 revision（`revision(None)`，空组的哈希） */
+  newRevision?: string
+  catalog?: Catalog[]
+}
+
+/**
+ * 保存 / 删除一个路由组：`PUT /api/routing/groups`（上游 `put_group` 的 `GroupSave`）。
+ *
+ *  · `group` 给对象 = 新增或覆盖；**给 `null` = 删除这个组**；
+ *  · `revision` 必须是客户端上次读到的值（新建用响应里的 `newRevision`）；
+ *  · 不一致 → **409**「路由配置已在其他位置修改，请刷新后重试；草稿未丢失」——
+ *    并发编辑（桌面端 / 另一台设备）靠它兜住，客户端要把它当**正常分支**处理
+ *    （重新拉取 + 提示），不是当未知错误；
+ *  · 成功返回与 GET 同形的整份数据（含新 `revision`）→ **回读是内置的**。
+ *
+ * ⚠️ 这条路由**上游 v3.4.2 就有**（`http.rs` 里 `get(...).put(put_group)`）。
+ * 我早前记的「网关没有保存路由组的 HTTP 路由」是**错的**：那个结论来自**已安装
+ * 二进制**的字符串，而二进制里读不出 HTTP 方法，且那份二进制比 v3.4.2 旧。
+ * 旧版网关确实没有这条路由，所以客户端必须能识别（404 / 405）并保持只读。
+ */
+export function putRoutingGroup<Catalog = unknown>(payload: {
+  id: string
+  group: RoutingGroupBody | null
+  revision: string
+}): Promise<RoutingGroupsPayload<Catalog>> {
+  return apiCall<RoutingGroupsPayload<Catalog>>('/api/routing/groups', { method: 'PUT', body: payload })
+}
+
+/**
+ * 探测网关是否支持保存路由组 —— **零副作用**。
+ *
+ * 手法：发一个 `group: null`（= 删除）但 `revision` 明显不合法（不是 SHA-256）的
+ * 请求。上游 `save()` 的 revision 检查排在任何写入**之前**
+ * （`if revision(old) != expected { return Err(...) }`），所以：
+ *  · 有这条路由 → 一定 409（「已在其他位置修改」），**什么都没改**；
+ *  · 没有这条路由 → 404 / 405。
+ * 再叠一层保险：用一个不存在的 id —— 即使 revision 意外匹配，也只会「删掉一个
+ * 并不存在的组」。
+ */
+export async function probeRoutingGroupWrite(): Promise<boolean> {
+  try {
+    await apiCall('/api/routing/groups', {
+      method: 'PUT',
+      body: { id: '__a2a_write_probe__', group: null, revision: 'probe' },
+    })
+    // 能走到这里说明 revision 竟然被接受了 —— 更说明路由存在
+    return true
+  } catch (cause) {
+    const status = cause instanceof ApiError ? cause.status : 0
+    if (status === 409) return true
+    if (status === 404 || status === 405 || status === 501) return false
+    // 其它状态（401/403/500…）说明路由在，只是这次调用没被接受：交给真正的保存
+    // 去暴露原因，别在这里误判成「网关太旧」。
+    return status !== 0
+  }
+}
+

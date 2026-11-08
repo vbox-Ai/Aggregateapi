@@ -1408,6 +1408,66 @@ Key」这种正常顺序也挡住。
 App 能编译。**待真机核对**：开关打开后局域网设备能否真的访问 `http://<手机IP>:3065/v1`
 （需要真机 + 同网段另一台设备）；面板留在 3067 是否如预期不可从局域网访问。
 
+#### 记忆点 · 步骤 24（② 路由组写入 —— **不需要任何 Rust 补丁**，我之前的判断是错的）
+
+**★ 先纠正一个我说错的结论。** 我之前说「网关只有 `GET /api/routing/groups`，
+要补一条写路由」。**这是错的**：上游 v3.4.2 的 `http.rs` 里本来就有
+
+```rust
+.route("/api/routing/groups", get(api::routing_groups::get_groups).put(api::routing_groups::put_group))
+```
+
+而 `api/routing_groups.rs` 里的 `put_group` 已经带齐了我要做的一切：**成员校验**
+（`validate` + `validate_members`）、**revision 乐观锁**（冲突 **409**）、以及
+保存后清掉该组的粘性绑定。
+
+**我错在哪（这条比结论本身更值得记）**：那个判断是从**已安装二进制**
+（`extract255/agent2api-server`）的字符串推的 —— 而**二进制里读不出 HTTP 方法**，
+且那份二进制**比 v3.4.2 旧**。证据：它里面**没有** `put_group` 的特征串
+（`路由配置已在其他位置修改` 0 次、`validate_members` 0 次），而本地 `gw-src/http.rs`
+与 v3.4.2 的 `http.rs` **字节数完全相同**（91706）且**含** PUT 路由。
+
+⇒ **契约必须以「CI 实际构建的那个 tag 的上游源码」为准**，不能用已安装产物反推；
+二进制只适合看字符串常量，不适合看路由表。
+
+**② 的契约（读源码确认）**：
+
+| 项 | 内容 |
+|---|---|
+| 端点 | `PUT /api/routing/groups`（已存在） |
+| 载荷 | `{id, group \| null, revision}`；**`group: null` = 删除该组** |
+| revision | **整组内容的 SHA-256**（`revision(group)`），新建时用 GET 的 `newRevision` |
+| 冲突 | **409**「路由配置已在其他位置修改，请刷新后重试；草稿未丢失」 |
+| 响应 | 与 GET 同形（groups + newRevision + catalog）→ **回读内置** |
+| 结构体 | `#[serde(rename_all="camelCase", deny_unknown_fields)]` → **多一个字段就 400**，客户端只能原样回传 |
+
+**★ 零副作用探测**（这一手只有读懂 `save()` 才敢做）：探测用「`group: null`（删）
++ revision 传一个明显不是 SHA-256 的字符串」。因为 `save()` 里 revision 检查排在
+**任何写入之前**（`if revision(old) != expected { return Err(...) }`），所以
+**有这条路由一定 409、什么都没改**；没这条路由则 404/405。再叠一层保险：用一个
+不存在的 id。⇒ 旧版网关可被安全识别为「不支持写入」，界面保持只读并说明原因。
+
+**实现**：
+- `api/routing.ts`：新增 `RoutingGroupMember`/`RoutingGroupBody`/`RoutingGroupsPayload<Catalog>`
+  （`catalog` 泛型化，各页面自己定形状）、`putRoutingGroup`、`probeRoutingGroupWrite`；
+- `pages/routing-group-edit-sheet.tsx`：**只改安全子集** —— 组名、说明、成员参与开关；
+  草稿从读到的对象展开（`{...group, name, description, members}`），**不认识的字段逐字回传**；
+  保存前给**改动摘要 + 二次确认**；**409 自愈**（重拉清单、把最新 revision 顶上来让用户再存一次）；
+- `pages/routing-groups.tsx`：每组加「编辑」（首次点击做探测并缓存）、修正原先写错的
+  注释与说明文字、把本地类型改成 api 层的别名（定义只有一份）。
+
+**为什么只做安全子集**：对外模型 ID、策略、粘性、成员增删都**直接影响真实转发**，
+桌面端在画布上有拖拽与校验配合；手机上只做桌面端也要点两次对话框的那类轻量修改。
+
+**自己审出/编译逼出的三处**：①`Switch` 没导入（`tsc` 报 TS2304；我先前那个
+「已导入」的正则被 `ThemeSwitch` 骗了）；②类型重复定义导致 `catalog` 不兼容 →
+改成泛型 + 别名；③JSX 里用泛型组件要显式给类型实参（`<RoutingGroupEditSheet<RouteModelChoice> …/>`）。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,290.10 kB。
+
+**待真机核对**：装上新 deb 后编辑能否保存成功；用**旧网关**时应显示「网关不支持写入」
+而不是报未知错误；409 路径（桌面端同时改）能否自愈。
+
 #### 六项缺口最终状态（上一批：步骤 16–20）
 
 | # | 内容 | 结果 |
