@@ -1327,9 +1327,39 @@ App 一次调用即可，不用自己编排 stop/start 的中间失败态。
 - Rust 编译与补丁实际应用**只能靠 CI 验证**（CI 打补丁失败会 `exit 1` 并提示重新
   生成，不会静默）。
 
-**待办**：①e iOS App 从 `/status` 取 `panelPort` 加载 WebView（回落 3065）+ 原生桥加
-`lan` op；①f 手机端设置页加入口（前置校验照抄桌面端：已注册管理员 + 至少一把启用
+**待办**：①f 手机端设置页加入口（前置校验照抄桌面端：已注册管理员 + 至少一把启用
 Key）。
+
+#### 记忆点 · 步骤 22（①e iOS App 跟随面板端口 + `lan` 桥 op）
+
+**改动（`PanelViewController.swift`）**：
+- 拆开「网关端口」与「面板端口」：新增 `panelPort: UInt16?`（`nil` = 同端口）与
+  `panelBaseURL`；**`baseURL` 仍留给 `/health` 探测与嵌入式形态**，只有加载面板
+  （`/m`）与桌面面板切换改走 `panelBaseURL`；
+- 新增 `syncPanelPort(reloadIfChanged:completion:)`：GET supervisor `/status`，
+  读 `panelPort`，变了就更新；变成与网关同端口时清回 `nil`；
+- `activateGateway()` 成功后改成 `syncPanelPort{ reload() }`（先问端口再加载）；
+- `supervisorCall(op:id:enabled:)` 加 `lan` op：**给了 `enabled` 就
+  `POST /lan?enabled=1|0`，没给就 `GET /lan`**；写成功后延迟 1 秒再同步端口+重载
+  （否则刚发给 JS 的结果提示会被重载立刻抹掉）。
+
+**★ 路径必须拼字符串，不能用 `appendingPathComponent`**：`/lan?enabled=1` 里的 `?`
+会被后者百分号编码成 `%3F`，落成一个不存在的路径。原来的 `start`/`stop`/
+`factory-reset` 没有查询串所以看不出这个问题。
+
+**★ 设计 ①e 时担心的风险，查证后排除**：切局域网会把面板从 3065 换到 3067，
+**Origin 变了**，而浏览器 localStorage 按 Origin 隔离 —— 看起来会丢登录态。
+实际不会：`PanelViewController` 在**每次文档加载前**用
+`WKUserScript(source: PanelSessionStore.restoreScript(), injectionTime: .atDocumentStart)`
+把 Keychain 里的会话注回 localStorage（`servers.ts` 的 `storeServerAuth` 同时写
+localStorage + 原生 `a2aSession` 桥，就是为这件事）。
+**唯一缺口**：**Key 模式**的面板凭据走 `readServerKey`（**仅 localStorage**，不在
+恢复脚本里）→ 切端口后要重填一次网关 Key。这条要在界面上写明。
+
+**验证**：与仓库版逐行 diff 过（只有预期改动，括号平衡）；**Swift 本地无法编译**
+（本机没有 Xcode/工具链），只能靠 CI 的 iOS 任务验证。
+
+**待办**：①f 手机端设置页加入口。
 
 #### 六项缺口最终状态（上一批：步骤 16–20）
 

@@ -31,6 +31,16 @@ final class PanelViewController: UIViewController {
     private let portCandidates: [UInt16] = [3065, 3066, 3067]
     private var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
 
+    /// 面板端口：**默认与网关同端口**（`nil` = 同端口）。开了局域网访问之后
+    /// supervisor 会把面板搬到独立端口（3067）并把新端口报在 `/status` 的
+    /// `panelPort` 里 —— 这里必须跟上，否则 App 会去连一个此时只挂 `/v1` 的
+    /// 端口，面板直接 404。
+    ///
+    /// 注意 `baseURL` 仍然是**网关**端口的：`/health` 探测、以及嵌入式形态都
+    /// 用它。只有加载面板（`/m`）才走 `panelBaseURL`。
+    private var panelPort: UInt16?
+    private var panelBaseURL: URL { URL(string: "http://127.0.0.1:\(panelPort ?? port)")! }
+
     private var webView: WKWebView!
     private let statusBar = UIView()
     private let statusLabel = UILabel()
@@ -161,7 +171,7 @@ final class PanelViewController: UIViewController {
             WKUserScript(source: PanelSessionStore.restoreScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
         config.userContentController.add(self, name: "a2aSession")
-        // ③ 面板控制（目前只有「删库重注册」）：跨端口调用 3066 会被 CORS 拦，
+        // ③ 面板控制（删库重注册、局域网开关）：跨端口调用 3066 会被 CORS 拦，
         //    所以走原生桥，由 App 侧用 URLSession 打 supervisor。
         config.userContentController.add(self, name: "a2aControl")
         // ④ 文件保存：面板里的「导出 / 备份」要把文件交给用户存到「文件」。
@@ -399,11 +409,45 @@ final class PanelViewController: UIViewController {
     @objc private func toggleDesktopPanel() {
         showingDesktop.toggle()
         navigationItem.rightBarButtonItem?.title = showingDesktop ? "手机面板" : "桌面面板"
-        webView.load(URLRequest(url: showingDesktop ? baseURL : baseURL.appendingPathComponent("m")))
+        webView.load(URLRequest(url: showingDesktop ? panelBaseURL : panelBaseURL.appendingPathComponent("m")))
     }
 
     private func reload() {
-        webView.load(URLRequest(url: baseURL.appendingPathComponent("m")))
+        webView.load(URLRequest(url: panelBaseURL.appendingPathComponent("m")))
+    }
+
+    /// 问 supervisor 面板现在在哪个端口，必要时跟上并重载。
+    ///
+    /// 触发时机：① App 前台拉起网关之后（`activateGateway`）；② 面板改了
+    /// 局域网开关之后（supervisor 会按新开关重启网关，端口随之变化）。
+    /// 端口变成与网关同端口时把 `panelPort` 清回 `nil`（默认形态）。
+    ///
+    /// - Parameter reloadIfChanged: 端口确实变了才重载，避免无谓地刷白页面
+    private func syncPanelPort(reloadIfChanged: Bool, completion: (() -> Void)? = nil) {
+        var request = URLRequest(url: supervisorURL.appendingPathComponent("status"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                var changed = false
+                if let data,
+                   let json = try? JSONSerialization.jsonObject(with: data),
+                   let object = json as? [String: Any],
+                   let raw = object["panelPort"] as? NSNumber {
+                    let next = UInt16(truncating: raw)
+                    let current = self.panelPort ?? self.port
+                    if next != current {
+                        self.panelPort = (next == self.port) ? nil : next
+                        changed = true
+                    }
+                }
+                if changed, reloadIfChanged {
+                    self.reload()
+                }
+                completion?()
+            }
+        }.resume()
     }
 
     @objc private func onRetry() {
@@ -464,7 +508,9 @@ final class PanelViewController: UIViewController {
                 if ok && self.appIsActive {
                     self.startHeartbeat()
                     self.needsReloadAfterActivation = false
-                    self.reload()
+                    // 先问清面板当前在哪个端口再加载：开了局域网访问时面板在
+                    // 独立端口（3067），照旧连 3065 会打到只挂 /v1 的端口上。
+                    self.syncPanelPort(reloadIfChanged: false) { self.reload() }
                 } else if !self.appIsActive {
                     self.deactivateGateway()
                 } else {
@@ -687,7 +733,8 @@ extension PanelViewController: WKScriptMessageHandler {
             guard let body = message.body as? [String: Any],
                   let op = body["op"] as? String else { return }
             let id = (body["id"] as? String) ?? ""
-            supervisorCall(op: op, id: id)
+            // 只有 `lan` 带参数：给了 enabled 就是写开关，没给就是读
+            supervisorCall(op: op, id: id, enabled: body["enabled"] as? Bool)
             return
         }
         if message.name == "a2aFile" {
@@ -725,19 +772,35 @@ extension PanelViewController: WKScriptMessageHandler {
     ///   · `status` → GET  /status
     ///   · `start`  → POST /start
     ///   · `stop`   → POST /stop
+    ///   · `lan`    → 给了 `enabled` 就 POST /lan?enabled=1|0（写开关并按需重启
+    ///                网关），没给就 GET /lan（读开关）
     ///   · `factory-reset` → POST /factory-reset（成功后页面回首次注册）
     /// 结果通过 `a2a-control-result` 事件回给 JS（携带调用时的 id 以区分并发调用）。
-    func supervisorCall(op: String, id: String) {
-        var url = URL(string: "http://127.0.0.1:3066/status")
-        if op == "start" || op == "stop" || op == "factory-reset" {
-            url = URL(string: "http://127.0.0.1:3066/\(op)")
+    func supervisorCall(op: String, id: String, enabled: Bool? = nil) {
+        // 路径是**拼**出来的而不是 appendingPathComponent：`/lan?enabled=1` 里的
+        // `?` 会被后者百分号编码成 `%3F`，落成一个不存在的路径。
+        var path = "/status"
+        var method = "GET"
+        switch op {
+        case "start", "stop", "factory-reset":
+            path = "/\(op)"
+            method = "POST"
+        case "lan":
+            if let enabled {
+                path = "/lan?enabled=\(enabled ? 1 : 0)"
+                method = "POST"
+            } else {
+                path = "/lan"
+            }
+        default:
+            break
         }
-        guard let url else {
+        guard let url = URL(string: "http://127.0.0.1:3066\(path)") else {
             reportSupervisorError(op: op, id: id, message: "控制端口地址非法")
             return
         }
         var request = URLRequest(url: url)
-        request.httpMethod = (op == "status") ? "GET" : "POST"
+        request.httpMethod = method
         request.timeoutInterval = 30
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -753,6 +816,14 @@ extension PanelViewController: WKScriptMessageHandler {
                     // 库没了，页面里的本地会话也一并清掉，直接回首次注册
                     self.webView.evaluateJavaScript("try{localStorage.clear()}catch(e){}", completionHandler: nil)
                     self.webView.reload()
+                }
+                if op == "lan" && status == 200 {
+                    // supervisor 已按新开关重启网关，面板可能换了端口。先让界面把
+                    // 结果提示出来（JS 收到事件才会渲染），一拍之后再同步端口重载，
+                    // 否则刚发出的提示会被这次重载立刻抹掉。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                        self?.syncPanelPort(reloadIfChanged: true)
+                    }
                 }
                 self.deliverSupervisorResult(op: op, id: id, ok: status == 200, payload: payload)
             }
