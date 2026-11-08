@@ -243,7 +243,12 @@ final class PanelViewController: UIViewController {
         for target in targets {
             group.enter()
             let key = target.isEmpty ? "/" : "/" + target
-            var request = URLRequest(url: baseURL.appendingPathComponent(target))
+            // `/health` 在**网关**端口（它是网关路由），`/m` 与 `/` 在**面板**端口
+            // （开着局域网访问时面板搬到了独立端口）。这里必须分开探，否则
+            // `/m` 会打到只挂 /v1 的端口上、必然 404，界面就会误报「网关异常」
+            // 并把诊断条顶上来。
+            let origin = target == "health" ? baseURL : panelBaseURL
+            var request = URLRequest(url: origin.appendingPathComponent(target))
             request.timeoutInterval = 4
             URLSession.shared.dataTask(with: request) { data, response, _ in
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -274,10 +279,11 @@ final class PanelViewController: UIViewController {
             self.summary = summaryLines.joined(separator: "\n")
             self.statusLabel.text = self.summary
 
-            // /m 打不开时，回退到站点根（有些网关把面板挂在 / 上）
+            // /m 打不开时，回退到站点根（有些网关把面板挂在 / 上）——
+            // 根页也是**面板**端口提供的，所以要跟着面板走。
             if let body = results["/m"], !body.contains("HTTP 200"), !self.triedRootFallback {
                 self.triedRootFallback = true
-                self.webView.load(URLRequest(url: self.baseURL))
+                self.webView.load(URLRequest(url: self.panelBaseURL))
             }
 
             // /m 正常（200 且 >200 字节）就认为是面板页，交给 WebView 渲染
@@ -622,8 +628,12 @@ final class PanelViewController: UIViewController {
     // MARK: - 登录器桥（原生侧）
 
     /// 打开隔离登录容器；成功后由容器自己完成回调并把结果交给网关。
+    ///
+    /// `gateway:` 传的必须是**面板**端口：容器拿它拼 `api/session/login/callback`，
+    /// 而 `/api/*` 由面板监听提供 —— 开了局域网访问后面板在独立端口（3067），
+    /// 传网关端口会 404、第三方登录静默失败。
     func openLoginContainer(url: URL, state: String) {
-        let vc = LoginContainer(gateway: baseURL, loginURL: url, state: state)
+        let vc = LoginContainer(gateway: panelBaseURL, loginURL: url, state: state)
         vc.onFinished = { [weak self] summary in
             // 闭包里调实例方法必须显式 self（Swift 逃逸闭包语义），
             // 先 guard 拿到强引用，避免一连串 self? 把 Optional 插进 JS 字符串
