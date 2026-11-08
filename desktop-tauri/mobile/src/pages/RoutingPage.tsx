@@ -11,6 +11,7 @@ import { providerLabel } from '../lib/providers'
 import { RoutingReplayView } from './routing-replay'
 import { RoutingWorkspaceView } from './routing-workspace'
 import { RoutingStickySheet } from './routing-sticky-sheet'
+import { RoutingGroupsSection, RoutingPreviewSheet, type RouteGroup } from './routing-groups'
 
 /**
  * 路由配置。
@@ -30,6 +31,8 @@ import { RoutingStickySheet } from './routing-sticky-sheet'
 export function RoutingPage() {
   const identity = serverIdentity()
   const [stickyOpen, setStickyOpen] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewGroup, setPreviewGroup] = useState<RouteGroup | null>(null)
   const [mode, setMode] = useState<'strategy' | 'workspace' | 'replay'>('strategy')
   const [settings, setSettings] = useState<RoutingSettings | null>(null)
   const [queue, setQueue] = useState<RoutingQueue | null>(null)
@@ -265,10 +268,22 @@ export function RoutingPage() {
           </> : null}
         </Card> : <Card className='m-card'><Empty text={t('正在计算队列…')} /></Card>}
       </div>
+
+        <RoutingGroupsSection onPreviewGroup={group => { setPreviewGroup(group); setPreviewOpen(true) }} />
+        <div className='m-section'>
+          <SectionHead title={t('选路预演')} />
+          <p className='m-ck-note'>
+            {t('按当前配置模拟一次选路：可以带上「需要工具调用 / 图片 / 视频」和「首选失败」这两个条件。不发送请求、不消耗额度、不推进轮转。')}
+          </p>
+          <Button variant='outline' size='sm' onClick={() => { setPreviewGroup(null); setPreviewOpen(true) }}>
+            {t('按模型预演')}
+          </Button>
+        </div>
         </>
       ) : null}
 
       {stickyOpen ? <RoutingStickySheet model={model || undefined} onClose={() => setStickyOpen(false)} /> : null}
+      {previewOpen ? <RoutingPreviewSheet group={previewGroup || undefined} onClose={() => setPreviewOpen(false)} /> : null}
     </div>
   )
 }
