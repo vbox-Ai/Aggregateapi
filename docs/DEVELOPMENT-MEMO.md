@@ -1879,3 +1879,53 @@ fn panel_status() -> Response {
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；
 `mobile.js` **1,290.35 kB**。
+
+#### 记忆点 · 步骤 32（Swift 编译 —— CI 原文证据，run 279）
+
+**run 279（push 触发，sha `1901b26`）iOS 任务整体 success**，其中第 16 步
+「打 IPA + 打包 deb」success。日志原文：
+
+```
+EMBED=0 ./agent2api-ios/scripts/build-ipa.sh
+EMBED=1 ./agent2api-ios/scripts/build-ipa.sh
+SDK: /Applications/Xcode_16.4.app/.../iPhoneOS18.5.sdk
+==> [7/7] 打 IPA
+```
+
+**整份日志里 `error:` 行数 = 0**；`PanelViewController.swift` 只出现**既有警告**
+（`53:13` 未使用的 `build`、`760:35` / `763:31` 未使用的返回值 —— 都在我没改的区域）：
+
+```
+PanelViewController.swift:53:13: warning: initialization of immutable value 'build' was never used
+PanelViewController.swift:760:35: warning: result of call to 'save(serverId:json:)' is unused
+```
+
+⇒ **①e 的 Swift 改动编译通过**（`panelPort` / `panelBaseURL` / `syncPanelPort` /
+`a2aControl` 的 `lan` op / `supervisorCall(op:id:enabled:)`）。
+
+**范围仍然要分清**：run 279 的提交是 `1901b26`，**不含**后来那三处 origin 修复
+（`0f237aa`）。那三处由 run 288（push，`0f237aa`）覆盖，当时还在排队 ——
+所以这一步只证明「①e 编译通过」，不证明 origin 修复也编译通过（两者都是 Swift，
+后者的证据要单独看）。
+
+**至此各层验证状态**：
+
+| 层 | 证据 |
+|---|---|
+| 补丁 0006 | ✅ CI run 278 第 4 步（原文 `== apply …0006…` → `✅ 已应用`） |
+| supervisor Rust | ✅ CI run 278 第 9 步（`Mach-O 64-bit executable arm64`，进两个 deb 变体） |
+| 手机端 UI | ✅ 本地三项 + CI 第 14/15 步（`npm run build` 本身就含 `tsc --noEmit`） |
+| **Swift ①e** | ✅ **CI run 279 第 16 步**（`Xcode_16.4` / `iPhoneOS18.5.sdk`，0 个 error） |
+| Swift origin 修复 | ⏳ run 288 排队中 |
+
+**顺带发现的一个仓库级问题（值得单独提）**：`build.yml` 同时配了
+`push: branches: [main]` 与 `workflow_dispatch`，而且**没有 `concurrency` 段** ——
+于是**每一次 push 都会排一整套全平台构建**（`only` 默认 `all`，每个都要一台 macOS
+runner）。我这一轮 push 了十几次，就往队列里塞了 13 个这样的运行，**这是我自己造成的
+排队**。而且这个 token **没有取消 Actions 运行的权限**（取消请求得到 401），所以那些
+运行只能自己排空。
+
+⇒ 两条可直接采用的改进：①给工作流加
+`concurrency: { group: ${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }`，
+让被覆盖的运行自动取消；②我的**文档类改动应该攒着和代码一起推**，不要每个记忆点单独 push
+（每次都是一整套构建）。
