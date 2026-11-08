@@ -18,6 +18,7 @@ import {
   fetchUsageSnapshot,
   setAccountEnabled,
   exportAccounts,
+  batchAccounts,
   type Account,
   type UsageRow,
   type UsageSnapshot,
@@ -29,6 +30,8 @@ import { usageIndex, usageText } from '../lib/usage'
 import { useDisplayClock } from '../../../ui-shared/use-display-clock'
 import { credentialExpiryRowsOf, credentialExpiryText } from '../../../ui-shared/credential-expiry'
 import { upstreamCooldownOf, upstreamSuspendedReasonOf } from '../../../ui-shared/account-upstream-state'
+import { serverIdentity } from '../lib/servers'
+import { confirmDialog } from '@ui'
 import { providerLabel } from '../lib/providers'
 import { usePolling } from '../lib/usePolling'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -60,10 +63,15 @@ export function AccountsPage() {
   const [adding, setAdding] = useState(false)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
+  /** 批量选择：开启后每行出现勾选框，底部出现批量操作条 */
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchBusy, setBatchBusy] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [usage, setUsage] = useState<UsageSnapshot | null>(null)
   const accounts = state.session?.accounts?.accounts || []
+  const identity = serverIdentity()
   const sessionSorting = state.session?.accounts?.sorting
   const sorting = (usage?.sorting?.updatedAt || 0) > (sessionSorting?.updatedAt || 0) ? usage?.sorting : sessionSorting
 
@@ -84,6 +92,38 @@ export function AccountsPage() {
   usePolling(load, 30_000)
 
   const pull = usePullToRefresh({ onRefresh: load })
+
+  // 批量操作（POST /api/accounts/batch）：启停/禁用/删除
+  const runBatch = async (action: 'enable' | 'disable' | 'remove') => {
+    if (batchBusy || selectedIds.size === 0) return
+    const ids = Array.from(selectedIds)
+    if (action === 'remove') {
+      // 删除不可恢复：比单个删除多一步「已选 {n} 个」
+      if (!await confirmDialog(t('确定删除这 {n} 个账号？该操作不可恢复。', { n: ids.length }))) return
+    }
+    setBatchBusy(action)
+    try {
+      await batchAccounts(action, ids)
+      if (serverIdentity() !== identity) return
+      store.toast(t('已对 {n} 个账号执行「{action}」', { n: ids.length, action: action === 'remove' ? t('删除') : action === 'enable' ? t('启用') : t('禁用') }), 'ok')
+      setSelectMode(false)
+      setSelectedIds(new Set())
+      void load()
+    } catch (failure) {
+      if (serverIdentity() === identity) store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      if (serverIdentity() === identity) setBatchBusy('')
+    }
+  }
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // 导出全部账号（含 token 与自定义提供商定义）
   const exportAll = async () => {
@@ -277,6 +317,11 @@ export function AccountsPage() {
           <>
             <Button variant='outline' size='sm' onClick={() => setAdding(true)}>{t('添加账号')}</Button>
             <Button variant='outline' size='sm' onClick={() => setImporting(true)}>{t('导入凭证')}</Button>
+            <Button variant='outline' size='sm'
+              disabled={Boolean(batchBusy) || selectedIds.size === 0}
+              onClick={() => setSelectMode(prev => !prev)}>
+              {selectMode ? t('取消批量') : t('批量')}
+            </Button>
             <Button variant='outline' size='sm' disabled={exporting || !accounts.length} onClick={() => void exportAll()}>
               {exporting ? t('导出中…') : t('导出')}
             </Button>
@@ -393,9 +438,11 @@ export function AccountsPage() {
                   account={account}
                   rank={index + 1}
                   usageRow={usageById.get(account.id)}
-                  onOpen={() => setOpenId(account.id)}
+                  onOpen={() => selectMode ? toggleSelect(account.id) : setOpenId(account.id)}
                   onToggle={next => void toggle(account, next)}
                   busy={busy}
+                  selected={selectMode ? selectedIds.has(account.id) : undefined}
+                  onSelect={() => toggleSelect(account.id)}
                 />
               ))}
             </Card>
@@ -404,6 +451,37 @@ export function AccountsPage() {
       })}
 
       </div>
+
+      {/* 批量操作条：只在选择模式下出现，跟着内容滚动 */}
+      {selectMode ? <div className='m-section' style={{ marginTop: 12 }}>
+        <Card className='m-card m-card-pad'>
+          <div className='m-ck-toolbar'>
+            <span className='m-ck-title m-ck-grow'>
+              {t('已选 {n} 个账号', { n: selectedIds.size })}
+            </span>
+            <Button size='sm' variant='ghost' onClick={() => {
+              if (selectedIds.size === accounts.length) setSelectedIds(new Set())
+              else setSelectedIds(new Set(accounts.map(item => item.id)))
+            }}>
+              {selectedIds.size === accounts.length ? t('取消全选') : t('全选')}
+            </Button>
+          </div>
+          <div className='m-ck-actions'>
+            <Button size='sm' variant='outline' disabled={Boolean(batchBusy) || selectedIds.size === 0}
+              onClick={() => void runBatch('enable')}>
+              {batchBusy === 'enable' ? t('启用中…') : t('启用')}
+            </Button>
+            <Button size='sm' variant='outline' disabled={Boolean(batchBusy) || selectedIds.size === 0}
+              onClick={() => void runBatch('disable')}>
+              {batchBusy === 'disable' ? t('禁用中…') : t('禁用')}
+            </Button>
+            <Button size='sm' variant='destructive' disabled={Boolean(batchBusy) || selectedIds.size === 0}
+              onClick={() => void runBatch('remove')}>
+              {batchBusy === 'remove' ? t('删除中…') : t('删除')}
+            </Button>
+          </div>
+        </Card>
+      </div> : null}
 
       {adding ? <DynamicProviderSheet onClose={() => setAdding(false)} onAdded={() => {
         setAdding(false)
@@ -441,6 +519,8 @@ function AccountRow({
   onOpen,
   onToggle,
   busy,
+  selected,
+  onSelect,
 }: {
   account: Account
   /** 组内序号（1 起）：后端 priority 是全局唯一队列里的绝对位次，手机上按组内序号读 */
@@ -450,6 +530,9 @@ function AccountRow({
   onOpen: () => void
   onToggle: (next: boolean) => void
   busy: boolean
+  /** 批量选择模式下的选中态；未开启时为 undefined（行内不出现勾选框） */
+  selected?: boolean
+  onSelect?: (next: boolean) => void
 }) {
   const now = useDisplayClock()
   const limited = isRateLimited(account)
@@ -506,6 +589,31 @@ function AccountRow({
         opacity: account.enabled ? 1 : 0.62,
       }}
     >
+      {selected !== undefined ? (
+        <Button
+          size='icon-touch'
+          variant='ghost'
+          type='button'
+          className='m-icon-btn'
+          aria-label={selected ? t('取消选择') : t('选择账号')}
+          title={selected ? t('取消选择') : t('选择账号')}
+          onClick={event => {
+            event.stopPropagation()
+            onSelect?.(!selected)
+          }}
+          style={{
+            flex: 'none',
+            width: 26,
+            height: 26,
+            borderRadius: 8,
+            border: '1px solid var(--m-line)',
+            background: selected ? 'var(--m-primary)' : 'var(--m-surface)',
+            color: selected ? '#fff' : 'var(--m-text-3)',
+          }}
+        >
+          {selected ? <Icon name='check' style={{ width: 15, height: 15 }} /> : null}
+        </Button>
+      ) : null}
       <Button size='default' variant='ghost'
         type='button'
         onClick={onOpen}

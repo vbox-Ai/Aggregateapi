@@ -138,6 +138,16 @@ export async function addAccountByFile(payload: AccountFileImportPayload): Promi
  * `GET /api/accounts/export` 是明文 JSON —— 桌面端只把它写进用户选的文件，
  * 手机端同样只落成本地文件，不进 localStorage、不进日志。
  */
+/**
+ * 批量操作账号（`POST /api/accounts/batch`）。
+ *
+ * 行动语义见 `accounts_batch.rs`：`remove` / `enable` / `disable` 是最常用的三条；
+ * 响应里带 `list`，调用方直接刷新列表即可。
+ */
+export function batchAccounts(action: 'remove' | 'enable' | 'disable', ids: string[]): Promise<unknown> {
+  return apiCall('/api/accounts/batch', { method: 'POST', body: { ids, action } })
+}
+
 export function exportAccounts(): Promise<unknown> {
   return apiCall('/api/accounts/export')
 }
