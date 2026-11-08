@@ -18,8 +18,11 @@ import { providerLabel } from '../lib/providers'
  * - `GET  /api/routing/queue?model=` → 队列可见化：按当前策略，这个模型的候选怎么排、
  *   谁被跳过、为什么（排序实现与转发选路是同一个函数）
  *
- * 手机上不做路由组 / 工作空间：那两层是桌面 Tauri 壳的事务（`saveRoutingProfile`），
- * 网关没有给它们 HTTP 入口。这里只做**全局策略 + 队列预演**——日常最需要的两块。
+ * ⚠️ 这一页目前只做了**全局策略 + 队列预演**，别被下面这句旧的错误判断误导 —— 之前这里
+ * 写着「路由组 / 工作空间是桌面壳事务、网关没有给它们 HTTP 入口」，**只对了一半**：
+ * 只有「保存路由组」没有 HTTP 路由，而工作空间 / 预演 / 路由档写入 / 粘滞 / 请求回放 /
+ * 链路追踪 / 流量图**全都有**（见 `docs/mobile-ui/ROUTING-GAP.md` 的路由表与批次计划）。
+ * 判据是网关自己的路由表，不是「桌面端文件多不多」。
  */
 export function RoutingPage() {
   const identity = serverIdentity()
