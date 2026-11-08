@@ -597,10 +597,7 @@ function AccountRow({
           className='m-icon-btn'
           aria-label={selected ? t('取消选择') : t('选择账号')}
           title={selected ? t('取消选择') : t('选择账号')}
-          onClick={event => {
-            event.stopPropagation()
-            onSelect?.(!selected)
-          }}
+          onClick={() => onSelect?.(!selected)}
           style={{
             flex: 'none',
             width: 26,

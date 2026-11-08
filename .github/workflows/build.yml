@@ -181,8 +181,18 @@ jobs:
       - name: 构建手机面板 UI（从源码，覆盖上游预编译产物）
         run: |
           set -euo pipefail
+          echo "=== 安装手机工程依赖 ==="
+          ( cd desktop-tauri/mobile && npm ci )
+          # ui-kit 以**源码**接入（tsconfig paths 指向 ../ui-kit/src），它自己的依赖
+          # 必须在 ui-kit/node_modules 里 —— 少了这些包，tsc 会在
+          # ../ui-kit/src/*.tsx 报 TS2307，vite 会在 ui-kit/styles/*.css 报
+          # Can't resolve 'tw-animate-css' / 'shadcn/tailwind.css'。
+          # 本机开发时这份 node_modules 一直在，所以本地能过、CI 过不了。
+          echo "=== 安装 ui-kit 依赖（组件库以源码接入，需要它自己的 node_modules）==="
+          ( cd desktop-tauri/ui-kit && npm install --no-audit --no-fund )
+
           echo "=== 构建手机面板 UI ==="
-          ( cd desktop-tauri/mobile && npm ci && npm run build )
+          ( cd desktop-tauri/mobile && npm run build )
           # 产物落到 desktop-tauri/ui/m；把它放进上游 checkout，
           # 这样 deb / IPA 打包的 --ui 用的就是我们新编的 mobile.js
           rm -rf Agent2API/desktop-tauri/ui/m
