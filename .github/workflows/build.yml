@@ -370,6 +370,14 @@ jobs:
             file "$b"
           done
 
+      - name: 缓存官方骨架包
+        uses: actions/cache@v4
+        with:
+          # 骨架包基本不变，而它的 CDN 会整段 504（实测直连与两个加速源同时失败）。
+          # 缓存住「成功下载的那一次」，上游抽风时仍能出带预置包的 deb。
+          path: .cache/official
+          key: official-packs-v1-${{ runner.os }}
+
       - name: 下载官方骨架包
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

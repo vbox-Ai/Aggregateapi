@@ -89,6 +89,7 @@ def main() -> int:
         help="取不到就只警告并返回 0（骨架包是「省得手写 pack.json」的优化，不是必需品；"
              "调用方据此跳过打包，而不是让整个作业失败）",
     )
+    parser.add_argument("--force", action="store_true", help="忽略已有文件，强制重新下载")
     args = parser.parse_args()
 
     out = pathlib.Path(args.out)
@@ -117,6 +118,11 @@ def main() -> int:
 
     release, asset = found
     dest = out / asset["name"]
+    # 已经有了就直接用：CI 会把 .cache/official 缓存起来，上游 CDN 抽风时
+    # （实测会持续 504）这一层缓存就是唯一能拿到骨架包的途径。
+    if dest.exists() and dest.stat().st_size > 0 and not args.force:
+        print(f"[fetch] 已有 {dest}（{dest.stat().st_size} B），跳过下载")
+        return 0
     print(f"[fetch] tag={release.get('tag_name')} {asset['name']} ({asset['size']} B)")
     try:
         download(asset["browser_download_url"], dest)
