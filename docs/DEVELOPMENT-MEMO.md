@@ -194,6 +194,22 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - **未验证**：Rust supervisor 与 Swift 本环境无工具链，需 CI（ios job）编译确认；
   删库仅删 `config_dir` 下 `agent2api.db*` 与 `*.key`，路径来自 supervisor 的 `home`。
 
+### Phase 3.4：请求 / 日志导出（已完成）
+- 提交：`752d9bf960c07756a59960e27c9c63dc3bf1a242`
+- 现状确认：手机端 RequestsPage 已具备时间范围 / 状态 / 提供商 / 重试 / 在途筛选与详情，
+  LogsPage 已具备分类 + 级别筛选。缺的只是**导出**。
+- 上游契约：网关没有请求日志的 HTTP 导出接口（桌面走壳层 `workbuddyDesktop`）；
+  「replay」在桌面端是**选路快照回放**（路由当时命中了谁），不是重发请求。
+- 改动文件：
+  - `desktop-tauri/mobile/src/pages/RequestsPage.tsx`：
+    - PageIntro 加「导出」按钮 → 把当前已加载的 `rows` 落成 `.json`
+    - （含请求体与响应摘要，够排查用）
+  - `desktop-tauri/mobile/src/pages/LogsPage.tsx`：
+    - PageIntro 加「导出」按钮 → 把当前渲染的分组（含原始记录）落成 `.json`
+  - 两页都引入 `downloadJson` / `dateStamp`（复用 Phase 2.4 的 `lib/download`）
+- 验证：typecheck / build 通过；`mobile.js` 1092.97 → 1093.75 kB。
+- 备注：导出的是**当前页**内容，不是全量 —— 全量导出需要网关加接口或分页拉全。
+
 ### Phase 3.5：账号批量操作（已完成）
 - 提交：`e813301785acdf63b62004038f64bb414a8c0269`
 - 上游契约（`api/accounts_batch.rs`）：
