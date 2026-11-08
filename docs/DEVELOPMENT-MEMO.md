@@ -1825,3 +1825,28 @@ Python 里要么用 `newline=''`（保留原样）并自己拼行尾，要么显
 —— 只有这份 CRLF 的 memo 中招。新写的 `0006-panel-bind-host.diff` 用 LF 是**对的**
 （git 补丁就该是 LF，CI 也成功 `git apply` 了）。
 
+
+#### 记忆点 · 步骤 30（② 载荷字段集核对 —— 「原样回传」这个前提必须证实）
+
+② 的草稿是「**展开读到的对象 + 覆盖组名/说明/参与开关**」，它靠的前提是：客户端回传的
+字段集与上游**逐字一致**。因为上游结构体带 `deny_unknown_fields` —— **多一个字段就
+400**，少一个（无 `default` 的）也 400。这不是「宽容处理」，所以必须点数而不是假设：
+
+| | 上游 Rust（`config/routing_groups.rs`） | 手机端 TS（`api/routing.ts`） |
+|---|---|---|
+| 组 | `id, name, model, description, strategy, sticky, members` | **完全相同** |
+| 成员 | `id, provider, model, included, accounts` | **完全相同** |
+
+两个结构体都**没有** `skip_serializing_if` / `flatten` / `skip_deserializing`
+（只有 `description` 带 `#[serde(default)]`，那只影响反序列化）⇒ 序列化输出就是
+这 7 + 5 个字段。所以「展开 + 覆盖三项」产出的载荷**结构上必然合法**，
+`deny_unknown_fields` 不会拦。
+
+**为什么值得单独查这一条**：如果字段集错了，症状是**每一次保存都 400**，报错来自 serde
+（`unknown field` / `missing field`），很容易被误读成「网关不支持写入」，从而把功能
+整个判死。⇒ 「API 边界上的结构等价」属于实现前就该点数的东西。
+
+**（同时演练了步骤 29 的教训）**：改这份 CRLF 文件时用 `open(..., newline='')`、
+锚点里带 `\r\n`、写完复核 `CRLF 行数 == 总行数` —— 行尾保住了。
+另记一个小坑：第一次锚点没匹配，因为我在锚点里写了 ASCII 括号 `(`，而文件里是**全角
+`（`** —— 中文文档里的括号必须从原文复制，不能凭印象打。
