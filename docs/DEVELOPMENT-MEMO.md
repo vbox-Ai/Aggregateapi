@@ -1791,3 +1791,37 @@ removeCustomModel: (provider, id) => POST /api/models/custom/remove { provider, 
   `https://api.github.com/repos/<repo>/actions/artifacts/<id>/zip`（Release 资产走
   `/releases/assets/<id>` + `Accept: application/octet-stream`）。本机直连 GitHub 常超时，
   用户侧可用 `https://ghfast.top/` 或 `https://gh-proxy.com/` 前缀加速。
+
+#### 记忆点 · 步骤 29（一个我自己造成的、必须还原的副作用：行尾被改成 LF）
+
+**症状**：这次改动清单里 `docs/DEVELOPMENT-MEMO.md` 显示 **+1793 / −1405** —— 而我这轮
+只加了大约几百行。**数字不对就是线索**。
+
+**原因**：这个文件原本是 **CRLF**（基线 `e0fad5b`：1405 行 CRLF、0 个纯 LF）。我用
+Python 写入时写的是 `newline='\n'`，于是**整个文件的每一行都算改动**：
+
+| | 基线 e0fad5b | 我改后 1a5bb49 |
+|---|---|---|
+| CRLF 行 | 1405 | 0 |
+| 纯 LF 行 | 0 | 1793 |
+
+**为什么必须还原，而不是「反正内容对就行」**：
+1. 这是**无关的格式化改动**，把真实内容改动埋在 1793 行噪声里 —— 谁 review 都看不出
+   我到底改了什么；
+2. 它会**长期**污染后续每一个 diff（只要文件还是 LF，而其它分支/工具按 CRLF 写，就会
+   反复全文件冲突）；
+3. 与仓库既定约定不一致。
+
+**做法**：把本地副本转回 CRLF 再推。**代价**是这一次 push 的 diff 仍然是全文件级
+（LF→CRLF），但仓库从此回到原约定，**之后的 diff 才是干净的**。
+
+**教训（真实可复现）**：用脚本改文本文件时，**先看原文件的行尾**再决定写入方式；
+Python 里要么用 `newline=''`（保留原样）并自己拼行尾，要么显式选对。写完的核对方式
+是数一遍：`CRLF 行数 == 总行数`（或两者都应为 0）—— 一行命令就能发现这类问题，
+而**编译、类型检查、自检脚本全都不会报**（它们只看内容）。
+
+**顺带核对**：这次改动的其它文件行尾都**没被动过**（`DEPTH-GAP.md` +31/−4、
+`ROUTING-GAP.md` +11/−5、Swift +96/−15、Rust +142/−18、各 TS/TSX 变动都是小差额）
+—— 只有这份 CRLF 的 memo 中招。新写的 `0006-panel-bind-host.diff` 用 LF 是**对的**
+（git 补丁就该是 LF，CI 也成功 `git apply` 了）。
+
