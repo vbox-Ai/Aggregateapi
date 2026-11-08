@@ -1230,9 +1230,50 @@ function hL(e){ if(e==null) return ''; if(typeof e==='string') return e;
 | ① | 代理订阅 | **撤回**：`/api/subscriptions` 返回 410（`retired_proxy_feature`），功能已下线 |
 | ② | 请求与响应正文（`stats/requests/raw`） | ✅ `fd76921` |
 | ③ | 调试报文（`debug/traffic`） | ✅ 本次 |
-| ④ | 自定义模型增删（`models/custom`） | 待做 |
+| ④ | 自定义模型增删（`models/custom`） | ✅ 本次 |
 | ⑤ | 日志下载（`logs/download`） | 待做 |
 | ⑥ | MCP / Skill 安装（`tools/install-*`） | 待做 |
+
+#### 记忆点 · 步骤 18（深度缺口 ④ 自定义模型增删）
+
+**契约（从二进制内嵌面板 JS 挖的，两个字段）**：
+```js
+addCustomModel:    (provider, id) => POST /api/models/custom        { provider, id }
+removeCustomModel: (provider, id) => POST /api/models/custom/remove { provider, id }
+```
+
+**★ 适用范围是从面板侧抄的判断，容易搞错**：`addCustomModel` / `removeCustomModel`
+**只服务内置家**。自定义提供商的模型清单是**整表保存**的（走 `/api/custom-providers/models`，
+面板侧有单独分支 `as(provider)`），从 `models/custom` 加会和那边打架 —— 所以手机端的
+登记抽屉里只列内置家，并写明「自定义提供商请在那边改」。
+
+**两条校验照抄面板侧 `WI(provider, id)`**（文案一致，顺序一致）：
+1. 清单里已有同 id →「模型 ID「{id}」已存在，请使用已有模型」；
+2. 已有启用中的绑定 →「模型 ID「{id}」在该提供商已有启用绑定，请先关闭它再添加」。
+**判重口径也照抄：忽略大小写**（面板侧 `ss()` 两边小写化）—— 不照抄会出现
+「手机说能加、网关说已存在」。
+
+**可移除的判据**：面板侧 `function o7(e){ return e.source === "manual" || as(e.provider) }`。
+手机端**只取前半条** `source === 'manual'`（手动登记）—— 手机端的 `sourceLabel()`
+早就把 `'manual'` 显示成「手动」，判据是现成的；后半条（自定义提供商）不在这里做。
+移除确认文案也照抄：「确定移除自定义模型「{id}」？这条登记会被直接移除，之后
+`/v1/models` 不再广告它、请求它也会被拒。」
+
+**改动**：`api/gateway.ts` 加 `addCustomModel` / `removeCustomModel` / `isManualModel`；
+新增 `pages/models-add-custom-sheet.tsx`；`ModelsPage` 页头加「登记自定义模型」（plus 图标）、
+行上对手动登记的模型显示「移除」、页尾说明改成「手机端做启停，以及登记 / 移除自定义模型」。
+
+**踩到的编译错误**：`ModelsPage.tsx` 原本就 import 了 `Button` / `confirmDialog` / `store` /
+`providerLabel`，我又 import 一遍 → `TS2300 Duplicate identifier` 四处。删掉重复的即可。
+（教训：**给已有文件加 import 前先读它的 import 块**，别凭印象追加。）
+
+**顺带确认缺口 #8（新增映射）确实存在**，且拿到了确切载荷：
+`addModelMapping(alias, target, provider, reasoning?, enabled?, create?)` →
+`POST /api/models/mappings`，后三个参数**按「有没有传」决定进不进请求体**（三态语义）。
+另发现 `POST /api/models/capabilities`（能力位覆盖，各键三态：不给=不改 / null=恢复原值 / 给值=覆盖，
+**只服务内置家**）。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,272.77 kB。
 
 ## 4. 常用事实
 

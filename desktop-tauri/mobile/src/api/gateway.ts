@@ -399,6 +399,36 @@ export function refreshModels(): Promise<unknown> {
   return apiCall('/api/models/refresh', { method: 'POST' })
 }
 
+/**
+ * 登记一个自定义模型（`api/model_manage.rs` 的 `add_custom`）。
+ *
+ * `POST /api/models/custom { provider, id }` —— 载荷只有这两个字段，
+ * 契约取自网关二进制里内嵌的面板 JS（`addCustomModel(provider, id)`）。
+ *
+ * **只服务内置家**：自定义提供商的模型清单走 `/api/custom-providers/models`
+ * 整表保存（面板侧对此有单独的分支），这里不要传自定义提供商。
+ */
+export function addCustomModel(payload: { provider: string; id: string }): Promise<ManageView> {
+  return apiCall<ManageView>('/api/models/custom', { method: 'POST', body: payload })
+}
+
+/** 移除一条自定义模型登记：`POST /api/models/custom/remove { provider, id }` */
+export function removeCustomModel(payload: { provider: string; id: string }): Promise<ManageView> {
+  return apiCall<ManageView>('/api/models/custom/remove', { method: 'POST', body: payload })
+}
+
+/**
+ * 这个模型能不能移除。
+ *
+ * 照抄面板侧 `function o7(e){ return e.source === "manual" || as(e.provider) }` 的
+ * **前半条**：`source === 'manual'`（手动登记的自定义模型）。
+ * 后半条（自定义提供商的模型）手机端不在这里做 —— 那种清单是在
+ * 「自定义提供商」页里整表保存的，从这个入口删会和那边打架。
+ */
+export function isManualModel(model: ManageModel): boolean {
+  return model.source === 'manual'
+}
+
 /* ─── 网关 Key ─────────────────────────────────── */
 
 export type GatewayKey = {

@@ -15,6 +15,8 @@ import { Input, Card, Button, confirmDialog } from '@ui'
 import { Switch as UiSwitch } from '@ui'
 import { Badge as UiBadge } from '@ui'
 import { Toggle as UiToggle } from '@ui'
+import { isManualModel, removeCustomModel } from '../api/gateway'
+import { AddCustomModelSheet } from './models-add-custom-sheet'
 
 /**
  * 模型管理。
@@ -41,6 +43,42 @@ export function ModelsPage() {
   const [busy, setBusy] = useState('')
   const revision = useRef(0)
   const [refreshResults, setRefreshResults] = useState<Array<{ provider: string; providerLabel?: string; status: string; message?: string }>>([])
+  const [addOpen, setAddOpen] = useState(false)
+
+  /** 内置家的清单（登记自定义模型只服务内置家，见 models-add-custom-sheet 的说明） */
+  const providerChoices = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const model of models || []) {
+      const id = model.provider || ''
+      if (!id) continue
+      if (!seen.has(id)) seen.set(id, model.providerLabel || providerLabel(id, id))
+    }
+    return [...seen.entries()].map(([id, label]) => ({ id, label }))
+  }, [models])
+
+  const removeManual = async (model: ManageModel) => {
+    const id = String(model.id || '')
+    const provider = String(model.provider || '')
+    // 确认文案照抄面板侧：这条登记会被直接移除，之后 /v1/models 不再广告它
+    const ok = await confirmDialog(
+      t('确定移除自定义模型「{id}」？这条登记会被直接移除，之后 /v1/models 不再广告它、请求它也会被拒。', { id }),
+      { title: t('移除自定义模型'), confirmText: t('移除'), destructive: true },
+    )
+    if (!ok) return
+    setBusy(`custom:${id}`)
+    try {
+      const view = await removeCustomModel({ provider, id })
+      if (view) {
+        setModels(view.models || [])
+        setMappings(view.mappings || [])
+      }
+      store.toast(t('自定义模型已移除'))
+    } catch (failure) {
+      store.toast(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setBusy('')
+    }
+  }
 
   const load = async () => {
     const current = ++revision.current
@@ -168,7 +206,12 @@ export function ModelsPage() {
     <div className='m-page m-fixed' ref={pull.bindRef}>
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <div className='m-sticky'>
-        <PageIntro actions={<IconButton name='refresh' label={t('刷新清单')} onClick={() => void refresh()} />}
+        <PageIntro actions={
+          <>
+            <IconButton name='plus' label={t('登记自定义模型')} onClick={() => setAddOpen(true)} />
+            <IconButton name='refresh' label={t('刷新清单')} onClick={() => void refresh()} />
+          </>
+        }
         />
 
       <div className='m-section' style={{ marginTop: 0 }}>
@@ -355,6 +398,19 @@ export function ModelsPage() {
                         label={String(model.id)}
                         onChange={next => void toggle(model, next)}
                       />
+                      {/* 只有手动登记的才可移除（判据见 api/gateway.ts 的 isManualModel） */}
+                      {isManualModel(model) ? (
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          type='button'
+                          disabled={Boolean(busy)}
+                          aria-label={t('移除自定义模型')}
+                          onClick={() => void removeManual(model)}
+                        >
+                          {t('移除')}
+                        </Button>
+                      ) : null}
                     </div>
                   )
                 })}
@@ -366,10 +422,22 @@ export function ModelsPage() {
 
       <div className='m-section' style={{ paddingBottom: 8 }}>
         <Card className='m-card m-card-pad' style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7 }}>
-          {t('映射、思考等级、上下文窗口与工具调用能力在桌面端「模型管理」里改；手机端只做启停。')}
+          {t('映射、思考等级、上下文窗口与工具调用能力在桌面端「模型管理」里改；手机端做启停，以及登记 / 移除自定义模型。')}
         </Card>
       </div>
       </div>
+
+      {addOpen ? (
+        <AddCustomModelSheet
+          models={models || []}
+          providers={providerChoices}
+          onClose={() => setAddOpen(false)}
+          onSaved={view => {
+            setModels(view.models || [])
+            setMappings(view.mappings || [])
+          }}
+        />
+      ) : null}
     </div>
   )
 }
