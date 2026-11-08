@@ -6,6 +6,7 @@ import { Alert, Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle, SheetFo
 import { store, useStore } from '../state/store'
 import { fetchRequests, type RequestPage, type RequestRow } from '../api/gateway'
 import { ellipsisMiddle, formatClock, formatDuration, formatInt } from '../lib/format'
+import { downloadJson, dateStamp } from '../lib/download'
 import { providerLabel } from '../lib/providers'
 import { usePolling } from '../lib/usePolling'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -48,6 +49,7 @@ export function RequestsPage() {
   const [error, setError] = useState('')
   const [detail, setDetail] = useState<RequestRow | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const routeParamsRef = useRef(route.params)
   const queryKeyRef = useRef('')
   const seqRef = useRef(0)
@@ -135,11 +137,32 @@ export function RequestsPage() {
   const matched = Number(page?.matched) || 0
   const running = Number(page?.running) || 0
 
+  // 导出本页已加载的请求行（含请求体与响应摘要）：网关没有 HTTP 导出接口，
+  // 桌面端也是把读到的行写进用户选的文件；手机端落成本地 JSON，够排查用。
+  const exportRows = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      downloadJson(rows, `agent2api-requests-${dateStamp()}.json`)
+      store.toast(t('已导出 {n} 条请求', { n: rows.length }))
+    } catch (failure) {
+      store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div className='m-page m-fixed' ref={pull.bindRef}>
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <div className='m-sticky'>
-        <PageIntro actions={<IconButton name='refresh' label={t('刷新')} onClick={() => void load()} />}
+        <PageIntro
+          actions={<>
+            <IconButton name='refresh' label={t('刷新')} onClick={() => void load()} />
+            <Button variant='outline' size='sm' disabled={exporting || !rows.length} onClick={() => void exportRows()}>
+              {exporting ? t('导出中…') : t('导出')}
+            </Button>
+          </>}
         />
 
       <div className='m-section' style={{ marginTop: 0 }}>

@@ -11,6 +11,7 @@ import {
 } from '../../../ui-shared/logs'
 import { Toggle as UiToggle } from '@ui'
 import { DateRangeFilter } from '../components/DateRangeFilter'
+import { downloadJson, dateStamp } from '../lib/download'
 import { dateRangeQuery, readCustomRange, saveCustomRange, type CustomDates, type DateRange } from '../../../ui-shared/date-range'
 
 const LIMIT = 50
@@ -46,6 +47,7 @@ export function LogsPage() {
   const [detail, setDetail] = useState<LogGroup | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const snapshotRef = useRef<number | undefined>(undefined)
   const seqRef = useRef(0)
@@ -130,6 +132,20 @@ export function LogsPage() {
   }, [load])
 
   const pull = usePullToRefresh({ onRefresh: () => load(true), scrollRef: bodyRef })
+  /** 导出本页日志：把当前渲染的分组（含原始记录）落成 JSON */
+  const exportLogs = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      downloadJson(groups.map(group => ({ ...group.entry, count: group.count })), `agent2api-logs-${dateStamp()}.json`)
+      store.toast(t('已导出 {n} 条日志', { n: groups.flatMap(group => group.entries).length }))
+    } catch (failure) {
+      store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const groups = logGroups(data)
   const totalGroups = Number(data?.grouped ?? data?.matched ?? groups.length) || 0
   const pageCount = Math.max(1, Math.ceil(totalGroups / LIMIT))
@@ -152,12 +168,17 @@ export function LogsPage() {
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <div className='m-sticky'>
         <PageIntro subtitle={data ? t('显示 {groups} 组 · 原始记录 {entries} 条', { groups: totalGroups, entries: Number(data.matched) || 0 }) : undefined}
-          actions={<><IconButton name='pause' label={paused ? t('恢复刷新') : t('暂停刷新')} onClick={() => {
-            const next = !stateRef.current.paused
-            stateRef.current.paused = next
-            setPaused(next)
-            if (!next && page === 1 && !detail && (bodyRef.current?.scrollTop || 0) <= 20) void load(true)
-          }} /><IconButton name='refresh' label={t('查看最新')} onClick={() => void load(true)} /></>} />
+          actions={<>
+            <IconButton name='pause' label={paused ? t('恢复刷新') : t('暂停刷新')} onClick={() => {
+              const next = !stateRef.current.paused
+              stateRef.current.paused = next
+              setPaused(next)
+              if (!next && page === 1 && !detail && (bodyRef.current?.scrollTop || 0) <= 20) void load(true)
+            }} /><IconButton name='refresh' label={t('查看最新')} onClick={() => void load(true)} />
+            <Button variant='outline' size='sm' disabled={exporting || !groups.length} onClick={() => void exportLogs()}>
+              {exporting ? t('导出中…') : t('导出')}
+            </Button>
+          </>} />
         <div className='m-section' style={{ marginTop: 0 }}>
           <SegmentedControl options={VIEWS} value={view} onValueChange={setView} aria-label={t('日志视图')} className='w-full' />
           <Input className='mt-2.5 w-full' type='search' value={keyword} onChange={event => setKeyword(event.currentTarget.value)}
