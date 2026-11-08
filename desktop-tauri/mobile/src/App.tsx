@@ -24,6 +24,7 @@ import { CheckinPage } from './pages/CheckinPage'
 import { PluginsPage } from './pages/PluginsPage'
 import { PluginPageView } from './pages/PluginPageView'
 import { CustomProvidersPage } from './pages/CustomProvidersPage'
+import { RoutingPage } from './pages/RoutingPage'
 import type { ScreenId } from './lib/routes'
 import { NavBar } from './components/NavBar'
 import { t } from './i18n'
@@ -67,6 +68,7 @@ const SCREENS: Record<ScreenId, ScreenDef> = {
     onBack: () => store.back(),
   }) },
   'custom-providers': { title: t('自定义提供商'), component: CustomProvidersPage },
+  'routing': { title: t('路由配置'), component: RoutingPage },
 }
 
 export function App() {
