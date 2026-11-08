@@ -152,8 +152,18 @@ export function SettingsPage() {
       if (next) {
         const status = await panelStatus()
         if (serverIdentity() !== identity) return
-        if (!status.registered) {
-          store.toast(t('请先在面板注册管理员，再开启局域网访问'), 'err')
+        // 两种情形都**拦截**（这个开关是安全相关的，读不到就绝不能放行），
+        // 但必须给出不同的原因 —— 否则「读不到状态」会被说成「未注册管理员」，
+        // 而用户可能刚注册过，看起来就像功能坏了。
+        // 上游 `panel_status()` 的返回形状是 `{ registered: bool }`
+        // （`api/panel.rs`），所以 `true` / `false` / 读不到要分开处理。
+        if (status.registered !== true) {
+          store.toast(
+            status.registered === false
+              ? t('请先在面板注册管理员，再开启局域网访问')
+              : t('读不到面板管理员状态，请刷新面板后重试'),
+            'err',
+          )
           return
         }
       }
