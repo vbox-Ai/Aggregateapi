@@ -194,6 +194,22 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - **未验证**：Rust supervisor 与 Swift 本环境无工具链，需 CI（ios job）编译确认；
   删库仅删 `config_dir` 下 `agent2api.db*` 与 `*.key`，路径来自 supervisor 的 `home`。
 
+### Phase 3.5：账号批量操作（已完成）
+- 提交：`e813301785acdf63b62004038f64bb414a8c0269`
+- 上游契约（`api/accounts_batch.rs`）：
+  - `POST /api/accounts/batch` body `{ ids: string[], action }`
+  - action 支持 `remove` / `enable` / `disable` / `proxy` / `concurrency` / `usageQuery` / `limiters`
+  - 响应带 `action` 与 `list`，手机端只需 `load()` 刷新
+- 改动文件：
+  - `desktop-tauri/mobile/src/api/gateway.ts`：新增 `batchAccounts(action, ids)`
+  - `desktop-tauri/mobile/src/pages/AccountsPage.tsx`：
+    - PageHead 加「批量」按钮 → 开启选择模式（再点取消）
+    - 每行加勾选框（`selected` / `onSelect`），选择模式下点行改为勾选而不是开详情
+    - 底部批量条：全选 / 取消全选 + 启用 / 禁用 / 删除（删除有二次确认）
+    - 导入 `serverIdentity` / `confirmDialog` / `batchAccounts`
+- 验证：typecheck / build 通过；`mobile.js` 1090.50 → 1092.97 kB。
+- 备注：批量条只在选择模式下出现，跟着内容滚动；批量操作会刷新会话。
+
 ### Phase 3.6：系统 / 服务控制（已完成）
 - 提交：`a64a2f87fc21f352e0534df78bc43ef838b25f72`
 - supervisor 控制口契约（`agent2api-ios/ios-ffi/src/bin/agent2api-supervisor.rs`）：
