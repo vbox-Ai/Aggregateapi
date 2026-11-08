@@ -763,10 +763,15 @@ extension PanelViewController: WKScriptMessageHandler {
         deliverSupervisorResult(op: op, id: id, ok: false, payload: message)
     }
 
+    /// 把 supervisor 的调用结果回给 JS。
+    ///
+    /// 用 `JSONSerialization` 构造信封，比手工拼字符串再转义安全 —— `payload`
+    /// 里带的就是 status JSON，里面有引号和反斜杠，手工拼错一步就回不去。
     private func deliverSupervisorResult(op: String, id: String, ok: Bool, payload: String) {
-        guard let js = String(payload: "{\"ok\":\(ok),\"payload\":\"\(payload)\"}").replacingOccurrences(
-            of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") else { return }
-        let body = "window.dispatchEvent(new CustomEvent('a2a-control-result',{detail:{\"op\":\"\(op)\",\"id\":\"\(id)\",\"ok\":\(ok),\"payload\":\"\(js)\",\"raw\":\(js)}})})"
+        let detail: [String: Any] = ["op": op, "id": id, "ok": ok, "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: detail, options: []),
+              let js = String(data: data, encoding: .utf8) else { return }
+        let body = "window.dispatchEvent(new CustomEvent('a2a-control-result',{detail:\(js)}))"
         webView.evaluateJavaScript(body, completionHandler: nil)
     }
 }
