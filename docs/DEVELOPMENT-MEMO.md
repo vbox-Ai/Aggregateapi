@@ -1623,6 +1623,52 @@ Swift PanelViewController.swift: panelPort / panelBaseURL / syncPanelPort
 5. 反向确认**没别的字段被改**：保存后到桌面端看那个组 —— 对外模型 ID、策略、粘性、
    成员列表与账号范围都应**原样不变**（手机上只改了组名/说明/参与开关）。
 
+#### 记忆点 · 步骤 28（CI 原文证据：补丁 + supervisor 都过了；**Swift 还没**）
+
+**run 278 的 iOS 任务全绿**（步骤 4/9/10/14/15/16 全 success）。日志原文摘录：
+
+打补丁（第 4 步）——前五行是既有的 0001–0005，最后两行是**我这次的 0006**：
+```
+== apply agent2api-universal/patches/0006-panel-bind-host.diff
+✅ 已应用
+```
+
+编守护进程 / supervisor（第 9 步）：
+```
+cargo build --release --target aarch64-apple-ios --bin agent2api-supervisor
+target/aarch64-apple-ios/release/agent2api-supervisor: Mach-O 64-bit executable arm64
+-rwxr-xr-x 1 runner staff 375K agent2api-supervisor
+cp …/agent2api-supervisor  …/var/jb/usr/local/bin/agent2api-supervisor    ← rootless
+cp …/agent2api-supervisor  …/usr/local/bin/agent2api-supervisor          ← rootful
+```
+
+⇒ **补丁 0006 在真实 CI 里打上了**；**supervisor 的 Rust 改动编过了**（iOS arm64），
+而且**两个 deb 变体都装进了新编的 supervisor**（这条同时证实了「改动会进包」）。
+
+**★ 但这批日志**只**证明这些 —— 必须精确界定范围**：run 278 的提交是 `ee591a8`，
+它包含 supervisor + 补丁 0006，**不包含**后来的 Swift 改动（`1901b26`）、设置页
+（`eb31dae`）、②（`606ac90`）、origin 修复（`0f237aa`）。所以：
+
+| 改动 | 是否已被 CI 验证 |
+|---|---|
+| 补丁 0006 | ✅ run 278 第 4 步 |
+| supervisor Rust | ✅ run 278 第 9 步 |
+| 手机端 UI（①f/② 之前的状态） | ✅ run 278 第 14/15 步 |
+| **Swift（①e + origin 修复）** | ⏳ **未验证** —— 要等 281/283/287/290 的 iOS 任务 |
+
+**顺带确认了零副作用探测的安全性**（这条不查清不敢留）：探测依赖「revision 检查在
+任何写入之前」，而 `config::try_update_raw_field` 的实现是
+
+```rust
+let result = mutate(&mut value)?;        // 闭包返回 Err → `?` 立刻返回，后面全不执行
+if value == before { return Ok(result); }
+...
+if !save_raw(&next.raw) { ... }          // 唯一的落盘点
+```
+
+⇒ `save()` 的 revision 失配错误**发生在任何落盘之前**，探测确实什么都不改。
+（同一函数还看到 `CONFIG_UPDATE_LOCK` 串行化、以及「值没变就不写」的短路。）
+
 #### 六项缺口最终状态（上一批：步骤 16–20）
 
 | # | 内容 | 结果 |
