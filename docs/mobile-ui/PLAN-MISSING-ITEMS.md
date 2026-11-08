@@ -56,8 +56,8 @@
 | 里程碑 | 内容 | 条数 | 量级 | 依赖 |
 |---|---|---|---|---|
 | **M0** | 修备份进度路径 bug | 1 | S | 无 |
-| **M1** | 小项打包：面板账户信息 / 日志统计 / 签到立即运行 / zcode 领取校验 | 4 | S+S+S+S | 无 |
-| **M2** | 中项：**短信登录** / 请求维护三件套 / 精简路由 / 插件本地包安装 / 模型映射新增（先核实） | 5 | M+M+S~M+M+S | M1 无依赖，但**逐项推**更稳 |
+| **M1** | 小项打包：面板账户信息 / 日志统计 / 签到立即运行 / zcode 领取校验 / **积分简报与签到活动状态** / **工具服务 API 文档入口** | 6 | S×6 | 无 |
+| **M2** | 中项：**短信登录** / 请求维护三件套 / 精简路由 / 插件本地包安装 / ~~模型映射新增（已核实为已实现，撤销）~~ / **账号限流器配置** / **路由组结构性编辑** | 6 | M+M+S~M+M+M+M | M1 无依赖，但**逐项推**更稳；路由结构编辑**动手前先评估语义** |
 | **M3** | 调研：`/api/config` 到底有没有"只它才有"的设置项 | 1 | 调研 | 无 |
 | **M4** | 字段级核对（E 类）：限流器 / 补签 / 报表 / 积分简报 / 设置项逐项 | 10 项核对 | 持续 | 可与 M2 并行 |
 
@@ -120,6 +120,26 @@
 | 风险 | 需先确认**手机的 zcode 领取流程本身是否完整**——若流程缺失，该项并到那个流程里一起做 |
 | 验收 | 领取流程里校验步骤可用、结果正确回显 |
 
+### M1.5 积分简报与签到活动状态（由 E5 升格）
+| 项 | 内容 |
+|---|---|
+| 契约核对 | 上游 `api/billing.rs::{get_usage, checkin_status}` 的返回结构；桌面 `balance-query.tsx`、`accounts-credit-detail.tsx`、`ui-shared/credit-expiry.ts` 展示了哪些字段 |
+| 实现落点 | `mobile/src/api/checkin.ts`（或新 `api/billing.ts`）、签到页 / 报表页的一个卡片 |
+| 验证 | 三项本地检查 |
+| 风险 | 与"账号额度"（`/api/accounts/usage`）**不是一回事**，界面上要写清是"活动积分"，别混在一起 |
+| 验收 | 能看到积分简报与签到活动状态 |
+| 量级 | **S** |
+
+### M1.6 工具服务 API 的文档入口（由 E8 升格）
+| 项 | 内容 |
+|---|---|
+| 契约核对 | 上游 `api/tool_runtime.rs::{api_search, api_fetch}` 的请求/返回；桌面 `ui-shared/tools-api-doc.ts`、`docs-api-tools.ts`、`docs-api-endpoints.ts` 的**文档文本与示例**（可直接改写复用） |
+| 实现落点 | `mobile/src/pages/DocsPage.tsx` 增加一节（可选：一个"试一下"的调试框） |
+| 验证 | 三项本地检查 |
+| 风险 | 低；注意**不要**把 `/mcp/*`、`/skill/*` 这些"给外部客户端"的接口混进面板的操作入口，只做文档 |
+| 验收 | 手机文档页能看到工具服务 API 的端点、参数与示例 |
+| 量级 | **S～M** |
+
 ---
 
 ## M2 · 中项（逐项推送）
@@ -160,14 +180,35 @@
 | 风险 | ① iOS WebView 的 `<input type="file">` 能否拿到文件内容要实测；② 大包的 base64 会放大 33%，需注意内存与超时；③ 未签名包的安装受配置开关影响，失败要回显上游原因 |
 | 验收 | 手机上能从文件安装插件包，并出现在插件列表 |
 
-### M2.5 模型映射「新增」（先核实）
+### ~~M2.5 模型映射「新增」~~ —— 已核实为**已实现**，本条撤销
 | 项 | 内容 |
 |---|---|
 | 契约核对 | 先看 `mobile/src/lib/assistantTools.ts` 里 `mappings${action}` 的 action 取值——**若已含新增则本条撤销**；否则读 `api/model_manage.rs::add_mapping`（body 含 `create`/`enabled`/`reasoning`）与桌面 `models-dialogs.tsx` |
 | 实现落点 | `mobile/src/api/gateway.ts` + `pages/ModelsPage.tsx` |
 | 验证 | 三项本地检查 |
-| 风险 | 低 |
-| 验收 | 能新增一条模型映射并生效 |
+| 核实结果 | **撤销（2026-11-09）**：`lib/assistantTools.ts` 写的是
+  `` `/api/models/mappings${action === 'remove' ? '/remove' : ''}` `` ——
+  **非 remove 时就是 POST `/api/models/mappings`（新增）**，新增与删除都已有 |
+
+### M2.6 账号限流器配置（由 E1 升格）
+| 项 | 内容 |
+|---|---|
+| 契约核对 | 上游 `api/accounts.rs` 里 `limiters` 子路径的**载荷结构与语义**（整表替换？稀疏更新？按账号还是按"账号×模型"）；桌面 `accounts-limiter-types.ts`（`LimiterGroup` / `LimiterCondition` / `LimiterWindow` 等类型定义最权威） |
+| 实现落点 | `mobile/src/api/gateway.ts`（或新 `api/limiters.ts`）、`pages/AccountSheet.tsx` / `AccountsPage.tsx` 内的限流入口 |
+| 验证 | 三项本地检查；真机：改一个账号的限额并回读 |
+| 风险 | 与账号配置强耦合；若载荷是整表替换，必须**先读回再改** |
+| 验收 | 手机上能改限额、能看状态；不影响其他账号字段 |
+| 量级 | **M** |
+
+### M2.7 路由组的「结构性编辑」（由 E10 升格）
+| 项 | 内容 |
+|---|---|
+| 契约核对（**先评估再动手**） | `PUT /api/routing/groups` 的完整载荷（`RoutingGroup` 是 `deny_unknown_fields`）；桌面 `routing-group-form.tsx`、`routing-member-card.tsx`、`routing-account-order.tsx` 的字段与校验；特别要看**改 `model` / `strategy` / `sticky` 会不会影响请求匹配与 sticky 状态** |
+| 实现落点 | `mobile/src/pages/routing-group-edit-sheet.tsx`（在现有安全子集上扩字段） |
+| 验证 | 三项本地检查；真机：改对外模型 ID / 策略 / 成员增删，回读一致且路由仍正常 |
+| 风险 | ⚠️ **高**：这是从"安全子集"扩到"完整编辑"，语义耦合多（改 model 影响匹配、改粘性会清 sticky）。**建议单独一轮，先写清语义评估再改** |
+| 验收 | 结构性字段可改且回读一致；改完请求路由行为符合预期 |
+| 量级 | **M**（评估本身算一半工作量） |
 
 ---
 
@@ -213,7 +254,7 @@
 | `agents/apply`、`agents/import`、`agents/profiles`、`agents/{id}/resources/*` | 目标是本机 CLI 客户端，iOS 没有落点 |
 | `import/cc-switch` | 扫本机 SQLite；桌面自己也隐藏了入口 |
 | `upgrade`、`upgrade/run` | 网关自升级（systemd/Windows 服务），iOS 走装 deb |
-| `/v1/*`、`/mcp/*`、`/skill/*`、`/api/web-search/{search,fetch}` | 数据面与对外工具接口，不是面板功能 |
+| `/v1/*`、`/mcp/*`、`/skill/*`、`/api/web-search/{search,fetch}` | ⚠️ **注意：这些接口手机上已经能提供**（网关同一进程，监听 3065；开局域网后同网段可用）。不做的是「面板客户端界面」；它们缺失的**文档/调试入口**已列为 **M1.6**（原判 C 类，2026-11-09 更正） |
 | `session/logout`、`session/refresh` | 网关侧会话；面板用 `/api/panel/*` |
 | `backup/export`、`backup/import`（`filePath`） | 按服务器路径；手机等价物是下载/上传（已有） |
 | 托盘 / 窗口 / 网格布局 / 表格列设置 | 桌面外壳能力 |
@@ -253,12 +294,13 @@
 
 | 轮次 | 做什么 | 产出 |
 |---|---|---|
-| 第 1 轮 | M0 + M1（5 项，全是 S） | 一次推送 + 5 条记忆点 |
+| 第 1 轮 | M0 + M1（6 项，全是 S） | 一次推送 + 6 条记忆点 |
 | 第 2 轮 | M2.1 短信登录（单独一轮，最大） | 一次推送 + 真机验证清单 |
 | 第 3 轮 | M2.2 + M2.3 | 一次推送 |
-| 第 4 轮 | M2.4 + M2.5 | 一次推送 |
+| 第 4 轮 | M2.4 + M2.6（限流器） | 一次推送 |
 | 第 5 轮 | M3 调研 | 一份对照表（可能结论是"不用做"） |
-| 第 6 轮起 | M4 逐项核对 → 按结果追加 | 每项一次推送 |
+| 第 6 轮 | **M2.7 路由结构编辑（先做语义评估）** | 评估结论 + 一次推送 |
+| 第 7 轮起 | M4 剩余明细核对 → 按结果追加 | 每项一次推送 |
 
 > 每轮结束都要能回答三个问题：改了哪些文件、本地三项是否全过、真机上怎么验。
 > 任何一项如果**核对后发现要动 Rust/补丁**，先停下来单独评估，不要夹在手机端改动里一起推。
