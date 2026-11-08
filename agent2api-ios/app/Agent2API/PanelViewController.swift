@@ -59,8 +59,6 @@ final class PanelViewController: UIViewController {
     private var appIsActive = true
     private var lastActivateAttempt = Date.distantPast
     private var appObservers: [NSObjectProtocol] = []
-    /// WKDownload 已落盘的备份文件（didFinish 时交给用户保存）
-    private var downloadedBackupURL: URL?
 
     /// 内嵌网关 `a2a_start` 的返回码（0 成功 / -1 初始化失败 / -2 端口占用）
     private var embeddedRC: Int32?
@@ -166,15 +164,14 @@ final class PanelViewController: UIViewController {
         // ③ 面板控制（目前只有「删库重注册」）：跨端口调用 3066 会被 CORS 拦，
         //    所以走原生桥，由 App 侧用 URLSession 打 supervisor。
         config.userContentController.add(self, name: "a2aControl")
+        // ④ 文件保存：面板里的「导出 / 备份」要把文件交给用户存到「文件」。
+        //    WKWebView 的下载 API 需要宿主实现整套导航代理才会落盘，这里直接
+        //    用 URLSession + 分享面板代劳，少一层 WebKit 行为差异。
+        config.userContentController.add(self, name: "a2aFile")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        // 备份下载（.a2ab）需要 WKDownloadDelegate（iOS 15.4+）：网页里的 <a download>
-        // 才会落盘。部署目标 15.0，用 availability 守卫。
-        if #available(iOS 15.4, *) {
-            webView.downloadDelegate = self
-        }
         webView.allowsBackForwardNavigationGestures = true
         // 面板是移动端布局，禁掉「双击缩放」造成的输入框抖动
         webView.scrollView.contentInsetAdjustmentBehavior = .never
@@ -693,6 +690,12 @@ extension PanelViewController: WKScriptMessageHandler {
             supervisorCall(op: op, id: id)
             return
         }
+        if message.name == "a2aFile" {
+            if let body = message.body as? [String: Any] {
+                handleFileMessage(body)
+            }
+            return
+        }
         guard message.name == Bridge.messageName,
               let body = message.body as? [String: Any],
               let raw = body["url"] as? String,
@@ -776,41 +779,91 @@ extension PanelViewController: WKScriptMessageHandler {
     }
 }
 
-// MARK: - WKDownloadDelegate（备份下载落盘，iOS 15.4+）
+// MARK: - 文件保存（a2aFile 桥）
 
-@available(iOS 15.4, *)
-extension PanelViewController: WKDownloadDelegate {
+extension PanelViewController {
 
-    /// 备份下载（`.a2ab`）从网关流式返回。WKWebView 不会自动保存，
-    /// 这里把数据落到临时文件，再交给用户决定存到哪里。
-    func download(_ download: WKDownload, decideDestinationWith response: URLResponse,
-                  suggestion: [String: String]?, completionHandler: @escaping (URL?) -> Void) {
-        let filename = response.suggestedFilename?.isEmpty == false ? response.suggestedFilename! : "agent2api-backup.a2ab"
+    /// 处理面板发来的保存请求。
+    ///
+    /// 两种用法（见 `lib/download.ts` 的说明）：
+    ///   · `saveInline`：JS 已拿到字节（导出 JSON 等小文件），base64 传过来；
+    ///   · `saveRemote`：备份这类可能几十 MB 的流，由这里带鉴权头自己请求，
+    ///     不把整包 base64 塞过 JS 桥。
+    func handleFileMessage(_ body: [String: Any]) {
+        guard let op = body["op"] as? String else { return }
+        let filename = (body["filename"] as? String) ?? "agent2api-export"
+
+        switch op {
+        case "saveInline":
+            guard let base64 = body["base64"] as? String,
+                  let data = Data(base64Encoded: base64) else {
+                reportFileError("导出内容不是合法的 base64")
+                return
+            }
+            writeAndPresent(data: data, filename: filename)
+
+        case "saveRemote":
+            guard let raw = body["url"] as? String, let target = URL(string: raw) else {
+                reportFileError("导出地址非法")
+                return
+            }
+            var request = URLRequest(url: target)
+            request.httpMethod = (body["method"] as? String) ?? "GET"
+            request.timeoutInterval = 300
+            if let headers = body["headers"] as? [String: String] {
+                for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
+            }
+            if let payload = body["body"],
+               let data = try? JSONSerialization.data(withJSONObject: payload, options: []) {
+                request.httpBody = data
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            }
+            URLSession.shared.downloadTask(with: request) { [weak self] location, response, error in
+                guard let self else { return }
+                if let error {
+                    DispatchQueue.main.async { self.reportFileError(error.localizedDescription) }
+                    return
+                }
+                // 非 2xx 时网关返回的是 JSON 错误体，读出来告诉用户，别给一个坏文件
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200, let location else {
+                    let text = location.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+                    DispatchQueue.main.async { self.reportFileError("导出失败：HTTP \(status) \(text)") }
+                    return
+                }
+                let data = (try? Data(contentsOf: location)) ?? Data()
+                try? FileManager.default.removeItem(at: location)
+                DispatchQueue.main.async { self.writeAndPresent(data: data, filename: filename) }
+            }.resume()
+
+        default:
+            break
+        }
+    }
+
+    /// 落临时文件后弹分享面板（用户在那里选「存储到文件」）
+    private func writeAndPresent(data: Data, filename: String) {
         let target = FileManager.default.temporaryDirectory
-            .appendingPathComponent("agent2api-backup-\(UUID().uuidString)-\(filename)")
-        downloadedBackupURL = target
-        completionHandler(target)
-    }
-
-    func didFinish(_ download: WKDownload) {
-        guard let url = downloadedBackupURL else { return }
-        downloadedBackupURL = nil
-        presentDownloadedFile(url)
-    }
-}
-
-/// 把下载好的 .a2ab 分享给用户（保存到「文件」、iCloud 等）。
-private func presentDownloadedFile(_ url: URL) {
-    // 在主线程上呈现（WKDownload 回调可能在子线程）
-    DispatchQueue.main.async {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            .appendingPathComponent("agent2api-\(UUID().uuidString)-\(filename)")
+        do {
+            try data.write(to: target)
+        } catch {
+            reportFileError("写入临时文件失败：\(error.localizedDescription)")
+            return
+        }
+        let activity = UIActivityViewController(activityItems: [target], applicationActivities: nil)
         if let root = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first {
             root.rootViewController?.present(activity, animated: true)
         }
-        // 分享结束后清理临时文件（延迟一下，让用户有时间选中"保存"）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            try? FileManager.default.removeItem(at: url)
+        // 分享结束后清理临时文件（延迟一下，让用户有时间选中「存储到文件」）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
+            try? FileManager.default.removeItem(at: target)
         }
+    }
+
+    private func reportFileError(_ message: String) {
+        jsErrors.append("导出失败：\(message)")
+        statusBar.isHidden = false
+        statusLabel.text = summary + "\n— 导出 —\n" + jsErrors.joined(separator: "\n")
     }
 }

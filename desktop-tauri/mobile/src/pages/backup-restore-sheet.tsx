@@ -27,11 +27,11 @@ export function BackupRestoreSheet({ onClose, onChanged }: { onClose: () => void
     setBusy('backup')
     setError('')
     try {
-      const blob = await downloadBackup({ password, includeLogs })
-      if (serverIdentity() !== identity) return
       const stamp = new Date().toISOString().slice(0, 10)
       const name = `agent2api-backup-${stamp}.a2ab`
-      triggerDownload(blob, name)
+      // 原生壳由 App 自己取包并落盘（弹分享面板）；浏览器里走 <a download>
+      await downloadBackup({ password, includeLogs }, name)
+      if (serverIdentity() !== identity) return
       store.toast(t('备份已生成，请保存到「文件」'))
     } catch (failure) {
       if (serverIdentity() === identity) setError(failure instanceof Error ? failure.message : String(failure))
@@ -121,15 +121,4 @@ export function BackupRestoreSheet({ onClose, onChanged }: { onClose: () => void
       </SheetContent>
     </Sheet>
   )
-}
-
-function triggerDownload(blob: Blob, filename: string): void {
-  const objectUrl = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = objectUrl
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000)
 }

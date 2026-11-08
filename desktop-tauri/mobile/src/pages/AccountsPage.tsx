@@ -131,7 +131,7 @@ export function AccountsPage() {
     setExporting(true)
     try {
       const data = await exportAccounts()
-      downloadJson(data, `agent2api-accounts-${dateStamp()}.json`)
+      await downloadJson(data, `agent2api-accounts-${dateStamp()}.json`)
       store.toast(t('已导出 {n} 个账号', { n: accounts.length }))
     } catch (failure) {
       store.toast(failure instanceof Error ? failure.message : String(failure), 'err')

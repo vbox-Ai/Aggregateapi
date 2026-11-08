@@ -172,7 +172,7 @@ export function AccountSheet({
       const data = await exportAccountFile({ id: account.id })
       if (serverIdentity() !== identity) return
       const name = safeFileName(accountName(account), account.id)
-      downloadJson(data, `${name}-${dateStamp()}.json`)
+      await downloadJson(data, `${name}-${dateStamp()}.json`)
       store.toast(t('已导出账号文件'))
     } catch (error) {
       if (serverIdentity() === identity) store.toast(error instanceof Error ? error.message : String(error), 'err')

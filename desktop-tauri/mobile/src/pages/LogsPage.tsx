@@ -137,7 +137,7 @@ export function LogsPage() {
     if (exporting) return
     setExporting(true)
     try {
-      downloadJson(groups.map(group => ({ ...group.entry, count: group.count })), `agent2api-logs-${dateStamp()}.json`)
+      await downloadJson(groups.map(group => ({ ...group.entry, count: group.count })), `agent2api-logs-${dateStamp()}.json`)
       store.toast(t('已导出 {n} 条日志', { n: groups.flatMap(group => group.entries).length }))
     } catch (failure) {
       store.toast(failure instanceof Error ? failure.message : String(failure), 'err')

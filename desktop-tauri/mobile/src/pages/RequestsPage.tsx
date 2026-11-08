@@ -143,7 +143,7 @@ export function RequestsPage() {
     if (exporting) return
     setExporting(true)
     try {
-      downloadJson(rows, `agent2api-requests-${dateStamp()}.json`)
+      await downloadJson(rows, `agent2api-requests-${dateStamp()}.json`)
       store.toast(t('已导出 {n} 条请求', { n: rows.length }))
     } catch (failure) {
       store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
