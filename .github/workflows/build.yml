@@ -178,6 +178,27 @@ jobs:
             echo "WARN: 没取到插件包，这次 deb 不带预置插件"
           fi
 
+      - name: 校验 shell 脚本（编码 + 语法）
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in $(git ls-files '*.sh'); do
+            # ① UTF-8 BOM 会让 `#!/bin/bash` 变成 `\ufeff#!/bin/bash`，
+            #    内核对它认不出 shebang，脚本根本跑不起来。
+            if head -c 3 "$f" | od -An -tx1 | tr -d ' \n' | grep -qi '^efbbbf'; then
+              echo "::error file=$f::带 UTF-8 BOM，会让 #!/bin/bash 失效"
+              fail=1
+            fi
+            # ② 语法检查：中文注释被按错误编码往返一次就会破坏引号配平，
+            #    这种损坏在 bash -n 面前立刻现形（比等到打包时便宜得多）。
+            if ! bash -n "$f" 2>/tmp/a2a-synerr; then
+              echo "::error file=$f::bash 语法检查失败：$(head -1 /tmp/a2a-synerr)"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] || exit 1
+          echo "shell 脚本编码与语法校验通过"
+
       - name: 构建手机面板 UI（从源码，覆盖上游预编译产物）
         run: |
           set -euo pipefail
