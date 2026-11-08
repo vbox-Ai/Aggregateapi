@@ -14,6 +14,8 @@ import { SystemInfoSheet } from '../components/SystemInfoSheet'
 import { ChangePasswordSheet } from './change-password-sheet'
 import { BackupRestoreSheet } from './backup-restore-sheet'
 import { ResetLibrarySheet } from './reset-library-sheet'
+import { ConnectionSecuritySheet } from './connection-security-sheet'
+import { DataStorageSheet } from './data-storage-sheet'
 import { supervisorStart, supervisorStatus as fetchSupervisorStatus, supervisorStop, type SupervisorStatus } from '../api/supervisor'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -44,6 +46,8 @@ export function SettingsPage() {
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
+  const [connectionOpen, setConnectionOpen] = useState(false)
+  const [dataStorageOpen, setDataStorageOpen] = useState(false)
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
   const [supervisorBusy, setSupervisorBusy] = useState('')
   const currentLocale = locale()
@@ -240,6 +244,28 @@ export function SettingsPage() {
             <div className='m-grow'>
               <div className='m-t1'>{t('指纹脱敏')}</div>
               <div className='m-t2'>{t('剥离上游审核黑名单指纹 · 词表')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
+        </Card>
+      </div>
+
+      <div className='m-section'>
+        <SectionHead title={t('安全与数据')} />
+        <Card className='m-card'>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setConnectionOpen(true)}>
+            <span className='m-logo'><Icon name='globe' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('连接与安全')}</div>
+              <div className='m-t2'>{t('跨来源调用 · 面板登录人机验证')}</div>
+            </div>
+            <span className='m-chev'><Icon name='chev' /></span>
+          </Button>
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setDataStorageOpen(true)}>
+            <span className='m-logo'><Icon name='server' /></span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('数据与存储')}</div>
+              <div className='m-t2'>{t('占用用量 · 日志保留策略')}</div>
             </div>
             <span className='m-chev'><Icon name='chev' /></span>
           </Button>
@@ -595,6 +621,8 @@ export function SettingsPage() {
       {passwordOpen ? <ChangePasswordSheet onClose={() => setPasswordOpen(false)} /> : null}
       {backupOpen ? <BackupRestoreSheet onClose={() => setBackupOpen(false)} onChanged={() => store.refresh(true)} /> : null}
       {resetOpen ? <ResetLibrarySheet onClose={() => setResetOpen(false)} /> : null}
+      {connectionOpen ? <ConnectionSecuritySheet onClose={() => setConnectionOpen(false)} /> : null}
+      {dataStorageOpen ? <DataStorageSheet onClose={() => setDataStorageOpen(false)} /> : null}
     </div>
   )
 }

@@ -601,6 +601,44 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,154.68 kB。
 
+#### 记忆点 · 步骤 3（批 3：连接与安全 + 数据与存储）
+
+新增：`api/security.ts`（CORS + 机器人校验）、`api/storage.ts`（存储快照 + 数据保留）、
+`pages/connection-security-sheet.tsx`、`pages/data-storage-sheet.tsx`。
+改动：`SettingsPage.tsx` 新增 **「安全与数据」分组**（两行：连接与安全 / 数据与存储）。
+
+**这两个开关的作用面必须写清，否则用户会误解**：
+- **CORS**（`cors.rs`）只管**网关面 `/v1/*`**：开着预检直接 204 并下发
+  `Access-Control-Allow-*`（来源 `*`）；关着（默认）预检被 API Key 中间件 401 拒掉。
+  **面板路由 `/api/*` 不受它影响**，一直是无条件 CORS。
+- **机器人校验**（`captcha.rs`）只管**面板登录 / 注册**的 ALTCHA，与 `/v1/*` 的 Key
+  鉴权无关。两端独立：**桌面壳读 `captchaDesktop`，网页/headless 读 `captchaWeb`**；
+  GET 回的 `localPanel` 是**只读**的进程形态（true=桌面壳），界面据此标出「你现在用的
+  这一端读的是哪个开关」。PUT 是分端部分更新，只发要改的那一端（两端都不给会 400）。
+- 两个开关都做成「点一下立即生效 + 失败回滚」，因为它们本身就是安全开关，多一步保存
+  容易让人以为已经改了。
+
+**数据保留（`api/stats_api.rs`，不是 config_api.rs）**
+- `GET/PUT /api/retention`，五个键：`logRetentionDays` 1–99999 默认 30、
+  `logRetentionCount` 1–100000000 默认 10000、`requestLogRetentionDays` 默认 99999、
+  `requestLogRetentionCount` 默认 1000000、`dailyAggregateRetentionDays` 默认 99999。
+- ⚠️ **PUT 之后网关立刻裁剪**（`request_stats().prune()` + `LogStore::prune()`），超出新上限
+  的历史记录当场删除且不可恢复 → 保存前 `confirmDialog` 列出「哪一项改成多少」，
+  确认按钮文案是「裁剪并保存」。
+- PUT 允许部分字段（`null` = 该项不动）；空对象 `{}` 不写盘、不裁剪。
+
+**存储用量（`GET /api/storage`，只读）**
+- `configDir` + `database{file, bytes, available, accounts, logs, requests, dailyDays,
+  debug, downstreamRaw, upstreamRaw}`；`debug` 与 `upstreamRaw` 同值（兼容字段）。
+- **没有写路由**（旧 relocate / progress 已删），所以界面不做任何「清理」按钮 ——
+  清理靠数据保留。
+- `available === false` 时各计数回落 0，界面显示「库不可用」而不是伪造读数。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`mobile.js` 1,165.47 kB。
+
+**观察到的事实**：CI 的 macOS runner 排队很久（批 1 的那次运行在推送后 20 分钟仍未开始
+编译），所以**推送与 CI 并行推进**——每批推完立刻接着做下一批，等运行结束后再统一核对。
+
 #### 批次进度
 
 | 批次 | 内容 | 状态 |
@@ -608,8 +646,8 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 | 步骤 0 | UI 设计分析 + 契约提取 + 方案 | **已完成**（`67fd625`） |
 | 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | **已完成**（`b9d8206`） |
 | 批 2a | 系统提示词（全局 / 分提供商 / 网关三段） | **已完成**（`2324be6`） |
-| 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | **已完成**（本次） |
-| 批 3 | CORS / 机器人校验 / 数据保留 / 存储用量 | 待开始 |
+| 批 2b | 指纹脱敏（开关 / 应用提供商 / 词表 CRUD） | **已完成**（`f54e0a2`） |
+| 批 3 | 连接与安全（CORS/人机验证）+ 数据与存储（用量/保留） | **已完成**（本次） |
 | 批 4 | models.dev / 宫格布局 / ZCode 版本 / 验证码池 / Cline 头 | 待开始 |
 | 批 5 | 更新出网代理 / beta / GitHub 访问 / 版本信息补全 / 反馈入口 | 待开始 |
 | 批 6 | 云同步 / cc-switch 导入 / 局域网访问（**需改 Rust，待用户拍板**） | 待开始 |
