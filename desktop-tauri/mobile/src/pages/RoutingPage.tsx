@@ -9,6 +9,7 @@ import { t } from '../i18n'
 import { fetchRouting, fetchRoutingQueue, putRouting, type RoutingSettings, type RoutingQueue } from '../api/routing'
 import { providerLabel } from '../lib/providers'
 import { RoutingReplayView } from './routing-replay'
+import { RoutingWorkspaceView } from './routing-workspace'
 
 /**
  * 路由配置。
@@ -27,7 +28,7 @@ import { RoutingReplayView } from './routing-replay'
  */
 export function RoutingPage() {
   const identity = serverIdentity()
-  const [mode, setMode] = useState<'strategy' | 'replay'>('strategy')
+  const [mode, setMode] = useState<'strategy' | 'workspace' | 'replay'>('strategy')
   const [settings, setSettings] = useState<RoutingSettings | null>(null)
   const [queue, setQueue] = useState<RoutingQueue | null>(null)
   const [model, setModel] = useState('')
@@ -115,20 +116,22 @@ export function RoutingPage() {
         ) : undefined}
       />
 
-      {/* 与桌面端同一套顶层模式：策略（配置）/ 回放（看实际发生了什么） */}
+      {/* 与桌面端同一套顶层模式：策略（配置）/ 工作空间（此刻状态）/ 回放（实际发生了什么） */}
       <div className='m-section' style={{ marginTop: 12 }}>
         <SegmentedControl
           options={[
             { value: 'strategy', label: t('策略与预演') },
+            { value: 'workspace', label: t('工作空间') },
             { value: 'replay', label: t('请求回放') },
           ]}
           value={mode}
           aria-label={t('路由配置模式')}
-          onValueChange={value => setMode(value as 'strategy' | 'replay')}
+          onValueChange={value => setMode(value as 'strategy' | 'workspace' | 'replay')}
         />
       </div>
 
       {mode === 'replay' ? <RoutingReplayView /> : null}
+      {mode === 'workspace' ? <RoutingWorkspaceView /> : null}
 
       {mode === 'strategy' ? (
         <>

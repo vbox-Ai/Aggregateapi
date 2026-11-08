@@ -964,6 +964,41 @@ S3 按 `region` 与预设占位区域匹配；匹配不上就是「自定义」�
 `id` `ts`）来自桌面壳调用签名 + 二进制字符串交叉验证，属**强推断**；首次在真机上打开
 回放页时若报错，先核对这几个参数名。
 
+#### 记忆点 · 步骤 12（路由板块 R1：工作空间）
+
+新增 `pages/routing-workspace.tsx`；`RoutingPage.tsx` 的模式变成三个：
+**策略与预演 / 工作空间 / 请求回放**（对齐桌面端的 config / live / replay）。
+
+数据源：`GET /api/routing/workspace?model=` —— **不传 `model` 就是全局**（桌面端
+`const globalAccounts = !scope` 同一约定）。
+
+**★ 参与度判据是照抄的，不是自创的**（`routing-config-panel.tsx`）：
+```
+全局（未选模型）：account.enabled !== false 即参与；
+按模型：providerIncluded(id) && !excludedAccounts.includes(account.id)
+  providerIncluded(id) = (providerScope === 'all' || providers.includes(id)) && !disabledProviders.includes(id)
+```
+**这条必须逐字对齐** —— 判据一旦分叉，手机显示「参与」而网关不选它，用户会以为坏了。
+所以我把判据写成注释贴在函数上方，改的时候能看见出处。
+
+这一屏装了三件 `/api/routing/queue` 给不了的东西：
+1. **谁被限额**（`accountStates`：`limitedModels` + `resetAt`）—— 单看排队顺序看不出「为什么这个账号一直不出现」；
+2. **账号健康状况**（`hasCredentials === false` / `needsRelogin` / `isGuest` / `available === false`）——
+   `hasCredentials === false` 那种账号在选路里是**静默跳过**的，不标出来用户看不出为什么发不出去；
+3. **入驻情况与实时指标**（`providers[].available === false` →「模型绑定不可用」、
+   `metrics.running` / `todayRequests` / `todaySuccessRate` / `averageDurationMs`、
+   每账号在途连接数、`stickyCount`）。
+
+**判空口径**：`metrics` 用 `available === false` 区分「旧版网关没这个能力」与
+「确实是 0」——两者都显示 0 会让用户误判。同样 `todaySuccessRate == null` 显示
+「未记录」而不是 0%。
+
+**刻意只读**：这一屏不放「启用账号」开关（桌面端有）——账号启用是**账号页**的事，
+路由参与范围是「策略与预演」保存的事，混在一起会让用户搞不清哪个改动何时生效。
+页尾写明了这句分工。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,235.81 kB。
+
 
 ## 4. 常用事实
 
