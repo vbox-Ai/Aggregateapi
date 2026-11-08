@@ -27,6 +27,27 @@
   `67663cf046b8800eddffd18f8a0ed938a9846ef89adca75cd993feb1f057662da`
   与当前 `3.4.182` 包内 bundle 完全一致。
 
+### 构建管线已转绿（2026-11-08）
+
+- iOS 作业 16 步全过（含「校验 shell 脚本」「构建手机面板 UI」「打 IPA + 打包 deb」「上传产物」）。
+- 产物已发布到 Release：tag 形如 `ios-YYYYMMDD-bNNN`，含四个 deb
+  （rootful/rootless × arm64/arm64e）+ 两个插件 zip。带插件包的构建用
+  `only=store`（同时跑 plugins + ios 两个作业），只编 iOS 用 `only=ios`。
+- **产物校验方法**：`desktop-tauri/ui/m/mobile.js` 的 SHA256 与 deb 内
+  `usr/local/share/agent2api/ui/m/mobile.js` 逐字节比对 —— 一致即证明 deb 装的是
+  本次源码构建的面板。校验脚本思路见「5. 工程注意」。
+- 修掉的三个「会让改动不生效 / 构建失败」的问题（均为历史遗留）：
+  1. `agent2api-ios/scripts/build-ipa.sh` 被 PowerShell 按 GBK 往返写过，中文变乱码、
+     引号被 `?` 吃掉，`set -euo pipefail` 被并进注释 → 从损坏前提交恢复后重新打补丁。
+  2. `scripts/build-allinone-deb.sh` 同类损坏（连换行都被吃掉）→ 用完好版本 + 补回
+     postrm 打包那两行重建。
+  3. `agent2api-ios/daemon/postinst.sh` 4 行错误提示乱码 → 按干净旧版本的原文修回。
+- CI 已加闸门「校验 shell 脚本（编码 + 语法）」：`git ls-files '*.sh'` 逐个查
+  UTF-8 BOM 与 `bash -n`。**脚本损坏以后会在这一步立刻暴露**，不会再拖到打包阶段。
+- ⚠️ 教训：**永远不要用 PowerShell 的 `Get-Content -Raw` / `Set-Content` 处理含中文的
+  UTF-8 文件**（按 GBK 解码 + 写回 BOM，且会吃掉引号与换行）。用 `write`/`edit` 工具，
+  或 Python 显式 `encoding='utf-8', newline='\n'`；二进制一律 `Invoke-WebRequest -OutFile`。
+
 ## 1. 开发目标
 
 手机-only：逐步移除桌面面板 `/`，手机面板 `/m` 补齐 P0/P1/P2。
@@ -332,7 +353,10 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 - Phase 3.6 服务控制 —— **已完成**（`a64a2f8`）
 
 ### 待继续
-- **Phase 4：移除桌面面板**（手机-only 收尾）
+
+- **设置补全系列**：按 `docs/mobile-ui/DEVELOPMENT-PLAN.md` 分批做，批 1 起（详见第 2 节
+  「手机端设置补全系列」的批次进度表）。每批：实现 → 本地 `tsc + build` → 补记忆点 → 推送 → 下一批。
+- **Phase 4：移除桌面面板**（手机-only 收尾，等设置补全告一段落再做）
   1. 增加 `mobileParity` 开关；
   2. P0 全部验收后默认关闭桌面入口；
   3. 移除 `PanelViewController` 的"桌面面板"按钮；
@@ -366,6 +390,112 @@ P0 顺序：Key 管理 → 账号凭证 → GitHub Token → 安全 → 备份/�
 跑；它编译的是 `$ROOT/app/Agent2API/*.swift`（本仓库的 Swift 源码）。改 Swift 后需重跑
 CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 
+### 备份 / 恢复补全（2026-11-08，提交 08056eb）
+
+补齐了四处与网关契约的差距：
+
+1. **恢复进度**：网关 `GET /api/backup/restore/progress` 提供 `{active, phase, percent, done,
+   failed, error}`，**阶段文案与百分比都由后端给**（`db/backup.rs` 的 `RestorePhase::label/percent`，
+   步骤顺序的唯一权威）。手机端按 500ms 轮询显示进度条 —— 恢复要读文件、解密、在暂存库跑 SQL、
+   拍安全备份、覆盖主库、重载内存态，30 秒到几分钟，不轮询就只有一个转圈按钮。
+2. **恢复后强制回登录**：恢复会整体替换数据库（含面板会话表），现在主动 `clearPanelAuth()` +
+   `store.setAuthLost('login')`，不再等下一个请求撞 401。
+3. **密码规则对齐 `archive::validate_password`**：备份 ≥12 字且 ≤1024 字节；**恢复只看非空**
+   （旧 `.sql` 备份本来就没密码）；两者都封顶 1024 字节。
+4. **数据区入口**：补「导出运行日志」与「清空整库」（清空走 supervisor `/factory-reset`，
+   需输入「重置」二次确认，新增 `pages/reset-library-sheet.tsx`）。
+
+### iOS 文件保存改用原生桥（2026-11-08，提交 cef390e）
+
+**原实现是错的**：我写了 `webView.downloadDelegate = self` —— `WKWebView` 上**根本没有这个成员**
+（delegate 挂在 `WKDownload.delegate`）。CI 的 Swift 编译直接失败。
+
+修正方案：**放弃 WKWebView 下载 API**，改用原生桥 `a2aFile`（`window.webkit.messageHandlers.a2aFile`）：
+
+| 消息 | 用途 |
+|---|---|
+| `{op:'saveInline', filename, base64}` | JS 已拿到字节（导出 JSON 等小文件），原生落盘后弹分享面板 |
+| `{op:'saveRemote', url, method, body, headers, filename}` | 备份这类可能几十 MB 的流，**原生带鉴权头自己请求**，不把整包 base64 塞过桥 |
+
+原生侧只用已验证可用的 API（`URLSession.downloadTask` / `Data(base64Encoded:)` /
+`UIActivityViewController`）。浏览器/PWA 仍走 `<a download>`（`lib/download.ts` 里
+`fileBridge()` 判断有无桥）。`downloadJson` 因此变成 async，四处调用点已加 `await`。
+
+> 教训：写 Swift 前先查头文件确认 API 存在（本环境无 Xcode，只能靠源码 / WebKit 头文件），
+> 不要凭记忆写平台 API。
+
+### 手机端设置补全系列（2026-11-08 起）
+
+配套文档已入库（`docs/mobile-ui/`）：
+
+| 文件 | 内容 |
+|---|---|
+| `docs/mobile-ui/DESIGN.md` | 手机端 UI 设计体系分析（令牌 / 骨架类 / 组件 / 页面模式 / 实现守则） |
+| `docs/mobile-ui/GAP.md` | 桌面 11 分区约 267 条设置 vs 手机端覆盖情况 |
+| `docs/mobile-ui/DEVELOPMENT-PLAN.md` | 六个批次的开发方案（契约 / UI / 验收 / 风险） |
+| `docs/mobile-ui/contracts/FORWARDING.md` | 转发行为契约（排队/重试/超时/调试/图片压缩/角色兼容/config） |
+| `docs/mobile-ui/contracts/CONTENT.md` | 内容与识别契约（提示词/脱敏/客户端识别/models.dev/CORS/机器人校验/宫格） |
+| `docs/mobile-ui/contracts/DATA-SYSTEM.md` | 数据系统与更新契约（存储/保留/云同步/系统信息/更新/工具/成长） |
+
+#### 记忆点 · 步骤 0（UI 设计分析）
+
+- 手机端样式是**五层结构**：`theme.css` 的 `--ui-*` → `mobile.css` 的 `--m-*` →
+  骨架类（`ui-kit/styles/mobile.css` 的 `.m-page`/`.m-card`/`.m-row`/`.m-tabbar`…）→
+  ui-kit 组件（shadcn 对齐）→ `mobile/src/pages/*`。
+- 手机端**不引用**桌面端 `ui/css/*`；`mobile.css` 用 `@source` 扫 `ui-kit/src`、`ui-shared`、本工程。
+- 关键骨架类：`.m-page`（可加 `.m-fixed` 变固定头+独立滚动）、`.m-sticky`/`.m-body`、
+  `.m-section`/`.m-section-head`、`.m-card`/`.m-card-pad`、`.m-row`（52px，t1/t2/chev/val/grow/logo）、
+  `.m-rows`（紧凑键值 44px）、`.m-kv`/`.m-kv-cell`、`.m-logo`、`.m-chips`、`.m-tabbar`/`.m-tab`、
+  `.m-ptr`（下拉刷新）、`.m-mono`（tabular-nums）。
+- 颜色语义固定：**绿=正常、黄=限流/告警、红=失效**；只用 `--m-*`/`--ui-*` 令牌，不写死色值。
+- 键盘弹起时 TabBar 整条隐藏（`visualViewport` 覆盖 > 120px 判定），高度让给输入框。
+- **本系列实现守则**：新页 `.m-page` + `.m-section` + `.m-card`；设置行用 `.m-logo`+`.m-t1/.m-t2`
+  + `Switch`/`.m-chev`；数值表单 `Label`+`Input inputMode='numeric'`+范围说明；开关 `Switch`、
+  分段 `SegmentedControl`、多选 `MultiSelect`；危险操作 `confirmDialog`；文案一律 `t()`
+  （中文即键、缺译回落中文，**新增文案不必改词典**）；**每个区块独立保存按钮**。
+
+#### 记忆点 · 步骤 0 附：网关契约通则（写任何新模块前先看）
+
+1. **成功信封**：`http.rs:1295` 的 `ok_json()` = `{"success":true,"data":{…}}`，失败
+   `{"success":false,"error":"…"}`。手机端 `apiCall()` **已经会解这个信封**（有 `data` 就取出），
+   新模块直接 `apiCall<T>(path, {method, body})`，不要自己再包一层。
+   ⚠️ 提取契约时一个子代理曾断言「成功体是裸对象」，**那是错的**（已对源码核实）。
+2. **路由表在 `server/src/server/http.rs`**，不在 `api/mod.rs`（那只是模块声明）。
+3. **鉴权**：本系列全部端点都在 protected 组，要管理员会话或不受限 Key；受限 Key → 403
+   `management_access_denied`；没凭证 → 401 `panel_login_required`。**没有端点校验「网关在跑」**。
+4. **「省略字段」有四种语义**（最易踩）：
+   - 省略/null 都=不改：`queue`/`retry`/`timeouts`/`captcha`/`prompt` 全局项；
+   - 省略=不改、**null=清除/回默认**：`promptProviders.<id>`、`promptGateway.<id>`、
+     `promptGatewayText.<id>`、`sanitizeFingerprintRules`；
+   - **null=400**：`image_compress` 四项（没有删除语义）；
+   - **null≠不改且会落盘** ⚠️：`sanitizeFingerprintProviders=null` 被归一成空数组，而空数组
+     语义是「应用到**全部**提供商」—— 必须显式区分 `undefined`（不传）与 `[]`（全部）。
+   - 另两处特例：`config_api` 的 `apiKey:null` = 删除 Key；`imageCompressEnabled` /
+     `developerRoleCompat` 的默认是「开」，且**只有字面 `false` 才算关**（别用 `!== true` 判断）。
+5. **写入粒度**：整表替换 = `/api/sanitize` 词表、`/api/client-identification` 的 config、
+   `/api/sidebar-layout` 的 layout、`/api/cline/headers` 的 overrides（改一条也要回发全量）；
+   稀疏更新 = `/api/prompt` 的三个 map；乐观锁 = client-identification 的 `revision`（不符回 **409**）。
+6. **端点真名**（容易记错）：`/api/developer-role-compat`（不是 role-compat）、
+   `/api/models/metadata`（不是 model-meta）、`/api/retention` 在 `api/stats_api.rs`
+   （不是 config_api.rs）、`/api/zcode/captcha-pool`、`/api/cline/headers`。
+7. **数值默认与范围**：`queueMaxWaits` 0–10 默认 **2**（不是 1–10/3）；`queueWaitSeconds` 0–120 默认 0；
+   `retryCount` 0–10 默认 3；`retryCrossProviderCount` 0–10 默认 5（语义=换账号次数）；
+   `retryIntervalSeconds` 0–300 默认 5；`noRetryStatusCodes` 100–599 ≤50 项默认 `[402]`；
+   四项超时 1–3600 默认 30/300/300/300；图片压缩 256–8192/40–95/0–10240 默认 2048/80/512。
+
+#### 批次进度
+
+| 批次 | 内容 | 状态 |
+|---|---|---|
+| 步骤 0 | UI 设计分析 + 契约提取 + 方案 | **已完成**（本次） |
+| 批 1 | 转发行为（排队/重试/超时/图片压缩/角色兼容/调试模式） | 待开始 |
+| 批 2 | 系统提示词 + 指纹脱敏 | 待开始 |
+| 批 3 | CORS / 机器人校验 / 数据保留 / 存储用量 | 待开始 |
+| 批 4 | models.dev / 宫格布局 / ZCode 版本 / 验证码池 / Cline 头 | 待开始 |
+| 批 5 | 更新出网代理 / beta / GitHub 访问 / 版本信息补全 / 反馈入口 | 待开始 |
+| 批 6 | 云同步 / cc-switch 导入 / 局域网访问（**需改 Rust，待用户拍板**） | 待开始 |
+
+
 ## 4. 常用事实
 
 - 手机端 API client：`desktop-tauri/mobile/src/api/client.ts` 的 `apiCall`。
@@ -384,3 +514,19 @@ CI 或本机 `xcodebuild` 验证（本环境无法编译 Swift）。
 - 改完必须 `pnpm exec tsc --noEmit` 通过再推送。
 - 桌面独有能力（写客户端配置、本地 stdio MCP/Skill、桌面安装器）在手机端标注“桌面专属”，不硬搬。
 - GitHub PAT 不要写进任何文件；用户侧需要撤销旧 PAT。
+- **本机构建环境**（无全局 node/npm）：
+  - node：`C:\Users\Admin\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe`
+  - pnpm：`…\dependencies\pnpm\bin\pnpm.mjs`（用 `node pnpm.mjs …` 调）
+  - 先 `$env:PATH = "<node bin>;" + $env:PATH`，否则 npm 脚本里的 `node` 找不到。
+  - 工程目录：`desktop-tauri/mobile`；`pnpm exec tsc --noEmit` + `pnpm run build`。
+- **文件编码铁律**：含中文的文件**只能**用 `write`/`edit` 工具或 Python（显式
+  `encoding='utf-8', newline='\n'`）写；**绝不要**过 PowerShell 的 `Get-Content -Raw` /
+  `Set-Content`（按 GBK 解码 + 写 BOM + 吃掉引号和换行，`build-ipa.sh` 就是这么坏的）。
+  下载文件一律 `Invoke-WebRequest -OutFile`；控制台是 GBK，**不要**用 PowerShell 直接打印中文。
+- **deb 产物校验**：`desktop-tauri/ui/m/mobile.js` 的 SHA256 必须与 deb 内
+  `usr/local/share/agent2api/ui/m/mobile.js` 一致（证明 deb 装的是本次源码构建）。
+- GitHub API 走 `Invoke-RestMethod`，头 `Authorization: token <PAT>` + `User-Agent`；
+  push 用 blobs → trees → commits → refs 四步。Actions 产物下载走
+  `https://api.github.com/repos/<repo>/actions/artifacts/<id>/zip`（Release 资产走
+  `/releases/assets/<id>` + `Accept: application/octet-stream`）。本机直连 GitHub 常超时，
+  用户侧可用 `https://ghfast.top/` 或 `https://gh-proxy.com/` 前缀加速。
