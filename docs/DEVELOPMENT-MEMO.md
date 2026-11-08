@@ -924,6 +924,46 @@ S3 按 `region` 与预设占位区域匹配；匹配不上就是「自定义」�
 
 **验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,211.24 kB。
 
+#### 记忆点 · 步骤 11（路由板块 R2：请求回放 + 链路追踪）
+
+**用户反馈**：「路由这边整个路由配置、请求回放等很多功能全部缺失」。**成立** —— 我此前
+只做了 2/12 项。根因是我写在 `RoutingPage.tsx` 里的那句错误判断（详见
+`docs/mobile-ui/ROUTING-GAP.md`）：把「桌面端 41 个文件」当成了「都是壳本地事务」，
+**没去查网关自己的路由表**。判据一直现成：已发布二进制里就有全部路由字符串。
+
+**新增**：`api/routing-flow.ts`、`lib/routing-trace.ts`、`pages/routing-replay.tsx`、
+`pages/routing-trace-sheet.tsx`；`RoutingPage.tsx` 加了顶层模式切换
+「策略与预演 / 请求回放」（对齐桌面端的 `mode: 'config' | 'replay'`）。
+
+**★ 三个容易搞错的点，都是查源码才定下来的**
+
+1. **请求列表不走 `/api/routing/replays`**，而是 `GET /api/routing/flow` 加
+   `detail=requests`（桌面 `routing-request-list.tsx` 就是这么拉的）；模型候选是同一个
+   端点加 `detail=models`。`/replays` 与 `/trace`（带 `status`/`startDate`/`endDate`）
+   是另一处「请求日志」形态的入口，不在回放链路上。**光看端点名会选错。**
+2. **单次请求明细是 `GET /api/routing/trace/request?id=&ts=`**，`ts` 必须一起带 ——
+   `id` 在库里不是唯一键（同一请求重放会复用 id）。
+3. **判据本身有口径**，「进行中」是 `status === 0 && error == null`，「成功」还要求
+   `error == null`（有些上游回 200 但 body 里是错误）。所以 `lib/routing-trace.ts`
+   是从桌面 `routing-trace-model.ts` **逐条对齐**搬过来的，不是各写一份 ——
+   各写一份就会出现「手机说成功、桌面说失败」。
+
+**保留下来两个桌面端的好设计**：
+- 没有 `attemptDetails` 的老记录**回退成一条推断尝试**（用请求记录里的承载账号），
+  并明确标注「未保存完整尝试明细」；直接留空会让用户以为请求没发生过。
+- 候选队列快照里**已尝试的账号仍然留着**（尝试明细另记），否则单候选失败时会出现
+  「1 个候选但列表为空」的自相矛盾。
+
+**手机端刻意收窄的地方**：桌面筛选有客户端/提供商/账号/会话/活动状态等七八个维度，
+手机只留四个（时间窗 / 范围 / 模型 / 搜索）—— 大屏用来交叉分析，挤进手机只会
+哪一个都用不上。桌面是「左列表 + 右详情」两栏，手机是一屏列表 + 详情抽屉。
+
+**验证**：`tsc --noEmit` + `build` 均 exit 0；`check-mobile-ui.py` exit 0；`mobile.js` 1,226.05 kB。
+
+⚠️ **待真机核对**：查询参数名（`minutes` `scope` `detail` `offset` `limit` `search` `model`
+`id` `ts`）来自桌面壳调用签名 + 二进制字符串交叉验证，属**强推断**；首次在真机上打开
+回放页时若报错，先核对这几个参数名。
+
 
 ## 4. 常用事实
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Card, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
+import { Button, Card, Input, Label, SegmentedControl, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
 import { PageHead, Empty, ErrorNote, SectionHead } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -8,6 +8,7 @@ import { store } from '../state/store'
 import { t } from '../i18n'
 import { fetchRouting, fetchRoutingQueue, putRouting, type RoutingSettings, type RoutingQueue } from '../api/routing'
 import { providerLabel } from '../lib/providers'
+import { RoutingReplayView } from './routing-replay'
 
 /**
  * 路由配置。
@@ -26,6 +27,7 @@ import { providerLabel } from '../lib/providers'
  */
 export function RoutingPage() {
   const identity = serverIdentity()
+  const [mode, setMode] = useState<'strategy' | 'replay'>('strategy')
   const [settings, setSettings] = useState<RoutingSettings | null>(null)
   const [queue, setQueue] = useState<RoutingQueue | null>(null)
   const [model, setModel] = useState('')
@@ -105,13 +107,32 @@ export function RoutingPage() {
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <PageHead
         title={t('路由配置')}
-        subtitle={t('候选顺序 · 粘性 · 失败后退避')}
-        actions={<Button variant='outline' size='sm' disabled={Boolean(busy)} onClick={() => void save()}>
-          {busy === 'save' ? t('保存中…') : t('保存')}
-        </Button>}
+        subtitle={mode === 'strategy' ? t('候选顺序 · 粘性 · 失败后退避') : t('最近请求 · 每次尝试 · 候选快照')}
+        actions={mode === 'strategy' ? (
+          <Button variant='outline' size='sm' disabled={Boolean(busy)} onClick={() => void save()}>
+            {busy === 'save' ? t('保存中…') : t('保存')}
+          </Button>
+        ) : undefined}
       />
 
-      <div className='m-section' style={{ marginTop: 0 }}>
+      {/* 与桌面端同一套顶层模式：策略（配置）/ 回放（看实际发生了什么） */}
+      <div className='m-section' style={{ marginTop: 12 }}>
+        <SegmentedControl
+          options={[
+            { value: 'strategy', label: t('策略与预演') },
+            { value: 'replay', label: t('请求回放') },
+          ]}
+          value={mode}
+          aria-label={t('路由配置模式')}
+          onValueChange={value => setMode(value as 'strategy' | 'replay')}
+        />
+      </div>
+
+      {mode === 'replay' ? <RoutingReplayView /> : null}
+
+      {mode === 'strategy' ? (
+        <>
+          <div className='m-section' style={{ marginTop: 0 }}>
         <SectionHead title={t('全局策略')} />
         {error ? <ErrorNote text={error} /> : null}
         {!settings ? <Card className='m-card'><Empty text={t('正在读取路由设置…')} /></Card> : null}
@@ -172,6 +193,8 @@ export function RoutingPage() {
           </> : null}
         </Card> : <Card className='m-card'><Empty text={t('正在计算队列…')} /></Card>}
       </div>
+        </>
+      ) : null}
     </div>
   )
 }
