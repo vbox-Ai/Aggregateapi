@@ -2433,3 +2433,38 @@ pnpm exec tsc --noEmit          → exit 0
 pnpm run build                  → exit 0   mobile.js 1,309.78 → 1,315.71 kB
 check-mobile-ui.py --root <repo> → exit 0
 ```
+
+#### 记忆点 · 步骤 45（M2.4 插件本地包安装）
+
+**做成了什么**：插件页多一个「从文件安装…」——选手机里的插件包（zip）→ 读成
+base64 → 上传给网关 → 网关校验并安装。与「从 Release 下载」的区别只有**包从哪来**：
+这里包在手机上，**装的位置仍然是网关**。
+
+**契约（上游 `api/plugins.rs` + `core/plugin_host/packages.rs`）**
+
+- `POST /api/plugins/install` body **`{packB64}`** → 成功 `ok_json(result)`（与启停/卸载
+  同一族，桌面端就把它当 `PluginMutation`）
+- **`MAX_PACK_BYTES = 24 * 1024 * 1024`**；`MAX_PACK_BASE64_BYTES = (MAX_PACK_BYTES+2)/3*4`；
+  `MAX_PACK_UPLOAD_BYTES = MAX_PACK_BASE64_BYTES + 1 MiB`（给 JSON 开销留的余量）
+- 失败一律 400：空包（「请求体是空的：请选择插件包 zip 后重试」）、超限
+  （`pack_size_error()`）、`prepare_pack` 校验不过、`安装失败：{error}`
+- 上限**不用写死**：`GET /api/plugins` 的响应里就带 `maxPackBytes`
+
+**实现要点**：读包做成与桌面端逐条一致的两道闸门（先用 `file.size` 挡、读完再用
+base64 长度挡），上限从网关读并在本地 clamp 到 96 MiB 兜底；文案沿用桌面端的
+「插件包大小不能超过 {n} MiB」。手机上这一步比桌面更要紧：24 MiB 的包会变成约
+32 MiB 的字符串一次性进内存，所以"读之前先拒"是必要的。
+
+**⚠️ 一条必须真机验证的**：iOS WebView 里 `<input type="file">` 能否真的拿到文件内容
+（取决于壳有没有实现文件选择回调）。**浏览器/PWA 下这条路径是确定的**，App 里要实测；
+代码里已标注，不会替我下结论。
+
+新增/改动：`api/plugins.ts`（加 `installPluginPack`）、`pages/PluginsPage.tsx`（入口 +
+读包 + 双闸门）。
+
+**验证**：
+```
+pnpm exec tsc --noEmit          → exit 0
+pnpm run build                  → exit 0   mobile.js 1,315.71 → 1,317.22 kB
+check-mobile-ui.py --root <repo> → exit 0
+```

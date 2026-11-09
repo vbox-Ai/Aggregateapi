@@ -3,8 +3,9 @@ import { Button, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, Sheet
 import { PageIntro, ErrorNote, Empty, SectionHead } from '../components/ui'
 import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
 import {
-  checkPluginUpdates, getPlugins, pluginErrorMessage, refreshPluginCatalog, setPluginEnabled, setPluginProvider,
-  startPluginInstall, uninstallPlugin, type PackSummary, type PluginMutation, type PluginsPayload,
+  checkPluginUpdates, getPlugins, installPluginPack, pluginErrorMessage, refreshPluginCatalog,
+  setPluginEnabled, setPluginProvider, startPluginInstall, uninstallPlugin,
+  type PackSummary, type PluginMutation, type PluginsPayload,
 } from '../api/plugins'
 import { usePolling } from '../lib/usePolling'
 import { serverIdentity } from '../lib/servers'
@@ -14,6 +15,51 @@ import { PluginSettingsSheet } from './plugins/PluginSettingsSheet'
 import { t } from '../i18n'
 import '../styles/checkin.css'
 
+const MIB = 1024 * 1024
+/** 上游的 `MAX_PACK_BYTES`；网关没报上限时按它兜底 */
+const LEGACY_MAX_PACK_BYTES = 24 * MIB
+/** 再大也不信（网关报了个离谱的数字时别把手机拖死） */
+const HARD_MAX_PACK_BYTES = 96 * MIB
+
+function clampMaxPackBytes(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? Math.min(value, HARD_MAX_PACK_BYTES) : LEGACY_MAX_PACK_BYTES
+}
+
+function packSizeLimitMessage(maxPackBytes: number): string {
+  return t('插件包大小不能超过 {n} MiB', { n: maxPackBytes / MIB })
+}
+
+/** 读成 base64（FileReader 给的是 `data:...;base64,xxxx`，只取逗号后面那段） */
+function readBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error(t('读取文件失败')))
+    reader.onload = () => {
+      const text = typeof reader.result === 'string' ? reader.result : ''
+      const index = text.indexOf('base64,')
+      resolve(index >= 0 ? text.slice(index + 7) : text)
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
+ * 读包并做两道体积闸门（与桌面端逐条一致）。
+ *
+ * 手机上这一步比桌面更要紧：24 MiB 的包读成 base64 会变成约 32 MiB 的字符串，
+ * 一次性进内存 + 一次 POST。所以在**读之前**就用 `file.size` 挡一次，
+ * 读完再用 base64 长度挡一次 —— 免得白读一个大文件才发现要被拒。
+ */
+async function readPackBase64(file: File, maxPackBytes: number): Promise<string> {
+  if (file.size > maxPackBytes) throw new Error(packSizeLimitMessage(maxPackBytes))
+  const packB64 = await readBase64(file)
+  if (packB64.length > Math.ceil(maxPackBytes / 3) * 4) {
+    throw new Error(packSizeLimitMessage(maxPackBytes))
+  }
+  return packB64
+}
+
 export function PluginsPage() {
   const { server } = useStore()
   const [payload, setPayload] = useState<PluginsPayload | null>(null)
@@ -21,6 +67,8 @@ export function PluginsPage() {
   const [busy, setBusy] = useState('')
   const [settings, setSettings] = useState(false)
   const [remove, setRemove] = useState<PackSummary | null>(null)
+  const [maxPackBytes, setMaxPackBytes] = useState(LEGACY_MAX_PACK_BYTES)
+  const fileRef = useRef<HTMLInputElement>(null)
   const locked = useRef(false)
   const signature = useRef('')
   const seenOperations = useRef(new Set<string>())
@@ -39,6 +87,7 @@ export function PluginsPage() {
         void store.refresh(true)
       }
       setPayload(data)
+      setMaxPackBytes(clampMaxPackBytes((data as PluginsPayload & { maxPackBytes?: unknown }).maxPackBytes))
       setError('')
       for (const operation of data.operations || []) {
         if (operation.active) continue
@@ -97,6 +146,37 @@ export function PluginsPage() {
     if (result) store.toast(t('下载任务已交给网关，关闭手机不影响安装'))
   }
 
+  /**
+   * 从手机上选一个插件包上传安装。
+   *
+   * 与上面那条（从 Release 下载）的区别只在**包从哪来**：这里包在手机的文件里，
+   * 装的位置仍然是网关。上传是同步的（网关收完、校验、装完才回），所以一个
+   * 20 MiB 的包在手机上会有几秒到十几秒的等待，`busy` 会把按钮与文案都锁住。
+   *
+   * ⚠️ 真机待验：iOS 的 WebView 里 `<input type="file">` 能否真的拿到文件内容
+   * （取决于壳是否实现了文件选择的回调）。这条路径在**浏览器/PWA** 下是确定的，
+   * App 里要实测一次。
+   */
+  const installFromFile = async (file: File | undefined) => {
+    if (!file) return
+    if (file.size > maxPackBytes) {
+      store.toast(packSizeLimitMessage(maxPackBytes), 'err')
+      return
+    }
+    let packB64 = ''
+    try {
+      setBusy('read')
+      packB64 = await readPackBase64(file, maxPackBytes)
+    } catch (cause) {
+      setBusy('')
+      store.toast(cause instanceof Error ? cause.message : String(cause), 'err')
+      return
+    }
+    setBusy('')
+    const result = await run('install-file', () => installPluginPack(packB64))
+    if (result) store.toast(t('插件包已上传给网关，正在安装'))
+  }
+
   const packs = payload?.packs || []
   const catalog = payload?.catalog?.plugins || []
   const uninstalled = catalog.filter(item => !packs.some(pack => pack.id === item.id))
@@ -118,9 +198,20 @@ export function PluginsPage() {
           <div className='m-ck-actions'>
             <Button size='sm' variant='outline' disabled={Boolean(busy)} onClick={() => void refresh()}>{busy === 'catalog' ? t('读取中…') : t('刷新插件仓库')}</Button>
             <Button size='sm' variant='outline' disabled={Boolean(busy)} onClick={() => void check()}>{busy === 'check' ? t('检查中…') : t('检查更新')}</Button>
+            <Button size='sm' variant='outline' disabled={Boolean(busy)} onClick={() => fileRef.current?.click()}>
+              {busy === 'read' ? t('读取中…') : busy === 'install-file' ? t('上传安装中…') : t('从文件安装…')}
+            </Button>
             <Button size='sm' variant='ghost' onClick={() => store.push('logs', { category: 'plugin' })}>{t('插件日志')}</Button>
             <Button size='sm' variant='ghost' onClick={() => setSettings(true)}>{t('插件设置')}</Button>
           </div>
+          {/* 选包：只收 zip，体积在读取前先按网关报的上限挡一次 */}
+          <input ref={fileRef} type='file' accept='.zip,application/zip' style={{ display: 'none' }}
+            onChange={event => {
+              const file = event.currentTarget.files?.[0]
+              event.currentTarget.value = ''
+              void installFromFile(file)
+            }} />
+          <p className='m-ck-note'>{t('从文件安装：把手机里的插件包（zip）上传给网关安装，单个包不超过 {n} MiB。', { n: maxPackBytes / MIB })}</p>
         </Card>
       </div>
       {error ? <ErrorNote text={error} /> : null}

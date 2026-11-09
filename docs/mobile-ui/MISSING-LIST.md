@@ -46,7 +46,7 @@
 - 影响：加账号的核心路径缺一种方式；对很多只用短信登录的上游等于无法添加账号
 - 量级：**M**（一套"发码 → 填码"两屏 + 3 家提供商的参数差异 + 错误码处理）
 
-### A2 从文件安装插件包
+### A2 从文件安装插件包 —— **✅ 已实现（2026-11-09）**
 - 端点：`POST /api/plugins/install` — body `{ packB64 }`（base64 的包）
 - 桌面入口：插件页（`plugins-page.tsx`），选本地包安装
 - 手机现状：有 `/api/plugins`、`install-from-release`、`update`、`uninstall`、`enable`、`settings`、`provider`、`release`，**没有本地文件安装**
