@@ -3093,3 +3093,32 @@ build 1,350.61 → 1,397.78 kB（+47 KB 就是这份 27 家配置真被打进去
 避免把已删文档又带回去。
 
 **改动**：`api/web-login.ts`（新）、`pages/add-account-static-sheet.tsx`、`lib/add-account-static.ts`。
+
+#### 记忆点 · 步骤 62（U10：访客模式补齐 —— 之前的"空缺"其实是"没查契约"）
+
+**背景**：U9 我把「访客模式」（只有智谱清言）标成手机端未接入的真实空缺。用户要求继续查契约补上。
+
+**契约（查到了，而且比预想简单）**：
+- 桌面端 `add-provider-blocks.tsx` 的注释写明：**载荷只有 `{ provider, guest: true, name? }`**，
+  打 **`POST /api/accounts`**；网关的 **Chatglm 分支**再按 `guest` 去插件打一次**空 body** 的
+  `guest/access` 换证（`core/account_store/mod.rs` 也记着"实现已搬到插件"）。
+- 配置侧类型：`guestLogin?: { noteHtml, button, busyText?, namePlaceholder? }`。
+- ⇒ **不需要新端点、不需要原生改动** —— 手机端用已有的提交函数（`POST /api/accounts`）就能做。
+
+**实现**：把「暂未接入」那段说明换成真分段 —— 备注名输入（`namePlaceholder`）+ 按钮（`config.guestLogin.button`
+与 `busyText`），点击提交 `{ provider, guest: true, name? }`，复用同一套 `submit()`（成功即刷新列表并关窗）。
+另补一处状态重置：换提供商时清空访客备注名与回调地址。
+
+**★ 一条值得记的判断**：U9 里我写"手机端暂未接入"，听起来像"做不到"，但**它只是"这个端点我还没核"**。
+这两者在汇报里必须分清：前者是能力边界，后者是待办。这次查了 10 分钟就补齐了 ——
+**凡是没有"技术上不可能"证据的缺口，都不该被写成能力边界**。
+
+**复查**：契约键名 `guest: true` 到位 ✓、文案与按钮全部取自配置（`config.guestLogin.*`）✓、
+`namePlaceholder` 已用 ✓、换提供商重置 ✓、旧文案「手机端暂未接入」残留 **0** ✓。
+三项检查：tsc 0 · build 1,402.26 → 1,402.59 kB · self-check 0。
+
+**至此手机端与桌面端在「加账号」上的分段对照**：手填 ✅ / 导入凭证文件 ✅ / 网页登录 ✅ / OAuth ✅ /
+短信 ✅ / 访客模式 ✅ / 动态登录 ✅；唯一仍不对齐的是**读本机客户端登录态** —— 那一条是**技术不可能**
+（要读电脑上的客户端文件，部分家还要 Windows DPAPI 解密），界面已注明原因并给出替代路径。
+
+**改动**：`pages/add-account-static-sheet.tsx`。

@@ -38,6 +38,8 @@ export function AddAccountStaticSheet({ provider, onClose, onAdded }: {
   const [webBusy, setWebBusy] = useState(false)
   const [webNote, setWebNote] = useState('')
   const [callback, setCallback] = useState('')
+  /** 访客模式的备注名（只有智谱清言有；其余输入都来自静态字段表） */
+  const [guestName, setGuestName] = useState('')
   const webStateRef = useRef('')
   /** 组件卸载后不再 setState（轮询是 3 秒一跳的长循环，关窗时必须停手） */
   const mountedRef = useRef(true)
@@ -48,6 +50,8 @@ export function AddAccountStaticSheet({ provider, onClose, onAdded }: {
     setName('')
     setRegion(config?.regionOptions?.[0]?.value || '')
     setNote('')
+    setGuestName('')
+    setCallback('')
   }, [provider, config])
 
   const plan = useMemo(() => (config ? planSections(config, region) : null), [config, region])
@@ -356,13 +360,27 @@ export function AddAccountStaticSheet({ provider, onClose, onAdded }: {
             </>
           ) : null}
 
-          {/* ── 访客模式（只有智谱清言有）：手机端暂未接入，如实说明 ── */}
-          {plan?.guest ? (
+          {/* ── 访客模式（只有智谱清言）：一键换发访客凭证，不需要任何输入 ──
+                 契约：`POST /api/accounts`，载荷只有 `{ provider, guest: true, name? }`；
+                 网关的 Chatglm 分支再按 `guest` 去插件打一次空 body 的 `guest/access` 换证。 */}
+          {plan?.guest && config.guestLogin ? (
             <>
-              <div className='m-sec'>{t('访客凭证')}</div>
-              <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7 }}>
-                {t('这家可以一键换发访客身份（没有积分体系，余额与签到会如实跳过）。手机端暂未接入这一步：可以改用手填凭证 / 导入凭证文件，或用网页登录（若这家提供）。')}
+              <div className='m-sec'>{config.guestLogin.button || t('一键换发访客凭证')}</div>
+              <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginBottom: 8 }}>
+                {config.guestLogin.noteHtml.replace(/<[^>]+>/g, '')}
               </p>
+              <Input value={guestName} disabled={busy}
+                placeholder={config.guestLogin.namePlaceholder || t('备注名（可选）')}
+                onChange={event => setGuestName(event.currentTarget.value)} />
+              <Button style={{ marginTop: 10, width: '100%' }} disabled={busy}
+                onClick={() => {
+                  const payload: Record<string, unknown> = { provider: config.provider, guest: true }
+                  const trimmed = guestName.trim()
+                  if (trimmed) payload.name = trimmed
+                  void submit(payload)
+                }}>
+                {busy ? (config.guestLogin.busyText || t('换发中…')) : (config.guestLogin.button || t('一键换发访客凭证'))}
+              </Button>
             </>
           ) : null}
 
