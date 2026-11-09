@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert,
   AlertDescription,
@@ -68,6 +68,8 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [loading, setLoading] = useState(true)
+  /** 行内错误的位置：失败时要把它滚进视野（见 run 的 catch） */
+  const errorRef = useRef<HTMLDivElement | null>(null)
 
   // 表单（密码类字段留空 = 沿用库里那份）
   const [form, setForm] = useState<CloudSyncForm>({
@@ -149,10 +151,40 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
       if (serverIdentity() !== identity) return
       store.toast(done)
     } catch (cause) {
-      if (serverIdentity() === identity) setError(cause instanceof Error ? cause.message : String(cause))
+      const message = cause instanceof Error ? cause.message : String(cause)
+      if (serverIdentity() === identity) {
+        setError(message)
+        /*
+         * 失败必须**当场**被看到。
+         *
+         * 原来的行为：失败只写进表单顶部那行 `ErrorNote`。用户在下面填字段、
+         * 点下面那排按钮，报错却出现在上面的视野之外 —— 表现就是「点了没反应」，
+         * 而且会误以为「测试连接成功」= 配置没问题（测试按契约不需要同步密码、
+         * 只验证可达并建远端目录，成功不代表能保存/上传）。
+         * 所以：① 同时弹一条即时提示；② 把行内那条滚动到可见处。
+         */
+        store.toast(message, 'err')
+        window.requestAnimationFrame(() => {
+          errorRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        })
+      }
     } finally {
       if (serverIdentity() === identity) setBusy('')
     }
+  }
+
+  /**
+   * 前置校验/守卫失败：与 `run` 的失败路径**同一套可见性**（行内 + 即时提示 + 滚到眼前）。
+   *
+   * 这三个动作必须一致 —— 只写行内那行字，用户在下面点按钮时是看不见的，
+   * 于是「点了没反应」（本次真机反馈就是这个）。
+   */
+  const fail = (message: string) => {
+    setError(message)
+    store.toast(message, 'err')
+    window.requestAnimationFrame(() => {
+      errorRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
   }
 
   const save = () => run('save', async () => {
@@ -185,7 +217,7 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
 
   const upload = async () => {
     if (dirty) {
-      setError(t('请先保存设置再同步：上传用的是已保存的配置，不是屏幕上这份。'))
+      fail(t('请先保存设置再同步：上传用的是已保存的配置，不是屏幕上这份。'))
       return
     }
     const ok = await confirmDialog(
@@ -203,7 +235,7 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
 
   const download = async () => {
     if (dirty) {
-      setError(t('请先保存设置再同步：恢复用的是已保存的配置，不是屏幕上这份。'))
+      fail(t('请先保存设置再同步：恢复用的是已保存的配置，不是屏幕上这份。'))
       return
     }
     const ok = await confirmDialog(
@@ -256,7 +288,7 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
           <SheetTitle>{t('云同步')}</SheetTitle>
         </SheetHeader>
         <SheetBody>
-          {error ? <ErrorNote text={error} /> : null}
+          {error ? <div ref={errorRef}><ErrorNote text={error} /></div> : null}
           {loading ? <Card className='m-card'><Empty text={t('正在读取云同步设置…')} /></Card> : null}
 
           {!loading ? (
@@ -421,6 +453,18 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
                   {busy === 'remote' ? t('读取中…') : t('读取远端')}
                 </Button>
               </div>
+              {/*
+                两条真机反馈换来的说明：
+                ① 顺序不是随便的 —— 上传/恢复用的是**已保存**的配置，所以必须"先保存"；
+                ② 「测试连接」的语义容易被误读：它按契约**不需要同步密码**，只验证地址与账号
+                   可达并创建远端目录。所以它成功**不代表**配置能用，这一步最容易被当成"已经好了"。
+              */}
+              <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 8 }}>
+                {t('顺序：填好信息 →「保存设置」→ 再「读取远端」/「上传」/「恢复」。上传与恢复用的是**已保存**的配置，没保存前它们不可用。')}
+              </p>
+              <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 4 }}>
+                {t('「测试连接」只验证地址与账号可达（并按需创建远端目录），不会保存设置、也不校验同步密码 —— 它成功不等于配置可用。')}
+              </p>
 
               {/* 状态 */}
               {settings ? (
@@ -524,16 +568,24 @@ export function CloudSyncSheet({ onClose }: { onClose: () => void }) {
               </div>
               <Card className='m-card m-card-pad'>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <Button variant='outline' disabled={Boolean(busy)} onClick={() => void upload()}>
+                  {/* 未保存时直接置灰：原来"可点但立刻报错"，报错只在上面那行小字里，
+                      真机反馈就是"点了没反应"。置灰 + 下面那句说明把原因摆在面前。 */}
+                  <Button variant='outline' disabled={Boolean(busy) || dirty} onClick={() => void upload()}>
                     {busy === 'upload' ? t('上传中…') : t('上传到云端')}
                   </Button>
-                  <Button variant='destructive' disabled={Boolean(busy)} onClick={() => void download()}>
+                  <Button variant='destructive' disabled={Boolean(busy) || dirty} onClick={() => void download()}>
                     {busy === 'download' ? t('恢复中…') : t('从云端恢复')}
                   </Button>
                 </div>
-                <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 6 }}>
-                  {t('上传内容含加密后的账号凭证与网关配置，会覆盖远端同一路径下的旧快照；事件日志、请求明细与调试报文不会上传。远端该路径下还没有快照时，本次就是首次上传。')}
-                </p>
+                {dirty ? (
+                  <p style={{ fontSize: 11.5, color: 'var(--m-warn)', lineHeight: 1.7, marginTop: 6 }}>
+                    {t('有未保存的改动：先点上面的「保存设置」，这两个按钮才会可用（它们用的是已保存的配置）。')}
+                  </p>
+                ) : (
+                  <p style={{ fontSize: 11.5, color: 'var(--m-text-3)', lineHeight: 1.7, marginTop: 6 }}>
+                    {t('上传内容含加密后的账号凭证与网关配置，会覆盖远端同一路径下的旧快照；事件日志、请求明细与调试报文不会上传。远端该路径下还没有快照时，本次就是首次上传。')}
+                  </p>
+                )}
               </Card>
 
               {/* 导入密钥 */}
