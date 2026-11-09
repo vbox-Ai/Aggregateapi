@@ -3280,3 +3280,22 @@ build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
 
 **改动**：`pages/SettingsPage.tsx`、`pages/HomePage.tsx`、`pages/export-accounts-sheet.tsx`（新）、
 `pages/AccountsPage.tsx`、`pages/account-import-sheet.tsx`、`pages/add-account-dynamic-sheet.tsx`。
+
+#### 记忆点 · 步骤 68（U15：修正 concurrency —— 手动构建不再被后续推送取消）
+
+**问题**：run 336 / 337 / 339 全部 `cancelled`，其中 339 是我为"拿 Swift 编译证据"特意手动派发的。
+根因是**我 A 档改动的缺陷**：并发组写成 `${{ github.workflow }}-${{ github.ref }}`，
+**手动派发与推送共用同一个组** —— 后续推送的 run 进入同组，就会取消正在跑的那个。
+`cancel-in-progress` 只决定「本 run 进来时是否取消别人」，**并不保护自己不被别人取消**。
+所以我当时"手动发布绝不被取消"的说法是**错的**，已更正。
+
+**修法**：组名加 `event_name` —— `${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}`
+⇒ `Build-main-push` 与 `Build-main-workflow_dispatch` 是两个组：
+推送只取消旧的推送；手动构建再不会被推送打断（两次手动之间仍会择新）。
+注释也一并改准，把这条坑写在配置旁边，避免以后又被"看起来对"的写法骗一次。
+
+**教训（值得记）**：`concurrency` 的语义要分清两件事 ——
+**组**决定"谁和谁互斥"，`cancel-in-progress` 决定"进来时是否清场"；
+想保护某一类运行，只能靠**分组**，不能靠 `cancel-in-progress`。
+
+**改动**：`.github/workflows/build.yml`。

@@ -23,10 +23,12 @@ on:
       - 'docs/**'
       - '**.md'
 
-# 同一 ref 上只保留最新一次**推送**构建：新提交会自动取消旧提交的构建，
-# 避免多个矩阵同时抢占 macOS runner（发布是 workflow_dispatch，绝不被取消）。
+# 推送与手动派发**分属不同并发组**：新提交只取消旧的推送构建，绝不动正在跑的手动构建
+# 组名里带 event_name —— 同一组里只要有新 run 进来就会取消在跑的那个；
+# 这正是早先手动派发的证据构建被后续推送取消的原因（cancel-in-progress 只决定
+# 本 run 是否取消别人，并不保护自己）。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
