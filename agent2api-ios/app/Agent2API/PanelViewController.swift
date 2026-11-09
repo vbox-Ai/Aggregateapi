@@ -44,6 +44,8 @@ final class PanelViewController: UIViewController {
     private var webView: WKWebView!
     private let statusBar = UIView()
     private let statusLabel = ToneLabel()
+    /// 顶部那枚切换面板的悬浮按钮（不挂导航栏，见 installFloatingChrome 的说明）
+    private let topPanelButton = UIButton(type: .system)
     /// 完整状态文本：胶囊里只显示**短标题**，但点开的日志必须是完整的
     private var statusFullText = ""
     /// 上一次的"状态键" —— 只在状态**变化**时显示胶囊（正常态一律不显示）
@@ -86,12 +88,16 @@ final class PanelViewController: UIViewController {
             return                  // 空文本不显示
         }
 
-        guard key != lastStatusKey else { return }   // 状态没变 → 什么都不做
-        lastStatusKey = key
-
+        // 状态没变也要**把标签归一成短标题**：外部代码（例如把 "网关 OK · 127.0.0.1:端口"
+        // 加诊断串拼成完整文本那条）会反复直接写 statusLabel.text，若不还原，
+        // 胶囊上显示的就是那条长原文 —— 真机反馈的"横条上写着网关 OK…"就是这么来的。
         writingStatusTitle = true
         statusLabel.text = title
         writingStatusTitle = false
+
+        guard key != lastStatusKey else { return }   // 状态没变 → 不重新显示
+        lastStatusKey = key
+
         statusBar.isHidden = false
         if autoHide {
             scheduleStatusAutoHide()
@@ -215,7 +221,10 @@ final class PanelViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        navigationController?.setNavigationBarHidden(false, animated: animated)
+        // 导航栏**彻底隐藏**：只要它还占着位置，顶部就会留一条区域/底色横条
+        // （透明 Appearance 也治不干净）。顶部那两件（版本胶囊 + 切换按钮）
+        // 已改为页面上的悬浮控件，见 installFloatingChrome。
+        navigationController?.setNavigationBarHidden(true, animated: animated)
     }
 
     // MARK: - 视图搭建
@@ -629,34 +638,38 @@ final class PanelViewController: UIViewController {
             label.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
             capsule.heightAnchor.constraint(equalToConstant: 30),
         ])
-        navigationItem.titleView = capsule
+        // ── 不再把这两件挂在导航栏里 ──────────────────────────────
+        // 只要导航栏还在（哪怕 Appearance 全透明），系统仍会占掉一条顶部区域、
+        // 并在某些滚动态画出一条底色 —— 真机反复反馈的"上面老有一条横条"就是它。
+        // 所以改成**悬浮控件**：直接加在页面上，与状态胶囊同一层，页面向后滚到底下。
+        // 顶部那枚切换按钮：与版本胶囊并列的悬浮控件（原来挂在导航栏右项上）
+        topPanelButton.tintColor = .label
+        topPanelButton.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.75)
+        topPanelButton.layer.cornerRadius = 15
+        topPanelButton.translatesAutoresizingMaskIntoConstraints = false
+        topPanelButton.addTarget(self, action: #selector(togglePanel), for: .touchUpInside)
+        updatePanelButton()   // 图标与无障碍标签由它设置（表示"切过去的那一面"）
 
-        // 右边**只留一枚**：它显示的是"切过去"的那一面 ——
-        // 现在看手机面板就画桌面图标，看桌面面板就画手机图标（两枚并排会让人
-        // 分不清哪枚代表当前状态）。当前是哪一面由图标本身表达，动作是切换。
-        navigationItem.rightBarButtonItems = [
-            panelButton(symbol: "desktopcomputer", label: "桌面面板", action: #selector(togglePanel)),
-        ]
+        view.addSubview(capsule)
+        view.addSubview(topPanelButton)
+
+        NSLayoutConstraint.activate([
+            capsule.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+            capsule.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+
+            topPanelButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            topPanelButton.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
+            topPanelButton.widthAnchor.constraint(equalToConstant: 30),
+            topPanelButton.heightAnchor.constraint(equalToConstant: 30),
+        ])
+        view.bringSubviewToFront(capsule)
+        view.bringSubviewToFront(topPanelButton)
         updatePanelButton()
-    }
-
-    /// 一枚圆形图标按钮（悬浮感来自自带底色 + 圆角，而不是贴一条 bar 背景）
-    private func panelButton(symbol: String, label: String, action: Selector) -> UIBarButtonItem {
-        let button = UIButton(type: .system)
-        button.setImage(UIImage(systemName: symbol), for: .normal)
-        button.frame = CGRect(x: 0, y: 0, width: 30, height: 30)
-        button.layer.cornerRadius = 15
-        button.tintColor = .label
-        button.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.75)
-        button.accessibilityLabel = label
-        button.addTarget(self, action: action, for: .touchUpInside)
-        return UIBarButtonItem(customView: button)
     }
 
     /// 刷新那枚切换按钮：图标与无障碍标签都表示"切过去的那一面"。
     private func updatePanelButton() {
-        guard let button = navigationItem.rightBarButtonItems?.first?.customView as? UIButton else { return }
-        button.setImage(UIImage(systemName: showingDesktop ? "iphone" : "desktopcomputer"), for: .normal)
+        topPanelButton.setImage(UIImage(systemName: showingDesktop ? "iphone" : "desktopcomputer"), for: .normal)
         button.accessibilityLabel = showingDesktop ? "手机面板" : "桌面面板"
     }
 

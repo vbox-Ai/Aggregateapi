@@ -3299,3 +3299,38 @@ build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
 想保护某一类运行，只能靠**分组**，不能靠 `cancel-in-progress`。
 
 **改动**：`.github/workflows/build.yml`。
+
+#### 记忆点 · 步骤 69（U16：顶部横条根治 + WorkBuddy 网页登录 + 胶囊显示原文的漏洞）
+
+**① 顶部"老是一条横条"——本次按操作者建议做重构**
+前几次只调 `UINavigationBarAppearance` 的透明项，**治不干净**：只要导航栏还占着位置，
+系统在某些滚动态仍会画一条底色。这次改成结构性方案：
+- `setNavigationBarHidden(true)` —— **导航栏彻底隐藏**（原来是 false，这是横条的根源）；
+- 顶部那两件（版本胶囊 `v3.4.344` + 切换面板的圆按钮）**从导航栏项改为页面上的悬浮控件**：
+  `view.addSubview` + 约束到 `safeAreaLayoutGuide`（胶囊水平居中、距顶 8；按钮靠右 14、
+  与胶囊同高），并 `bringSubviewToFront` ⇒ 它们与状态胶囊同属"浮在页面上的 chrome"，
+  页面向后滚到底下，不再有任何通栏底；
+- `navigationItem.titleView` / `rightBarButtonItems` **全部移除**（复查残留 0 处）；
+  `updatePanelButton()` 改为直接操作属性 `topPanelButton`（原来要从 `rightBarButtonItems`
+  里挖 customView），无用的 `makePanelButton` 一并删除（避免死代码）。
+
+**② WorkBuddy 网页登录（上次漏做）**
+操作者对照桌面面板指出：桌面 WorkBuddy 有「网页登录」页签，手机端只有「导入凭证文件」✗。
+查因：`workbuddyConfig()` 里**只给了 fileImport，没给 webLogin** —— 而面板的网页登录分段
+只在 `config.webLogin` 存在时才渲染。补上 `webLogin`（文案照桌面端那条：完成后自动加入列表、
+昵称取自上游；`button`/`hint`/`busyText` 齐全）⇒ 复用 U9 那条手机端流程
+（`POST /api/session/login/oauth/start` → 打开/复制授权页 → 每 3 秒轮询 → 粘回调兜底）。
+
+**③ 胶囊显示原始长文本的漏洞（本次实证）**
+真机上胶囊显示「网关 OK · 127.0.0.1:3065」而不是我设的短标题。查到原生里**还有第三处**写状态：
+`statusLabel.text = "网关 OK \u{00B7} 127.0.0.1:\(port)\n" + diag`。而我的 `presentStatus`
+在**"状态键没变"时提前 return**，那时**不把文本归一成短标题** ⇒ 外部写进来的长原文就留在胶囊上 ✗。
+修法：把「写短标题」**移到 `guard` 之前**——状态没变时不重新显示，但**每次都把显示文本归一**；
+状态键变化时才显示/重排自动收起。
+
+**验证**：Swift 花括号 226/226、圆括号 497/497 平衡；`setNavigationBarHidden(true)` 1 处、
+`topPanelButton` 13 处、`navigationItem.titleView` 与 `rightBarButtonItems` 残留 **0**。
+面板三项检查：tsc 0 · build 1,409.80 kB · self-check 0。**Swift 编译结论仍以 CI 为准**。
+
+**改动**：`agent2api-ios/app/Agent2API/PanelViewController.swift`、
+`desktop-tauri/mobile/src/lib/add-account-static.ts`。

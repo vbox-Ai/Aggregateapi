@@ -75,6 +75,15 @@ function workbuddyConfig(providerId: string): ProviderConfig | undefined {
     manualTitle: '导入凭证文件',
     manualNote: WORKBUDDY_AUTH_HINT,
     fileImport: { accept: '.json,application/json', note: WORKBUDDY_IMPORT_NOTE },
+    // 桌面端这一家也有「网页登录」（官方授权页）。手机端复用它同一条路：
+    // `POST /api/session/login/oauth/start` → 打开/复制授权页 → 轮询 → 粘回调兜底。
+    // 文案照桌面端那条（完成后自动加入列表、昵称取自上游）。
+    webLogin: {
+      noteHtml: '在打开的官方授权页里完成登录，成功后自动加入账号列表，昵称取自上游。',
+      button: '打开网页登录',
+      hint: '将在新标签页中打开授权页；完成后自动加入账号列表。',
+      busyText: '等待网页登录完成…',
+    },
   }
 }
 
