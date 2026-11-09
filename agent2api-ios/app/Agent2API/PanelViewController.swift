@@ -44,6 +44,62 @@ final class PanelViewController: UIViewController {
     private var webView: WKWebView!
     private let statusBar = UIView()
     private let statusLabel = ToneLabel()
+    /// 完整状态文本：胶囊里只显示**短标题**，但点开的日志必须是完整的
+    private var statusFullText = ""
+    /// 上一次的"状态键" —— 只在状态**变化**时显示胶囊（正常态一律不显示）
+    private var lastStatusKey = ""
+    /// 正在写入胶囊短标题（赋值会再次触发 onText，必须挡掉递归）
+    private var writingStatusTitle = false
+
+    /// 状态胶囊的显示规则（操作者指定）：
+    ///   · 启动中 → 显示一次（橙）；启动成功 → 显示一次（黄）；**正常运行时完全不显示**；
+    ///   · 出错 → 红色常驻，胶囊里放一行错误摘要，点它看完整日志。
+    /// 之所以按"状态键"驱动而不是"发生赋值"驱动：5 秒心跳/健康轮询会反复赋值，
+    /// 按赋值驱动就会把自动收起的胶囊一次次顶回来（真机反馈的"有事没事弹出来"）。
+    private func presentStatus(_ text: String) {
+        guard !writingStatusTitle else { return }
+        statusFullText = text
+        applyTone(for: text)
+
+        let key: String
+        let title: String
+        let autoHide: Bool
+        if text.contains("失败") || text.contains("错误")
+            || text.contains("— JS —") || text.contains("— supervisor —") {
+            let firstLine = text.split(separator: "\n").first.map(String.init) ?? text
+            key = "error:" + firstLine
+            title = "网关出错了：" + (firstLine.count > 16 ? String(firstLine.prefix(16)) + "…" : firstLine)
+            autoHide = false        // 出错常驻：等用户点开或网关恢复正常
+        } else if text.contains("正在启动") {
+            key = "starting"
+            title = "正在启动网关…"
+            autoHide = true
+        } else if text.contains("等待") {
+            key = "waiting"
+            title = "等待网关…"
+            autoHide = true
+        } else if !text.isEmpty {
+            key = "ready"
+            title = "网关已就绪"
+            autoHide = true
+        } else {
+            return                  // 空文本不显示
+        }
+
+        guard key != lastStatusKey else { return }   // 状态没变 → 什么都不做
+        lastStatusKey = key
+
+        writingStatusTitle = true
+        statusLabel.text = title
+        writingStatusTitle = false
+        statusBar.isHidden = false
+        if autoHide {
+            scheduleStatusAutoHide()
+        } else {
+            statusHideTimer?.invalidate()
+            statusHideTimer = nil
+        }
+    }
     private let retryButton = UIButton(type: .system)
 
     /// 状态胶囊要浮在**面板自己的悬浮标签栏之上**，所以要把它抬起来这么高。
@@ -62,8 +118,15 @@ final class PanelViewController: UIViewController {
     private final class ToneLabel: UILabel {
         var onText: ((String) -> Void)?
         override var text: String? {
-            didSet { onText?(text ?? "") }
+            didSet {
+                // 相同文字不算变化：5 秒心跳/健康轮询会反复赋同一个摘要，若只按"发生赋值"
+                // 回调，每次都会触发「显示 + 重排自动收起」，胶囊就被反复顶回来。
+                guard text != lastNotifiedText else { return }
+                lastNotifiedText = text
+                onText?(text ?? "")
+            }
         }
+        private var lastNotifiedText: String?
     }
 
     /// 构建戳：v3.4.<构建号> (sha) — 由 build-ipa.sh 写进 Info.plist
@@ -244,8 +307,9 @@ final class PanelViewController: UIViewController {
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .black
         statusLabel.onText = { [weak self] text in
-            self?.applyTone(for: text)
-            self?.scheduleStatusAutoHide()
+            // 所有状态更新（启动/就绪/出错/诊断串）都经过这一个漏斗，规则集中在
+            // presentStatus 里，不必去每个更新点接线，也就不可能漏掉某条路径。
+            self?.presentStatus(text)
         }
         statusBar.addSubview(statusLabel)
 
@@ -263,8 +327,10 @@ final class PanelViewController: UIViewController {
             // 移到**底栏上方**：面板自己的悬浮标签栏贴在底部，状态胶囊浮在它之上，
             // 两者不再抢同一条位置；左右改成 equal（原来 trailing 是 lessThanOrEqual，
             // 胶囊会随文字长度忽长忽短），整条更长、更好点。
-            statusBar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
-            statusBar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            // 真机反馈"太长了，至少缩短一半"：原来左右各 12 铺满一整行，现在改成
+            // **居中、最宽约屏幕一半**，宽度由短标题与「重试」按钮的固有尺寸决定。
+            statusBar.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+            statusBar.widthAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.widthAnchor, multiplier: 0.55),
             statusBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -tabBarClearance),
             statusBar.heightAnchor.constraint(equalToConstant: 40),
 
@@ -303,7 +369,8 @@ final class PanelViewController: UIViewController {
         // 用户点它就是因为还想看 —— 取消自动隐藏，别刚打开就消失
         statusHideTimer?.invalidate()
         statusHideTimer = nil
-        let text = statusLabel.text ?? ""
+        // 胶囊里只放短标题，所以完整文本单独存着 —— 点开要看的是完整日志
+        let text = statusFullText.isEmpty ? (statusLabel.text ?? "") : statusFullText
         let alert = UIAlertController(
             title: "运行日志",
             message: text.isEmpty ? "（暂无内容）" : text,
