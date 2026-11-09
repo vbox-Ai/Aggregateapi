@@ -3182,3 +3182,27 @@ push 段含 paths-ignore ✓、concurrency 位于 permissions 之前 ✓、cance
 （`presentStatus` 内）。**Swift 的编译结论只能来自 CI**（本地无 Xcode），已推送并起守候等 iOS 作业结论。
 
 **改动**：`agent2api-ios/app/Agent2API/PanelViewController.swift`。
+
+#### 记忆点 · 步骤 65（U12：趋势图"一整块蓝" —— 单日数据的柱宽占满绘图区）
+
+**操作者报的问题**：「按天 Token 趋势」显示成一整块蓝色，怀疑 UI 没处理好。
+
+**根因（读代码确认，不是渲染失败）**：`components/MobileReportTrend.tsx` 里
+```
+max      = Math.max(...values, 1)
+barWidth = Math.max(0.1, (width - gap*(n-1)) / Math.max(1, n))     // width = 300
+size     = row.value / max * 84
+opacity  = (row.value === max) ? 1 : 0.4
+```
+当 **n = 1**（操作者截图里坐标轴两端都是同一天，正是单日）：`barWidth = 300`（占满宽）、
+`size = 84`（占满高）、且它等于 max ⇒ `opacity = 1` ⇒ **一根满宽满高不透明的柱子 = 一整块纯色**
+✓。数据没错，是**少数据量的呈现退化**。
+
+**修法**：柱宽加**上限 28**，并把整组柱子**居中**（多数据时行为不变，仍是密集柱形；少数据时
+变成中间一根细柱）。改动四处：`const slot`、`Math.min(slot, 28)`、`barsOffset`、
+`x={barsOffset + index * (barWidth + gap)}`。
+
+**复查**：四处改动各 1 处在位 ✓、单日柱宽上限生效 ✓；三项检查 tsc 0 ·
+build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
+
+**改动**：`desktop-tauri/mobile/src/components/MobileReportTrend.tsx`。

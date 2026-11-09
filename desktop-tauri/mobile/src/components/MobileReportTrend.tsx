@@ -25,7 +25,12 @@ export function MobileReportTrend({ summary }: { summary: StatsSummary }) {
   const width = 300
   const height = 84
   const gap = trend.length > 100 ? 0 : 2
-  const barWidth = Math.max(0.1, (width - gap * (trend.length - 1)) / Math.max(1, trend.length))
+  // 只有一天（或很少几天）数据时，原来的柱宽会占满整个绘图区：一根满宽 + 满高 + 不透明的
+  // 柱子看起来就是「一整块纯色」（真机反馈的"全是蓝色"）。所以给柱宽加上限，并把整组柱子
+  // **居中** —— 数据少时是中间一根细柱，数据多时仍是原来的密集柱形。
+  const slot = (width - gap * (trend.length - 1)) / Math.max(1, trend.length)
+  const barWidth = Math.max(0.1, Math.min(slot, 28))
+  const barsOffset = Math.max(0, (width - (barWidth * trend.length + gap * (trend.length - 1))) / 2)
   return <div className='m-section'><Card className='m-card p-3'>
     <b className='text-sm'>{metric === 'tokens' ? t('按天 Token 趋势') : t('按天请求趋势')}</b>
     <div className='flex flex-wrap gap-2 my-3'>
@@ -44,7 +49,7 @@ export function MobileReportTrend({ summary }: { summary: StatsSummary }) {
         aria-label={metric === 'tokens' ? t('按天 Token 趋势') : t('按天请求趋势')}>
         {trend.map((row, index) => {
           const size = row.value / max * height
-          return <rect key={row.date} x={index * (barWidth + gap)} y={height - size} width={barWidth} height={size}
+          return <rect key={row.date} x={barsOffset + index * (barWidth + gap)} y={height - size} width={barWidth} height={size}
             rx={Math.min(3, barWidth / 2)} fill='var(--m-primary)' opacity={row.value === max ? 1 : 0.4}>
             <title>{row.date} · {metric === 'tokens' ? formatTokens(row.value) : formatInt(row.value)}</title>
           </rect>
