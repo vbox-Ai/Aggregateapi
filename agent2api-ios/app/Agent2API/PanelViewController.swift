@@ -46,6 +46,13 @@ final class PanelViewController: UIViewController {
     private let statusLabel = ToneLabel()
     private let retryButton = UIButton(type: .system)
 
+    /// 状态胶囊要浮在**面板自己的悬浮标签栏之上**，所以要把它抬起来这么高。
+    ///
+    /// 这个数值来自面板侧的定义：标签栏高 `--m-tabbar-h`（约 56）+ 离安全区 8
+    /// + 胶囊自身离标签栏 8 ≈ 72。两侧各改一处时这里要跟着对一下（原生量不到
+    /// Web 里的 CSS 变量，只能各写一份）。
+    private let tabBarClearance: CGFloat = 72
+
     /// 文本变化时回调的 UILabel。
     ///
     /// 为什么要这个子类：状态胶囊要**按状态上色**，而状态文本是在 8 个不同调用点
@@ -67,6 +74,17 @@ final class PanelViewController: UIViewController {
         let sha = info["A2AGitSha"] as? String ?? "?"
         let time = info["A2ABuildTime"] as? String ?? ""
         return "v\(short) (\(sha)) \(time)"
+    }
+
+    /// 顶部胶囊里显示的**精简**版本号（只要 `v3.4.325` 这一截）。
+    ///
+    /// 原来直接把整条构建戳（带 sha 与构建时间）放进胶囊，宽度很大、在状态栏
+    /// 那一行显得很挤；而 sha/时间属于「排查时才看」的信息，点一下状态胶囊就能
+    /// 在小窗里看到完整诊断串。所以这里只显示版本号。
+    static var shortStamp: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? ""
+        return short.isEmpty ? buildStamp : "v\(short)"
     }
 
     private var healthTimer: Timer?
@@ -217,9 +235,9 @@ final class PanelViewController: UIViewController {
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        // 胶囊里只放摘要（两行封顶）：诊断串可能有十几行，全铺在屏幕上会把面板压掉。
-        // 完整内容点开小窗看 —— 见 onStatusTap。
-        statusLabel.numberOfLines = 2
+        // 一行摘要 + 截断：胶囊高度固定，按钮与文字才在同一条基线上（两行文字时
+        // 「重试」会被挤得看起来错位）。完整诊断串点开小窗看 —— 见 onStatusTap。
+        statusLabel.numberOfLines = 1
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .black
         statusLabel.onText = { [weak self] text in self?.applyTone(for: text) }
@@ -236,16 +254,17 @@ final class PanelViewController: UIViewController {
         statusBar.addGestureRecognizer(tap)
 
         NSLayoutConstraint.activate([
+            // 移到**底栏上方**：面板自己的悬浮标签栏贴在底部，状态胶囊浮在它之上，
+            // 两者不再抢同一条位置；左右改成 equal（原来 trailing 是 lessThanOrEqual，
+            // 胶囊会随文字长度忽长忽短），整条更长、更好点。
             statusBar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
-            statusBar.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            // 放在**顶部**：底部要留给面板自己的悬浮标签栏，两者不再叠在一起。
-            statusBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            statusBar.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+            statusBar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            statusBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -tabBarClearance),
+            statusBar.heightAnchor.constraint(equalToConstant: 40),
 
             statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 14),
-            statusLabel.topAnchor.constraint(equalTo: statusBar.topAnchor, constant: 8),
-            statusLabel.bottomAnchor.constraint(equalTo: statusBar.bottomAnchor, constant: -8),
-            statusLabel.trailingAnchor.constraint(equalTo: retryButton.leadingAnchor, constant: -10),
+            statusLabel.trailingAnchor.constraint(equalTo: retryButton.leadingAnchor, constant: -12),
+            statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
 
             retryButton.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -14),
             retryButton.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
@@ -475,11 +494,27 @@ final class PanelViewController: UIViewController {
     /// 里就是靠它把内容顶开的）。把导航栏藏掉再自己铺一层浮层，Web 内容会钻到
     /// 刘海/状态栏下面；只把它的**外观**改成透明，避让逻辑一行都不用动。
     private func installFloatingChrome() {
+        // 透明外观要把每一项都设到位：只调 configureWithTransparentBackground()
+        // 而留下 backgroundEffect / shadow，导航栏仍会画出一条底色横条（真机反馈里
+        // 顶部那条白底就是这么来的）。所以这里显式清背景色、背景材质与分隔线，
+        // 并且**在导航栏与 item 两处都设**（不同滚动态取的那份不一样）。
         let appearance = UINavigationBarAppearance()
         appearance.configureWithTransparentBackground()
+        appearance.backgroundColor = .clear
+        appearance.backgroundEffect = nil
+        appearance.shadowColor = .clear
+        appearance.shadowImage = UIImage()
         navigationItem.standardAppearance = appearance
         navigationItem.scrollEdgeAppearance = appearance
         navigationItem.compactAppearance = appearance
+        if let bar = navigationController?.navigationBar {
+            bar.standardAppearance = appearance
+            bar.scrollEdgeAppearance = appearance
+            bar.compactAppearance = appearance
+            bar.isTranslucent = true
+            bar.shadowImage = UIImage()
+            bar.setBackgroundImage(UIImage(), for: .default)
+        }
 
         let capsule = UIView()
         capsule.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.75)
@@ -488,7 +523,8 @@ final class PanelViewController: UIViewController {
         capsule.translatesAutoresizingMaskIntoConstraints = false
 
         let label = UILabel()
-        label.text = Self.buildStamp
+        // 只要精简版本号（v3.4.325）：sha / 构建时间属于排查信息，点状态胶囊能看到
+        label.text = Self.shortStamp
         label.font = .systemFont(ofSize: 12, weight: .semibold)
         label.textColor = .label
         label.lineBreakMode = .byTruncatingMiddle
@@ -503,11 +539,13 @@ final class PanelViewController: UIViewController {
         ])
         navigationItem.titleView = capsule
 
-        // 顺序即显示顺序：右起第一枚是桌面面板，第二枚是手机面板
-        let desktop = panelButton(symbol: "desktopcomputer", label: "桌面面板", action: #selector(showDesktopPanel))
-        let phone = panelButton(symbol: "iphone", label: "手机面板", action: #selector(showMobilePanel))
-        navigationItem.rightBarButtonItems = [desktop, phone]
-        updatePanelButtons()
+        // 右边**只留一枚**：它显示的是"切过去"的那一面 ——
+        // 现在看手机面板就画桌面图标，看桌面面板就画手机图标（两枚并排会让人
+        // 分不清哪枚代表当前状态）。当前是哪一面由图标本身表达，动作是切换。
+        navigationItem.rightBarButtonItems = [
+            panelButton(symbol: "desktopcomputer", label: "桌面面板", action: #selector(togglePanel)),
+        ]
+        updatePanelButton()
     }
 
     /// 一枚圆形图标按钮（悬浮感来自自带底色 + 圆角，而不是贴一条 bar 背景）
@@ -523,27 +561,21 @@ final class PanelViewController: UIViewController {
         return UIBarButtonItem(customView: button)
     }
 
-    /// 当前显示哪一面就点亮哪一枚（图标按钮没有文字，用配色区分）
-    private func updatePanelButtons() {
-        for item in navigationItem.rightBarButtonItems ?? [] {
-            guard let button = item.customView as? UIButton else { continue }
-            let active = (button.accessibilityLabel == "桌面面板") == showingDesktop
-            button.tintColor = active ? .white : .label
-            button.backgroundColor = active
-                ? UIColor.systemBlue
-                : UIColor.secondarySystemBackground.withAlphaComponent(0.75)
-        }
+    /// 刷新那枚切换按钮：图标与无障碍标签都表示"切过去的那一面"。
+    private func updatePanelButton() {
+        guard let button = navigationItem.rightBarButtonItems?.first?.customView as? UIButton else { return }
+        button.setImage(UIImage(systemName: showingDesktop ? "iphone" : "desktopcomputer"), for: .normal)
+        button.accessibilityLabel = showingDesktop ? "手机面板" : "桌面面板"
     }
 
-    @objc private func showMobilePanel() { switchPanel(desktop: false) }
-
-    @objc private func showDesktopPanel() { switchPanel(desktop: true) }
+    /// 在两面之间切换。图标/胶囊表达的是"另一面"，所以这里取反。
+    @objc private func togglePanel() { switchPanel(desktop: !showingDesktop) }
 
     /// 切到指定面板。幂等：重复点当前这一面不重载（原来那个 toggle 会白刷一次页面）。
     private func switchPanel(desktop: Bool) {
         guard showingDesktop != desktop else { return }
         showingDesktop = desktop
-        updatePanelButtons()
+        updatePanelButton()
         webView.load(URLRequest(url: desktop ? panelBaseURL : panelBaseURL.appendingPathComponent("m")))
     }
 

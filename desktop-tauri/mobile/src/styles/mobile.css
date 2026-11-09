@@ -357,9 +357,12 @@ body {
   padding: 5px;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--m-surface) 86%, transparent);
-  backdrop-filter: blur(20px) saturate(1.4);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16), 0 0 0 1px var(--m-line);
+  /* 悬浮感的关键是「能看见内容从它下面经过」：底色更透 + 更强的毛玻璃。
+     真机反馈说"背景还有一个框架的底栏"—— 那是原来那圈 1px 描边
+     （`0 0 0 1px`）让整条看起来像个框住的底栏，所以这里把描边去掉，只留投影。 */
+  background: color-mix(in srgb, var(--m-surface) 68%, transparent);
+  backdrop-filter: blur(24px) saturate(1.6);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
 }
 
 /* 选中项：胶囊内的一枚实心药丸（悬浮底栏的通行做法，比换图标颜色更明确） */

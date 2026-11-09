@@ -2942,3 +2942,44 @@ tsc 报 **`Duplicate identifier 'Button'`** —— 因为 `Button` 在手机端�
 三项检查：tsc 0 · build 1,348.56 → 1,349.03 kB · self-check 0 ✓。
 
 **改动**：`pages/HomePage.tsx`、`pages/AssistantPage.tsx`。
+
+#### 记忆点 · 步骤 58（U6：真机四条反馈 —— 状态胶囊位置、底栏悬浮、顶部精简与单图标、去掉横条）
+
+**用户装上 b325 后的四条反馈**，逐条对照代码找到成因（不是照着感觉调）：
+
+**① 状态胶囊移到「底栏上方」+ 更长 + 「重试」错位**
+U3 里我把它放到了**顶部**，这次按要求挪回**底部、并抬到悬浮标签栏之上**：
+`bottomAnchor = safeArea.bottom - tabBarClearance(72)`（72 ≈ 标签栏 56 + 离安全区 8 + 间隙 8；
+原生量不到 Web 里的 CSS 变量，所以这份数值只能在原生侧再写一遍，注释里写明了这一点）。
+「更长」是把 `trailing` 从 **lessThanOrEqual 改成 equal**（原来胶囊长度随文字忽长忽短）；
+「重试错位」的真因是**两行文字**：文字换行后按钮虽仍垂直居中，视觉上却与第一行不齐 ——
+改成**单行 + 截断 + 固定高度 40**，按钮与文字落在同一条基线上（完整诊断串仍点开小窗看）。
+
+**② 底栏要"整个悬浮"，不要"背景还有个框架"**
+两处原因，都改了：
+· 我那圈 `box-shadow: …, 0 0 0 1px var(--m-line)` 的**描边**让整条看起来像"被框住的底栏" → 去掉，只留投影；
+· 底色从 86% 不透明改到 **68% + `blur(24px) saturate(1.6)`** —— 悬浮感的前提是**能看见内容从它下面经过**。
+占位块保留（否则内容会被胶囊盖住最后一截），它本身透明，不构成"框架"。
+
+**③ 顶部左边只要精简版本号**
+新增 `shortStamp` = `v` + `CFBundleShortVersionString`（即 `v3.4.325`）；完整构建戳（含 sha 与构建时间）
+**保留在 `buildStamp` 里**，点状态胶囊能在小窗看到 —— 排查用信息不必常驻在顶栏。
+⚠️ 这次编辑里我**误改了一个 Info.plist 键名**（`A2ABuildNumber` → `AABuildNumber`），复查第①项（残留引用）
+把它抓出来了：那会让构建号静默变成 `?`。已修回。**教训**：改这类"照抄键名"的代码时，
+键名要**逐个字符对**，别顺手重写整行。
+
+**④ 顶部右边只要一枚图标（表示"要切过去的那一面"）+ 不要底层横条**
+· 两枚并排 → **一枚**：图标与无障碍标签都表示**目标面**（在手机面板时画桌面图标，反之画手机图标），
+  动作 `togglePanel` 取反切换；`switchPanel` 里改为调用新的 `updatePanelButton()`（名字从复数改单数，
+  旧名 `updatePanelButtons` / `showMobilePanel` / `showDesktopPanel` 已全部清掉，复查确认 0 残留）。
+· **横条**：只调 `configureWithTransparentBackground()` 不够 —— 还得显式清
+  `backgroundColor` / `backgroundEffect` / `shadowColor` / `shadowImage`，并且**在导航栏与 navigationItem
+  两处都设**（不同滚动态取的不是同一份），再补 `bar.isTranslucent = true` 与空背景图。
+
+**复查（Swift 改不了本地编译，静态能查的都查了）**：旧符号残留 0 ✓；新符号 7 个全部有定义 ✓；
+9 条关键语义 8 条直接通过、第 9 条（"只留一枚按钮"）先是**我检查器把函数定义也算成调用**导致的误报，
+改用带引号的调用点判定后确认**恰好 1 个**（定义另 1 个）✓；括号 215/215、470/470 平衡 ✓；
+四个改动的函数各只有 1 处定义（无重复片段）✓。
+面板侧三项检查：tsc 0 · build 1,349.03 kB · self-check 0 ✓。
+
+**改动**：`agent2api-ios/app/Agent2API/PanelViewController.swift`、`desktop-tauri/mobile/src/styles/mobile.css`。
