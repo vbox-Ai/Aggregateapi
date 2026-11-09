@@ -8,8 +8,9 @@ import { copyWithToast } from '../components/ui'
 import { store } from '../state/store'
 import { t } from '../i18n'
 import {
-  addButtonTextOf, buildStaticPayload, configOf, fieldIdOf, manualNoteOf, manualTitleOf,
-  maxLengthOf, missingRequired, planSections, type FieldValues,
+  addButtonTextOf, buildStaticPayload, configOf, fieldIdOf, isWorkbuddyProvider, manualNoteOf,
+  manualTitleOf, maxLengthOf, missingRequired, parseWorkbuddyCredential, planSections,
+  type FieldValues,
 } from '../lib/add-account-static'
 
 /**
@@ -86,6 +87,18 @@ export function AddAccountStaticSheet({ provider, onClose, onAdded }: {
     setBusy(true)
     setNote('')
     try {
+      // WorkBuddy：凭证要 accessToken + uid，provider 还要按文件内容判国内/国际版 ——
+      // 与桌面端同一条路径（解析后把平铺记录 POST 上去），**不是**把整段文本当
+      // authFileContent 交给网关（那正是桌面端刻意不做的形状）。
+      if (isWorkbuddyProvider(config.provider)) {
+        const parsed = parseWorkbuddyCredential(await file.text(), config.provider)
+        if (!parsed) throw new Error(t('不是有效的凭证文件：需要包含 accessToken 与 uid'))
+        const payload: Record<string, unknown> = { ...parsed.record, provider: parsed.provider }
+        const trimmedName = name.trim()
+        if (trimmedName) payload.name = trimmedName
+        await submit(payload)
+        return
+      }
       const binary = config.fileImport.binary === true
       const payload: Record<string, unknown> = { provider: config.provider }
       if (binary) {

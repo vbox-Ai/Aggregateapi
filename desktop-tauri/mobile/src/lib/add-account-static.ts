@@ -28,7 +28,7 @@
  */
 import {
   ADD_METHODS,
-  configOf,
+  configOf as builtinConfigOf,
   desktopImportAvailable,
   fieldIdOf,
   maxLengthOf,
@@ -40,8 +40,97 @@ import {
   type ProviderConfig,
 } from '../../../ui-islands/src/islands/add-account-configs'
 
-export { configOf, fieldIdOf, maxLengthOf, manualNoteOf, manualTitleOf, addButtonTextOf, methodsOf }
+export { fieldIdOf, maxLengthOf, manualNoteOf, manualTitleOf, addButtonTextOf, methodsOf }
 export type { FieldSpec, ProviderConfig }
+
+/**
+ * WorkBuddy **不在这张静态表里** —— 桌面端配置模块的头注释写明了原因：它的块结构特殊
+ * （账号版本 + 打开方式 + 第三方入口开关），单独一个组件实现。手机端原来没有它，
+ * 于是加 WorkBuddy 账号只会落到「未声明动态登录方式」那句提示。
+ *
+ * 手机端**能做**的是桌面端同一条落库路径里的两条（契约都核过）：
+ *   · **从文件导入凭证 JSON**：桌面端解析文件、校验 `accessToken` + `uid`，再
+ *     `{ ...record, provider: workbuddyProviderId(edition) }` 提交（`workbuddy` /
+ *     `workbuddy-intl` 由凭证里的 domain 判定，`workbuddy.ai` ⇒ 国际版）；
+ *   · **网页登录**：直接复用 U9 建好的那条（oauth/start → 打开或复制地址 → 轮询 → 粘回调）。
+ * **做不到**的是「读本机客户端登录态」（要读电脑上的客户端目录），界面会写明原因。
+ */
+const WORKBUDDY_IMPORT_NOTE = '选 WorkBuddy 官方客户端的凭证文件（JSON，含 accessToken 与 uid）。' +
+  '国内版 / 国际版按文件内容自动判定；凭证保存在网关，可独立使用。'
+
+const WORKBUDDY_AUTH_HINT = '官方客户端凭证目录：Windows 是 ' +
+  'C:\\Users\\<你的用户名>\\AppData\\Local\\CodeBuddyExtension\\Data\\Public\\auth，' +
+  'macOS 是 ~/Library/Application Support/CodeBuddyExtension/Data/Public/auth'
+
+function workbuddyConfig(providerId: string): ProviderConfig | undefined {
+  if (providerId !== 'workbuddy' && providerId !== 'workbuddy-intl') return undefined
+  const intl = providerId === 'workbuddy-intl'
+  return {
+    provider: providerId,
+    label: intl ? 'WorkBuddy 国际版' : 'WorkBuddy 国内版',
+    addButton: intl ? '添加 WorkBuddy 国际版账号' : '添加 WorkBuddy 国内版账号',
+    // 手填段：WorkBuddy 的凭证不是一个 token 能拼出来的（要 accessToken + uid，还要认版本），
+    // 所以这里不给手填字段，只给「导入凭证文件」——与桌面端那条文件路径同一落库方式。
+    fields: [],
+    manualTitle: '导入凭证文件',
+    manualNote: WORKBUDDY_AUTH_HINT,
+    fileImport: { accept: '.json,application/json', note: WORKBUDDY_IMPORT_NOTE },
+  }
+}
+
+/** 静态表优先，其次 WorkBuddy 这两家（桌面端把它们放在特殊块里） */
+export function configOf(providerId: string): ProviderConfig | undefined {
+  return builtinConfigOf(providerId) ?? workbuddyConfig(providerId)
+}
+
+/** 这一家是不是 WorkBuddy（导入文件时走"解析后按版本定 provider"的特殊路径） */
+export function isWorkbuddyProvider(providerId: string): boolean {
+  return providerId === 'workbuddy' || providerId === 'workbuddy-intl'
+}
+
+/**
+ * 解析 WorkBuddy 凭证文件：校验 `accessToken` + `uid`，并按文件内容判定版本。
+ *
+ * 与桌面端同口径：版本优先看文件自己的事实（domain 命中 `workbuddy.ai` ⇒ 国际版；
+ * 或记录里已经写明 `workbuddy-intl` / `intl`），推不出来就用调用方给的分段默认值。
+ * 返回 `null` = 不是有效凭证（缺必需字段），由调用方报错，**不猜**。
+ */
+export function parseWorkbuddyCredential(
+  text: string,
+  fallbackProvider: string,
+): { record: Record<string, unknown>; provider: string } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const record = parsed as Record<string, unknown>
+  const nested = [record.auth, record.account].filter(
+    item => item && typeof item === 'object' && !Array.isArray(item),
+  ) as Record<string, unknown>[]
+  const pick = (key: string): unknown => {
+    for (const source of [record, ...nested]) {
+      const value = source[key]
+      if (value !== undefined && value !== null && value !== '') return value
+    }
+    return undefined
+  }
+  if (!pick('accessToken')) return null
+  if (!pick('uid')) return null
+
+  let provider = fallbackProvider
+  const declared = String(pick('provider') || pick('edition') || '').toLowerCase()
+  const domain = String(pick('domain') || pick('host') || pick('baseUrl') || '').toLowerCase()
+  if (declared.includes('intl') || declared.includes('international') || /workbuddy\.ai/.test(domain)) {
+    provider = 'workbuddy-intl'
+  } else if (declared.includes('workbuddy') || declared.includes('cn') || domain) {
+    provider = 'workbuddy'
+  }
+  return { record, provider }
+}
+
 
 /** 手填字段的输入值（键 = field.key） */
 export type FieldValues = Record<string, string>

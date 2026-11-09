@@ -3206,3 +3206,35 @@ opacity  = (row.value === max) ? 1 : 0.4
 build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
 
 **改动**：`desktop-tauri/mobile/src/components/MobileReportTrend.tsx`。
+
+#### 记忆点 · 步骤 66（U13：WorkBuddy 账号手机上能加了）
+
+**操作者报的问题**：手机端加 WorkBuddy（国内版/国际版）仍提示「此提供商未声明动态登录方式」。
+
+**根因**：WorkBuddy **不在**静态表里（桌面端配置模块头注释写明：它结构特殊——账号版本 +
+打开方式 + 第三方入口开关，单独一个组件），所以 `configOf()` 取不到 ⇒ 没有静态回落 ⇒ 落到 501 提示。
+即 U8 只搬了静态表，**没搬这个特殊块**。
+
+**契约（查证后确定）**
+- 版本 → provider id：`edition === 'intl' ? 'workbuddy-intl' : 'workbuddy'`；
+- 版本判定：凭证里的 domain 命中 `workbuddy.ai` ⇒ 国际版（文件自带事实优先）；
+- 凭证有效性：必须含 **`accessToken` + `uid`**（否则桌面端报「不是有效的凭证文件…」）；
+- 提交：`{ ...record, provider: workbuddyProviderId(landed) }`（+ 备注名）；另有
+  `{ provider, importDesktop: true }` = **读本机客户端登录态**（手机做不到，界面注记）。
+
+**实施（手机端可等价的两条）**
+1. `lib/add-account-static.ts`：新增 `workbuddyConfig()`，并让 `configOf()` = 静态表优先、
+   查不到再回落到 WorkBuddy 这两家 ⇒ **`hasStaticConfig()` 随之为真，动态面板 501 后自动切到
+   静态面板**（U8 的回落链路直接复用，不用再动入口）；
+2. 同文件新增 `parseWorkbuddyCredential()`：解析 JSON、**校验 accessToken + uid**（缺就返回 null，
+   由界面报错，**不猜**）、按 declared/domain 判定 provider（`workbuddy.ai` ⇒ 国际版）；
+3. `pages/add-account-static-sheet.tsx` 的文件导入里加 WorkBuddy 分支：**解析后把平铺记录 POST 上去**，
+   而不是把整段文本当 `authFileContent`（后者正是桌面端刻意不做的形状）；
+4. 手填段留空（凭证不是一个 token 能拼出来的），只给「导入凭证文件」+ 凭证目录说明；
+   网页登录复用 U9 那条（oauth/start → 打开或复制地址 → 轮询 → 粘回调兜底）。
+
+**复查**：lib 侧 `workbuddy-intl` 6 处、回落表达式 1 处、`parseWorkbuddyCredential` 1 处、
+`accessToken`/`uid` 各 5 处、`workbuddy.ai` 判定 1 处；sheet 侧分支 4 个关键点各 1 处 ✓。
+三项检查：tsc 0 · build 1,402.66 → 1,404.37 kB · self-check 0 ✓。
+
+**改动**：`mobile/src/lib/add-account-static.ts`、`mobile/src/pages/add-account-static-sheet.tsx`。
