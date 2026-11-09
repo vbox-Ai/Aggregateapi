@@ -18,6 +18,8 @@ import {
   type CallbackInput, type MethodsState,
 } from '../../../ui-islands/src/islands/add-account-dynamic-fields'
 import { isAddAccountProviderHidden } from '../../../ui-shared/provider-availability'
+import { hasStaticConfig } from '../lib/add-account-static'
+import { AddAccountStaticSheet } from './add-account-static-sheet'
 import { t } from '../i18n'
 
 export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
@@ -25,6 +27,15 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
   const providers = sessionError ? [] : (session?.accounts?.providers || [])
     .filter(item => Boolean(item.id) && !isAddAccountProviderHidden(item.id || ''))
   const [selected, setSelected] = useState('')
+  /**
+   * 动态登录回落到静态表单的提供商。
+   *
+   * 网关对"没实现动态登录"的家回 501，而桌面端对其中 27 家走的是静态表单
+   * （`add-account-configs.ts`）。原来手机端遇到 501 直接给一句"未声明动态登录方式"
+   * 就结束了 —— 于是**所有资源平台**在手机上都没法加账号。现在改成：
+   * **动态优先，501 且这家有静态配置时整块换成静态表单**（字段与提交语义与桌面一致）。
+   */
+  const [staticProvider, setStaticProvider] = useState('')
   const [search, setSearch] = useState('')
   const keyword = search.trim().toLowerCase()
   const selectedProvider = providers.find(item => item.id === selected)
@@ -36,10 +47,14 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
         ? t('登录 / 添加 {name} 账号', { name: providerLabel(selected, selectedProvider.label) })
         : t('选择提供商')}</SheetTitle></SheetHeader>
       <SheetBody>
-        {selectedProvider ? <>
+        {staticProvider ? <>
+          {/* 这家没有动态登录、但有静态表单（桌面同款）：整块换成静态表单 */}
+          <AddAccountStaticSheet provider={staticProvider} onClose={onClose} onAdded={onAdded} />
+        </> : selectedProvider ? <>
           <Button size='sm' variant='outline' className='self-start' onClick={() => setSelected('')}>{t('返回提供商列表')}</Button>
           <DynamicForm key={`${identity}:${selected}`} provider={selected} label={selectedProvider.label || selected}
-            source={selectedProvider.source} onAdded={onAdded} />
+            source={selectedProvider.source} onAdded={onAdded}
+            onStaticFallback={() => setStaticProvider(selected)} />
         </> : <>
           <p className='text-xs text-subtle'>{t('提供商仅在已启用且加载后出现。登录与本机引用均作用在所连接网关，不是手机。')}</p>
           <Input type='search' value={search} placeholder={t('搜索提供商…')}
@@ -64,8 +79,10 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
   </Sheet>
 }
 
-function DynamicForm({ provider, label, source, onAdded }: {
+function DynamicForm({ provider, label, source, onAdded, onStaticFallback }: {
   provider: string; label: string; source?: string; onAdded: () => void
+  /** 501 且这家有静态表单时回调：由父组件把表单整块换成静态面板 */
+  onStaticFallback?: () => void
 }) {
   const prefix = `mobile-add-${provider}`
   const [methods, setMethods] = useState<MethodsState>({ phase: 'loading', methods: [], instructions: '', reason: '' })
@@ -134,6 +151,12 @@ function DynamicForm({ provider, label, source, onAdded }: {
       setMethods(parsed)
     }).catch(failure => {
       if (controller.signal.aborted) return
+      // 501 = 网关没给这家实现动态登录。桌面端对这类家走静态表单，手机端同样回落到
+      // 静态表单（字段与提交语义与桌面一致），而不是丢一句"未声明"就结束。
+      if (methodsUnavailable(failure) && hasStaticConfig(provider)) {
+        onStaticFallback?.()
+        return
+      }
       const builtin = source === 'builtin' || provider.endsWith('-subscription')
       setMethods({ phase: 'error', methods: [], instructions: '', reason: methodsUnavailable(failure)
         ? builtin ? t('本体订阅未返回动态登录方式（501）；不会猜测导入接口或显示插件手动凭证入口。请更新网关后重试。')

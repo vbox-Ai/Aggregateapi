@@ -3013,3 +3013,43 @@ U3 里我把它放到了**顶部**，这次按要求挪回**底部、并抬到�
 三项检查：tsc 0 · build 1,350.53→1,350.61 kB · self-check 0；Swift 括号 217/217 平衡。
 
 **改动**：`components/AssistantSettingsSheet.tsx`、`pages/AssistantPage.tsx`、`PanelViewController.swift`。
+
+#### 记忆点 · 步骤 60（U8：补上「静态表单」加账号路径 —— 小浣熊这类家手机上终于能加）
+
+**用户报的问题**：手机端加小浣熊账号提示「此提供商未声明动态登录方式…手机端不会猜测凭证字段」，
+而且**所有资源平台都一样**。问是不是没适配完全。
+
+**根因（契约读出来的，不是猜的）**
+- 手机端**只有一条路**：`GET /api/session/login/methods?provider=X`；`methodsUnavailable()` 判的是
+  **HTTP 501** ⇒ 网关对"没实现动态登录"的家回 501 ⇒ 界面直接拒绝。
+- **桌面端根本不依赖这条路**：它对 **27 家**走 `add-account-configs.ts`（51 KB、**纯数据、无 JSX**）
+  的静态表单，字段名**直接对应 `POST /api/accounts` 的请求体**（小浣熊就是 `token` /
+  `refreshToken`（`inputKey: 'refresh'` 只改 DOM id）/ `name`）。
+- ⇒ 「所有资源平台都这样」是因为**这张表没搬过来**，不是某一家没适配。
+
+**实现（复用 > 重写）**
+- 新增 `lib/add-account-static.ts`：**直接 import 桌面那份配置模块**（手机端本来就有从 ui-islands
+  复用模块的先例）⇒ **单一数据源，字段名不可能两边漂移**；并实现与桌面**逐条对应**的提交语义：
+  `provider` 起手、按 `field.key` 平铺（`inputKey` 不进请求体）、`jsonExpand` **解析后并键**且解析失败
+  就地拦下、可选且空值不发、地区写 `mode`、备注名写 `name`。
+- 新增 `pages/add-account-static-sheet.tsx`：手填字段（`rows` 决定 Textarea / `maxLengthOf` /
+  `fieldIdOf` 与桌面**同一函数**）+ **从文件导入**（文本 → `authFileContent`；二进制 → `authFileB64`，
+  与桌面同键名）+ 提交 `POST /api/accounts`。
+- **回落接法**（关键）：`DynamicForm` 在 `methodsUnavailable(failure) && hasStaticConfig(provider)` 时
+  回调父组件，把表单**整块换成静态面板** ⇒ **动态优先、静态兜底**，今天能用的家行为不变，
+  且所有入口自动覆盖（不用改 AccountsPage 的调用点）。
+
+**一条刻意的诚实标注**：「网页登录」在桌面端由**桌面壳的桥**驱动（`workbuddyDesktop.startLogin`）、
+「读本机客户端登录态」要读电脑上的文件（部分家还要 Windows DPAPI 解密）—— 手机端**做不到**，
+所以这两段**不渲染但写明原因**并指向等价路径（手填 / 导入凭证文件）。
+另一个坑：**不能**用 `desktopImportAvailable()` 当手机端的判据 —— 它读桌面壳注入的 `platform()`，
+手机端拿到空串，会误判成"桌面导入可用"从而渲染一段做不到的界面。
+
+**复查**：覆盖 **27 家 / 61 个字段**（其中 1 个 `jsonExpand`、40 个可选）；**16 项断言全过** ——
+12 项提交规则与桌面逐条一致、4 项回落接线、3 项诚实标注。三项检查：tsc 0 ·
+build 1,350.61 → 1,397.78 kB（+47 KB 就是这份 27 家配置真被打进去了）· self-check 0。
+
+**并行进度**：U6（run 329）、U7（run 330）的推送构建均 **success** ⇒ 编译闸门全绿。
+
+**改动**：`lib/add-account-static.ts`（新）、`pages/add-account-static-sheet.tsx`（新）、
+`pages/add-account-dynamic-sheet.tsx`（501 回落）。
