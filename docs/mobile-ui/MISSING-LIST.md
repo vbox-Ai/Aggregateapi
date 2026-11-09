@@ -240,7 +240,7 @@
 | E6 | 模型映射「新增」 | **已实现 → 撤销 A9** | `lib/assistantTools.ts`：`` `/api/models/mappings${action === 'remove' ? '/remove' : ''}` `` |
 | E7 | 账号批量操作 | **已实现** | `/api/accounts/batch` 在 `api/gateway.ts` 与 `pages/AccountsPage.tsx` |
 | E8 | 工具服务 API 文档 | **已实现（撤销 A13）** | 手机端复用共享的 `DocumentationBrowser`，它已含 `toolApiSections`；只在 `mobile/src` 里搜会漏掉共享层 |
-| E9 | 助手（子功能） | **端点面完全一致**（M4 核对完成） | 两侧 `/api/assistant/*` 端点集合**逐条相同**（chat/config/images/sessions/fork/title）；回放、分叉、历史、停止生成、删除对话手机端都有。**唯一差异是「消息级操作」**（编辑/删除/重新生成某一条消息）——桌面端有、手机端没有，属**界面取舍**而非能力缺失，已记为可选（见 `PLAN` §可选）。~~桌面 39 个文件~~ 实测是 **21 个**（手机 14 个），当初那个数我记大了 |
+| E9 | 助手（子功能） | **端点面完全一致；消息级操作本来就有** | 两侧 `/api/assistant/*` 端点集合逐条相同；回放、分叉、历史、停止生成、删除对话手机端都有。**更正（2026-11-09）**：我上一轮写「手机端没有消息级操作」是**错的** —— 它由**共享组件** `ui-shared/assistant-message-actions` 渲染，两端同一个组件，提供 编辑 / 删除 / 分叉。错因是只搜中文 UI 文案，而代码用的是英文 action 名（`operateMessage(bubble,'edit'|'delete'|'fork')`）。本轮为窄屏**重做了这层交互**（见 §M5）。~~桌面 39 个文件~~ 实测 21 个（手机 14 个）|
 | E10 | 路由组结构编辑 | **真缺口（部分）→ §A14** | 手机 `routing-group-edit-sheet.tsx` 只改 组名/说明/成员参与；对外模型 ID、策略、粘性、成员增删、账号范围不可改 |
 | E11 | 设置项字段级 | 转 **M3 调研** | 主要设置项手机端都有对应细粒度端点（`queueMaxWaits`/`retryCount`/`connectTimeoutSeconds`/`promptMode`/`sanitizeFingerprintProviders` 等均已使用）；`/api/config` 是否独占某些项未定论 |
 | E12 | 请求详情 / 重放 | **已实现** | `/api/stats/requests/raw` + `/api/routing/replays` + `components/RequestRawPanel.tsx` + `pages/routing-replay.tsx` |

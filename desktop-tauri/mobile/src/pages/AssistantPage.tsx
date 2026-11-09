@@ -25,7 +25,7 @@ import { loadAssistantImage } from '../api/assistant-images'
 import { saveMobileAssistantImage } from '../lib/assistant-image-save'
 import { readMobileAttachments } from '../lib/assistant-attachments'
 import { serverIdentity } from '../lib/servers'
-import { AssistantMessageActions } from '../../../ui-shared/assistant-message-actions'
+import { MobileMessageActions } from '../components/MobileMessageActions'
 import { AssistantTitleSettings } from '../../../ui-shared/assistant-title-settings'
 import { parseAssistantMessages, removeAssistantMessage } from '../../../ui-shared/assistant-history'
 import { replayBubbles, type Bubble } from './assistant/history'
@@ -566,7 +566,7 @@ export function AssistantPage() {
                   </div> : null}
                   {bubble.text}
                 </div>
-                <AssistantMessageActions text={bubble.text} t={t} disabled={busy || checkingModel || historyBusy}
+                <MobileMessageActions text={bubble.text} disabled={busy || checkingModel || historyBusy}
                   onEdit={text => operateMessage(bubble, 'edit', text)} onDelete={() => operateMessage(bubble, 'delete')} />
                 </div>
               </div>
@@ -594,7 +594,7 @@ export function AssistantPage() {
                     />
                   ) : null}
                 </div>
-                {!bubble.streaming ? <AssistantMessageActions text={bubble.text} t={t} disabled={busy || checkingModel || historyBusy}
+                {!bubble.streaming ? <MobileMessageActions text={bubble.text} disabled={busy || checkingModel || historyBusy}
                   onEdit={text => operateMessage(bubble, 'edit', text)} onDelete={() => operateMessage(bubble, 'delete')} onFork={() => operateMessage(bubble, 'fork')} /> : null}
                 {bubble.images?.length ? <AssistantImageResults images={bubble.images} load={loadAssistantImage} save={saveMobileAssistantImage} t={t} /> : null}
                 {bubble.error ? (
