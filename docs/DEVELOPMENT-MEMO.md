@@ -3238,3 +3238,45 @@ build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
 三项检查：tsc 0 · build 1,402.66 → 1,404.37 kB · self-check 0 ✓。
 
 **改动**：`mobile/src/lib/add-account-static.ts`、`mobile/src/pages/add-account-static-sheet.tsx`。
+
+#### 记忆点 · 步骤 67（U14：上游文案中性化 + 导出可选范围 + 导入可选文件 + 分类分段）
+
+**① 「上游未配置」中性化**
+操作者问"设置里和首页上面显示上游未配置是什么意思"，并建议"直接改成图标加 Agent2API 名称"。
+查证：`upstreamConfigured` 在 `api/health.rs` 与 `api/session.rs` 里**都**来自
+`auth().get_config_summary()` 的 `configured`，而 `auth.rs` 里那条原因常量是
+**`UNCONFIGURED_REASON = "暂无可用登录态"`** —— 所以它表示**网关自带那个上游服务（health.rs 同时
+回报 `product: WorkBuddy`、`transport: upstream-api`）有没有可用登录态**，**与面板里添加的
+提供商/账号毫无关系**。这解释了"一切照常可用却一直挂着待配置"。
+改法：设置页标题改为**品牌 + Agent2API**（复用已有 bolt 图标，不新画），警示徽标改为
+**仅在上游确实配好时显示中性「已连接」**；首页那枚状态点同源，改为中性「已连接」+ 常绿
+（面板既然拿到 session，连接本来就是通的），并删掉不再使用的 `gateway` 变量。
+⚠️ 仍**未核清**的是"网关自带上游具体在哪一步配置/登录"（不影响本次改动，文案已中性化）。
+
+**② 导出可选范围**（原实现一点就全量）
+契约：`POST /api/accounts/export-files`，选择器 `{ id }` 或 `{ provider }`，**两者都传以 id 为准**
+（accounts_export.rs）；响应 `{ total, files, failed }`。新增 `pages/export-accounts-sheet.tsx`：
+全部（仍走 `GET /api/accounts/export`，含自定义提供商定义）/ 按提供商（列该家与其账号数）/
+仅勾选（接口一次只收一个选择器 ⇒ **逐条请求再合并 `files`**）；`failed` 会提示不静默丢弃。
+账号页那颗「导出」改为打开该面板，旧的 `exportAll` 与 `exporting` 状态移除。
+
+**③ 导入可选文件**（原实现只能粘贴）
+`account-import-sheet.tsx` 加 `<input type=file>`（accept `.json/.txt/.info` 等）+ `file.text()`
+读取、去 BOM、2 MB 上限、空文件与读取失败都有提示；读到的文本填进同一个内容框 ⇒ **仍走同一条
+提交路径**（`authFileContent`），不新增第二条落库方式；粘贴路径保留。
+
+**④ 分类分段**（对齐桌面第 1 步）
+分段：全部 / Agent / Web / 已建 API / API 模板。判据**与桌面同源**：`custom-` 前缀 = 自定义提供商
+（网关 `is_custom_provider_id`，见 custom_providers.rs 的模块头），其余按网关 provider 摘要里的
+`category`（`provider_category()` / 默认 agent，见 providers/mod.rs）。每组带计数。
+「API 模板」在手机端**没有模板数据**（模板来自桌面壳的 `wbPresetProviders`），所以这一档
+**不列假数据**，而是把用户送到已有的「自定义提供商」页新建（`store.go('custom-providers')`）。
+
+**复查**：41 项断言里 39 项直接通过，另 2 项先报 ❌ 又是**注释里出现了那些字样**（我在注释里写
+"原来显示的是…"），逐行核对确认**只存在于注释、不在 UI 文案** ⇒ 实际 41/41 ✓。
+过程中检查器还**抓到一处真问题**：导出面板用了不存在的图标名 `list`（`Icon.tsx` 只有 51 个图标，
+无 list），会渲染成空白 ⇒ 已改成合法的 `doc` ✓。
+三项检查：tsc 0 · build 1,409.52 kB · self-check 0。
+
+**改动**：`pages/SettingsPage.tsx`、`pages/HomePage.tsx`、`pages/export-accounts-sheet.tsx`（新）、
+`pages/AccountsPage.tsx`、`pages/account-import-sheet.tsx`、`pages/add-account-dynamic-sheet.tsx`。

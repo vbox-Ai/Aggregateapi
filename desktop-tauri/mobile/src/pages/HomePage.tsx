@@ -70,7 +70,6 @@ export function HomePage() {
     if (!session) void store.refresh()
   }, [session])
 
-  const gateway = session?.health?.upstreamConfigured
   const daily = checkin?.daily
   const eligible = daily?.todayEligible || 0
   const done = daily?.todayDone || 0
@@ -150,11 +149,15 @@ export function HomePage() {
                   width: 6,
                   height: 6,
                   borderRadius: '50%',
-                  background: gateway ? '#6ef2a4' : '#ffd166',
-                  boxShadow: gateway ? '0 0 0 3px rgba(110,242,164,.28)' : '0 0 0 3px rgba(255,209,102,.28)',
+                  background: '#6ef2a4',
+                  boxShadow: '0 0 0 3px rgba(110,242,164,.28)',
                 }}
               />
-              {gateway ? t('运行中') : t('未配置上游')}
+              {/* 原来这里按 `health.upstreamConfigured` 显示「运行中 / 未配置上游」。
+                  那个字段只表示**网关自带的上游服务有没有可用登录态**，与「面板能不能连上
+                  网关」无关 —— 面板既然已经拿到 session，连接本来就是通的，显示「未配置上游」
+                  只会让人以为出了问题。这里如实表达这一枚指示器真正的含义：已连接。 */}
+              {t('已连接')}
             </span>
             <Button size='default' variant='ghost'
               type='button'

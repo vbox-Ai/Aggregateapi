@@ -37,7 +37,27 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
    */
   const [staticProvider, setStaticProvider] = useState('')
   const [search, setSearch] = useState('')
+  /**
+   * 分类分段：与桌面端第 1 步的「全部 / Agent / Web / API 模板 / 已建 API」对齐。
+   *
+   * 判据与桌面**同源**，不另立一套：
+   *   · `custom-` 前缀 = 自定义提供商（网关 `is_custom_provider_id` 的判据，见 custom_providers.rs）；
+   *   · 其余按网关给的 `category`（`web` / `agent`，见 providers/mod.rs 的 provider 摘要）。
+   * 「API 模板」在手机端没有模板数据（模板来自桌面壳的 `wbPresetProviders`），所以这一档
+   * 不列假数据，而是把用户送到已有的「自定义提供商」页面去新建 —— 那条路手机端本来就有。
+   */
+  const [kind, setKind] = useState<'all' | 'agent' | 'web' | 'custom' | 'preset'>('all')
   const keyword = search.trim().toLowerCase()
+  const kindOf = (item: { id?: string; category?: string }): 'agent' | 'web' | 'custom' => {
+    if (String(item.id || '').startsWith('custom-')) return 'custom'
+    return item.category === 'web' ? 'web' : 'agent'
+  }
+  const counts = {
+    all: providers.length,
+    agent: providers.filter(item => kindOf(item) === 'agent').length,
+    web: providers.filter(item => kindOf(item) === 'web').length,
+    custom: providers.filter(item => kindOf(item) === 'custom').length,
+  }
   const selectedProvider = providers.find(item => item.id === selected)
   const identity = serverIdentity()
 
@@ -60,8 +80,36 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
           <Input type='search' value={search} placeholder={t('搜索提供商…')}
             onChange={event => setSearch(event.currentTarget.value)} />
           {sessionError ? <Alert variant='destructive'><AlertDescription>{sessionError}</AlertDescription></Alert> : null}
+          {/* 分类分段（与桌面端第 1 步一致）：全部 / Agent / Web / 已建 API / API 模板 */}
+          <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
+            {([
+              ['all', t('全部'), counts.all],
+              ['agent', 'Agent', counts.agent],
+              ['web', 'Web', counts.web],
+              ['custom', t('已建 API'), counts.custom],
+              ['preset', t('API 模板'), -1],
+            ] as const).map(([id, label, count]) => (
+              <Button key={id} size='sm' variant={kind === id ? 'default' : 'outline'}
+                style={{ flex: 'none' }} onClick={() => setKind(id)}>
+                {label}{count >= 0 ? ` ${count}` : ''}
+              </Button>
+            ))}
+          </div>
+          {kind === 'preset' ? (
+            <div style={{ padding: '8px 0 4px' }}>
+              <p className='text-xs text-subtle' style={{ lineHeight: 1.7 }}>
+                {t('「API 模板」是新建自定义提供商的入口（桌面端第 1 步的模板卡）。手机端在「自定义提供商」页里新建，建好后再回这里添加账号。')}
+              </p>
+              <Button variant='outline' style={{ marginTop: 8 }}
+                onClick={() => { onClose(); store.go('custom-providers') }}>
+                {t('去自定义提供商新建')}
+              </Button>
+            </div>
+          ) : null}
           <div className='grid grid-cols-1 gap-2 min-[420px]:grid-cols-2'>
-            {providers.filter(item => !keyword || `${item.id} ${providerLabel(item.id, item.label)}`.toLowerCase().includes(keyword))
+            {kind === 'preset' ? null : providers
+              .filter(item => kind === 'all' || kindOf(item) === kind)
+              .filter(item => !keyword || `${item.id} ${providerLabel(item.id, item.label)}`.toLowerCase().includes(keyword))
               .map(item => <Button key={item.id} variant='outline' className='h-auto min-h-16 justify-start whitespace-normal text-left'
                 onClick={() => setSelected(item.id || '')}>
                 <ProviderLogo id={item.id} label={item.label} />

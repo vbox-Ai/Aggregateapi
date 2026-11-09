@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription, Button, Input, Label, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle, Textarea } from '@ui'
+import { Icon } from '../components/Icon'
 import { providerLabel } from '../lib/providers'
 import { serverIdentity } from '../lib/servers'
 import { store } from '../state/store'
@@ -32,7 +33,43 @@ export function AccountImportSheet({
   const [content, setContent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [reading, setReading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
   const identity = serverIdentity()
+
+  /**
+   * 从文件读取凭证 —— 原来这里只能粘贴，手机上从客户端导出/分享出来的 JSON 文件
+   * 还得先想办法"看到内容再复制"，很别扭。选文件后读成文本填进下面同一个内容框，
+   * 之后仍走同一条提交路径（`authFileContent`），不新增第二条落库方式。
+   */
+  const pickFile = async (file: File) => {
+    if (reading || busy) return
+    setReading(true)
+    setError('')
+    try {
+      // 凭证文件都是文本；上限挡住误选的大文件（客户端登录态通常只有几 KB）
+      if (file.size > 2 * 1024 * 1024) {
+        setError(t('这个文件太大了（超过 2 MB），看起来不是凭证文件'))
+        return
+      }
+      const text = (await file.text()).replace(/^\uFEFF/, '')
+      if (!text.trim()) {
+        setError(t('这个文件是空的'))
+        return
+      }
+      setContent(text)
+      if (!name.trim()) {
+        // 备注名留空时，用文件名（去掉扩展名）当提示，用户可以再改
+        const stem = file.name.replace(/\.[^.]+$/, '').trim()
+        if (stem) setName(stem.slice(0, 100))
+      }
+      store.toast(t('已读取「{name}」', { name: file.name }))
+    } catch {
+      setError(t('文件读取失败，请重试或改为粘贴内容'))
+    } finally {
+      setReading(false)
+    }
+  }
 
   const note = useMemo(() => PRESET_NOTES[provider] || t('粘贴该提供商客户端导出的登录态 / 凭证 JSON 或文本。'), [provider])
 
@@ -108,6 +145,19 @@ export function AccountImportSheet({
             </div>
             <div>
               <Label htmlFor='import-content'>{t('凭证内容')}</Label>
+              {/* 选文件 → 读成文本填进下面的框：手机端不必先"看到内容再复制" */}
+              <input ref={fileRef} type='file' accept='.json,.txt,.info,application/json,text/plain' hidden
+                onChange={event => {
+                  const file = event.currentTarget.files?.[0]
+                  if (file) void pickFile(file)
+                  event.currentTarget.value = ''
+                }} />
+              <Button variant='outline' size='sm' style={{ marginBottom: 8 }}
+                disabled={busy || reading}
+                onClick={() => fileRef.current?.click()}>
+                <Icon name='install' style={{ marginRight: 6 }} />
+                {reading ? t('读取中…') : t('选择文件…')}
+              </Button>
               <Textarea
                 id='import-content'
                 rows={8}

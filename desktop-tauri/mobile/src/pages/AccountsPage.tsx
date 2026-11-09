@@ -8,6 +8,7 @@ import { AccountSheet } from './AccountSheet'
 import { DynamicProviderSheet } from './add-account-dynamic-sheet'
 import { SmsLoginSheet } from './sms-login-sheet'
 import { AccountImportSheet } from './account-import-sheet'
+import { ExportAccountsSheet } from './export-accounts-sheet'
 import {
   AccountsFilterSheet,
   DEFAULT_FILTERS,
@@ -64,7 +65,7 @@ export function AccountsPage() {
   const [adding, setAdding] = useState(false)
   const [smsAdding, setSmsAdding] = useState(false)
   const [importing, setImporting] = useState(false)
-  const [exporting, setExporting] = useState(false)
+  const [exportSheet, setExportSheet] = useState(false)
   /** 批量选择：开启后每行出现勾选框，底部出现批量操作条 */
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -125,21 +126,6 @@ export function AccountsPage() {
       else next.add(id)
       return next
     })
-  }
-
-  // 导出全部账号（含 token 与自定义提供商定义）
-  const exportAll = async () => {
-    if (exporting) return
-    setExporting(true)
-    try {
-      const data = await exportAccounts()
-      await downloadJson(data, `agent2api-accounts-${dateStamp()}.json`)
-      store.toast(t('已导出 {n} 个账号', { n: accounts.length }))
-    } catch (failure) {
-      store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
-    } finally {
-      setExporting(false)
-    }
   }
 
   // 快照行按 id 索引：每次 render 重建 Map 太浪费，且行组件会因此白白重渲
@@ -325,8 +311,8 @@ export function AccountsPage() {
               onClick={() => setSelectMode(prev => !prev)}>
               {selectMode ? t('取消批量') : t('批量')}
             </Button>
-            <Button variant='outline' size='sm' disabled={exporting || !accounts.length} onClick={() => void exportAll()}>
-              {exporting ? t('导出中…') : t('导出')}
+            <Button variant='outline' size='sm' disabled={!accounts.length} onClick={() => setExportSheet(true)}>
+              {t('导出')}
             </Button>
             <Button size='icon-touch' variant='outline'
               type='button'
@@ -506,6 +492,16 @@ export function AccountsPage() {
           void load()
         }}
       /> : null}
+
+      {exportSheet ? <ExportAccountsSheet
+        groups={groups.map(group => ({
+          provider: group.provider,
+          label: providerLabel(group.provider, state.session?.accounts?.providers?.find(item => item.id === group.provider)?.label),
+          count: group.list.length,
+        }))}
+        selectedIds={[...selectedIds]}
+        total={accounts.length}
+        onClose={() => setExportSheet(false)} /> : null}
       <AccountSheet
         account={openAccount}
         onClose={() => setOpenId(null)}

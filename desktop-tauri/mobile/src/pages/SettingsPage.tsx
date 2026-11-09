@@ -333,14 +333,22 @@ export function SettingsPage() {
               <Icon name='bolt' />
             </span>
             <div className='m-grow'>
-              <div className='m-t1'>{session?.health?.upstreamConfigured ? t('网关运行中') : t('上游未配置')}</div>
+              {/* 原来这里按 `health.upstreamConfigured` 显示「网关运行中 / 上游未配置」。
+                  它的含义只是**网关自带那个上游服务有没有可用登录态**（auth.rs 里那条原因
+                  就叫「暂无可用登录态」），跟面板里添加的提供商 / 账号毫无关系 —— 所以一切
+                  照常可用时它也会一直挂着「待配置」，看着像故障。改成中性品牌标识：
+                  左边那个图标 + 「Agent2API」；未配置时不再挂警示徽标，只有确实配好时才显示
+                  一枚中性「已连接」。 */}
+              <div className='m-t1'>Agent2API</div>
               <div className='m-t2 m-mono' style={{ fontSize: 11.5 }}>
                 {baseLabel(apiBase())}
               </div>
             </div>
-            <Badge variant={session?.health?.upstreamConfigured ? 'success' : 'warning'} shape='tag'>
-              <BadgeDot />{session?.health?.upstreamConfigured ? t('正常') : t('待配置')}
-            </Badge>
+            {session?.health?.upstreamConfigured ? (
+              <Badge variant='outline' shape='tag'>
+                <BadgeDot />{t('已连接')}
+              </Badge>
+            ) : null}
           </div>
         </Card>
       </div>
