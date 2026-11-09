@@ -162,7 +162,7 @@
 | 风险 | **不可恢复**。必须：预览先出条数、确认按钮措辞明确（"永久删除 N 条"）、失败时给出原因 |
 | 验收 | 预览条数与实际清理一致；压实后库大小下降且功能正常 |
 
-### M2.3 精简路由（compact routes）
+### M2.3 精简路由（compact routes）—— **✅ 已实现（2026-11-09）**
 | 项 | 内容 |
 |---|---|
 | 契约核对 | 上游 `api/compact_routes.rs::{get_routes, put_routes}` 的载荷结构（**这一步决定整项工作量**）；桌面 `models-compact-dialog.tsx`、`models-compact-state.ts` |

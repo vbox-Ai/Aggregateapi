@@ -71,7 +71,7 @@
 - 影响：手机上无法清理历史请求、无法压实库（长期使用后库会涨）
 - 量级：**M**（要先定"清理范围"的交互，且这是**不可恢复**操作，必须二次确认 + 预览）
 
-### A5 精简路由（compact routes）
+### A5 精简路由（compact routes）—— **✅ 已实现（2026-11-09）**
 - 端点：`GET|PUT /api/models/compact-routes`
 - 桌面入口：模型页「精简」（`models-compact-dialog.tsx`、`models-compact-state.ts`）
 - 手机现状：模型相关有 `manage`、`custom`、`state`、`mappings/remove`、`refresh`、`metadata`、`test`、`capabilities`，**没有 compact-routes**

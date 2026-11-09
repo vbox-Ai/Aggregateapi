@@ -2394,3 +2394,42 @@ pnpm exec tsc --noEmit          → exit 0
 pnpm run build                  → exit 0   mobile.js 1,303.35 → 1,309.78 kB
 check-mobile-ui.py --root <repo> → exit 0
 ```
+
+#### 记忆点 · 步骤 44（M2.3 精简路由）
+
+**做成了什么**：模型页头部多一个入口 → 「压缩路由」面板：总开关 + 规则列表
+（来源模型 / 压缩模型 / 单条启用 / 删除）+ 添加规则 + 保存。
+
+**契约（上游 `api/compact_routes.rs` + `config/compact_routes.rs`）**
+
+- `GET /api/models/compact-routes` → `{config:{enabled, rules:[{client,source,target,enabled}]},
+  revision, clients:[{id:'zcode',label:'ZCode'}], models:[…已滤掉图片模型…], maxRules:200}`
+- `PUT /api/models/compact-routes` body **`{config, revision}`**（`deny_unknown_fields`），
+  成功后返回与 GET 同样的视图（所以保存完直接用返回刷新界面，不再多打一次）
+- 服务端两道校验：`validate`（≤200 条、**客户端只支持 `zcode`**、来源/压缩模型非空且
+  去空格后不变、≤256 字符、无控制字符、来源≠压缩、同客户端来源不可重复）
+  与 `validate_models`（两个模型都必须在**当前可用模型清单**里）
+- **修订号防覆盖**：`revision` 是配置 JSON 的 SHA-256；别处改过 → **409**
+  「压缩路由已在其他位置修改，请重新读取后再保存；当前草稿未丢失」
+
+**三处刻意的界面决定**
+
+1. **不给客户端选择器**：上游目前只认 `zcode`，给一个只有一项的下拉是噪声；
+   面板里直接写明"目前只支持 ZCode"，选了别家也会被服务端拒。
+2. **冲突（409）不覆盖也不丢草稿**：给「重新读取并保留我的改动」——
+   重新拉最新配置**只换 revision**，用户的规则原样留着，再点保存。
+   既不静默覆盖别人的修改，也不用让人重填一遍。
+3. **已失效的旧规则仍可显示**：上游 `validate_models` 明确允许"已失效的旧规则保留、
+   关闭或删除"，所以选择器会把规则里引用但当前清单里没有的模型**补进选项**并标
+   「（已失效）」——否则那条规则的来源模型会显示成空白，看起来像数据丢了。
+
+本地校验（`validateCompactRoutes`）的文案与上游**逐条同句**，用户先看到的是同一句话。
+新增/改动：`api/compact-routes.ts`（新）、`pages/compact-routes-sheet.tsx`（新）、
+`pages/ModelsPage.tsx`（加入口）。
+
+**验证**：
+```
+pnpm exec tsc --noEmit          → exit 0
+pnpm run build                  → exit 0   mobile.js 1,309.78 → 1,315.71 kB
+check-mobile-ui.py --root <repo> → exit 0
+```

@@ -17,6 +17,7 @@ import { Badge as UiBadge } from '@ui'
 import { Toggle as UiToggle } from '@ui'
 import { isManualModel, removeCustomModel } from '../api/gateway'
 import { AddCustomModelSheet } from './models-add-custom-sheet'
+import { CompactRoutesSheet } from './compact-routes-sheet'
 
 /**
  * 模型管理。
@@ -44,6 +45,7 @@ export function ModelsPage() {
   const revision = useRef(0)
   const [refreshResults, setRefreshResults] = useState<Array<{ provider: string; providerLabel?: string; status: string; message?: string }>>([])
   const [addOpen, setAddOpen] = useState(false)
+  const [compactOpen, setCompactOpen] = useState(false)
 
   /** 内置家的清单（登记自定义模型只服务内置家，见 models-add-custom-sheet 的说明） */
   const providerChoices = useMemo(() => {
@@ -209,6 +211,7 @@ export function ModelsPage() {
         <PageIntro actions={
           <>
             <IconButton name='plus' label={t('登记自定义模型')} onClick={() => setAddOpen(true)} />
+            <IconButton name='tools' label={t('压缩路由')} onClick={() => setCompactOpen(true)} />
             <IconButton name='refresh' label={t('刷新清单')} onClick={() => void refresh()} />
           </>
         }
@@ -438,6 +441,7 @@ export function ModelsPage() {
           }}
         />
       ) : null}
+      {compactOpen ? <CompactRoutesSheet onClose={() => setCompactOpen(false)} onChanged={() => void refresh()} /> : null}
     </div>
   )
 }
