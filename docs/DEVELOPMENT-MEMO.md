@@ -2772,3 +2772,54 @@ U3 顶部改**悬浮版本胶囊（左）+ 悬浮圆形图标按钮（右）** �
 
 **待做**：U3 顶部改悬浮版本胶囊 + 悬浮圆形图标按钮（**原生 Swift**，`PanelViewController.swift`），
 需重新出包；CI 的 iOS 作业即编译证据。
+
+#### 记忆点 · 步骤 54（U3：原生顶部改悬浮 chrome + 状态条改小胶囊）
+
+**先澄清一件事**：用户看到的顶部那条不是网页，是 **UINavigationBar**（标题 = 构建戳，
+右上 `rightBarButtonItem` 在「桌面面板/手机面板」之间切换）。所以这条要动 **Swift**
+（`agent2api-ios/app/Agent2API/PanelViewController.swift`），且**必须重新出包**。
+
+**★ 关键取舍：只改外观，不藏导航栏**
+导航栏负责**安全区与内容避让**（`viewWillAppear` 里就是靠它把 Web 内容顶开的）。若把它藏掉
+再自己铺一层浮层，Web 内容会钻到刘海/状态栏下面。所以这里只把导航栏**外观改成透明**
+（`UINavigationBarAppearance.configureWithTransparentBackground()`），把
+`titleView` 换成版本胶囊、`rightBarButtonItems` 换成两枚圆形图标按钮（`iphone` /
+`desktopcomputer`）——避让逻辑一行不动，风险远小于自绘浮层。
+
+**顺带修掉一个旧手感问题**：原来那枚按钮是 `toggle`，点同一面也会重载页面；
+新实现 `switchPanel(desktop:)` **幂等**（`guard showingDesktop != desktop else { return }`），
+并且**当前显示的那一面会高亮**（图标按钮没有文字，用配色区分）。
+
+**状态条：底部 170px 黄条 → 顶部小胶囊**
+- 形态：整圆角 + 半透明底，高度由内容撑开（`greaterThanOrEqualToConstant: 36`），
+  文字**两行封顶**（原来给到 12 行，十几行的诊断串会把面板压掉）；
+- **位置改到顶部**：底部要留给面板自己的**悬浮标签栏**（U2 刚做的），两者不能再叠在一起；
+- **点胶囊弹小窗**看完整日志（`UIAlertController`，含「重试」「关闭」）——这就是用户要的
+  "小小的胶囊提示 + 有错误就弹一个小日志出来"；
+- 「重试」按钮仍留在胶囊里（不强迫用户先开窗）。
+
+**★ 一个为了让改动面最小而做的设计（值得复用）**
+"按状态配色"需要知道当前状态文本，而那段文本是在 **8 个不同调用点**分别赋给
+`statusLabel.text` 的。逐个加色调参数会显著扩大 Swift 改动面，而 **Swift 在本地编译不了**，
+每轮验证都要等一次完整 CI 构建。于是做了一个 6 行的 `ToneLabel: UILabel` 子类：
+**在 `text` 的 `didSet` 里回调**，配色逻辑收在一处（`applyTone(for:)`），**调用点一行都没改**。
+判据只用现有文案里稳定的几个词（失败 / 错误 / `— JS —` / `— supervisor —` / 正在启动），
+并在注释里写明这是折中、将来可以改成从调用点显式传色调。
+
+**★ 一次真实的自我误删（复查抓到）**
+我替换 `viewDidLoad` 时**顺手删掉了 `if PanelViewController.backend == .embedded { startEmbeddedGateway() }`**
+——那是内嵌形态启动网关的唯一入口，删了就是**功能回归**（App 装上永远起不来网关）。
+复查的第 ② 项（"误删检查"：逐个核对 viewDidLoad 里原本有的调用是否都还在）把它抓出来了，
+已补回。**教训**：替换整段初始化代码时，要**逐行核对"原来有的调用还在不在"**，
+不能只看"我加的东西进去了"。
+
+**静态复查（Swift 编译不了时的替代手段）**：残留引用 0（`toggleDesktopPanel` /
+`rightBarButtonItem` 全清）✓；viewDidLoad 里 8 个原有调用都在 ✓；`{}` 215/215、
+`()` 469/469 平衡 ✓；`statusBar` 高度约束只有一处 ✓（不会两处打架）；
+用到的 UIKit 符号在 iOS 15 目标下均可用 ✓；9 条关键语义全保 ✓。
+**编译证据来自 CI 的 iOS 作业**（本机无 Xcode，不能声称"编译通过"）。
+
+改动：`agent2api-ios/app/Agent2API/PanelViewController.swift`。
+
+**U1–U3 至此全部完成**，等待一次发布出 deb（用户要求尽量少构建：本推送触发的那次构建即编译证据，
+通过后再发一次发布构建）。

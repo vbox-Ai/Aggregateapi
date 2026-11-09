@@ -43,8 +43,21 @@ final class PanelViewController: UIViewController {
 
     private var webView: WKWebView!
     private let statusBar = UIView()
-    private let statusLabel = UILabel()
+    private let statusLabel = ToneLabel()
     private let retryButton = UIButton(type: .system)
+
+    /// 文本变化时回调的 UILabel。
+    ///
+    /// 为什么要这个子类：状态胶囊要**按状态上色**，而状态文本是在 8 个不同调用点
+    /// 分别赋给 `statusLabel.text` 的。逐个调用点加色调参数会显著扩大 Swift 改动面
+    /// —— 而 Swift 在本地编译不了，每轮验证都要等一次完整的 CI 构建。做成子类后，
+    /// 配色逻辑收在一处（`applyTone(for:)`），调用点一行都不用改。
+    private final class ToneLabel: UILabel {
+        var onText: ((String) -> Void)?
+        override var text: String? {
+            didSet { onText?(text ?? "") }
+        }
+    }
 
     /// 构建戳：v3.4.<构建号> (sha) — 由 build-ipa.sh 写进 Info.plist
     static var buildStamp: String {
@@ -92,13 +105,10 @@ final class PanelViewController: UIViewController {
         view.backgroundColor = .systemBackground
         buildWebView()
         buildStatusBar()
+        // 顶部改成悬浮形态：左边版本胶囊、右边两枚圆形图标按钮（手机面板 / 桌面面板）。
+        // 导航栏本身仍然负责安全区与内容避让，只是把外观改成透明的，避免自绘浮层钻到刘海里。
+        installFloatingChrome()
         if PanelViewController.backend == .embedded { startEmbeddedGateway() }
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "桌面面板",
-            style: .plain,
-            target: self,
-            action: #selector(toggleDesktopPanel)
-        )
         installAppLifecycleObservers()
         if PanelViewController.backend == .daemon {
             activateGateway()
@@ -199,14 +209,20 @@ final class PanelViewController: UIViewController {
     private func buildStatusBar() {
         statusBar.translatesAutoresizingMaskIntoConstraints = false
         statusBar.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.95)
+        statusBar.layer.cornerRadius = 18
+        statusBar.layer.cornerCurve = .continuous
+        statusBar.clipsToBounds = true
         statusBar.isHidden = true
         view.addSubview(statusBar)
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .systemFont(ofSize: 10, weight: .regular)
-        // 诊断信息可能有多行（mode/port/home/ui/原因），给到 6 行，别被裁掉
-        statusLabel.numberOfLines = 12
+        statusLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        // 胶囊里只放摘要（两行封顶）：诊断串可能有十几行，全铺在屏幕上会把面板压掉。
+        // 完整内容点开小窗看 —— 见 onStatusTap。
+        statusLabel.numberOfLines = 2
+        statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .black
+        statusLabel.onText = { [weak self] text in self?.applyTone(for: text) }
         statusBar.addSubview(statusLabel)
 
         retryButton.translatesAutoresizingMaskIntoConstraints = false
@@ -215,20 +231,59 @@ final class PanelViewController: UIViewController {
         retryButton.addTarget(self, action: #selector(onRetry), for: .touchUpInside)
         statusBar.addSubview(retryButton)
 
+        // 点胶囊 = 看完整日志（小窗弹出，不占屏幕）
+        let tap = UITapGestureRecognizer(target: self, action: #selector(onStatusTap))
+        statusBar.addGestureRecognizer(tap)
+
         NSLayoutConstraint.activate([
-            statusBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            statusBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            statusBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            statusBar.heightAnchor.constraint(equalToConstant: 170),
+            statusBar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            statusBar.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            // 放在**顶部**：底部要留给面板自己的悬浮标签栏，两者不再叠在一起。
+            statusBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            statusBar.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
 
             statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 14),
-            statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
+            statusLabel.topAnchor.constraint(equalTo: statusBar.topAnchor, constant: 8),
+            statusLabel.bottomAnchor.constraint(equalTo: statusBar.bottomAnchor, constant: -8),
             statusLabel.trailingAnchor.constraint(equalTo: retryButton.leadingAnchor, constant: -10),
 
             retryButton.trailingAnchor.constraint(equalTo: statusBar.trailingAnchor, constant: -14),
             retryButton.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
         ])
         view.bringSubviewToFront(statusBar)
+    }
+
+    /// 由状态文本决定胶囊颜色。
+    ///
+    /// 刻意的折中：Swift 在本地编译不了，所以这次**不给**那些 `statusLabel.text = ...`
+    /// 的调用点都加一个色调参数（改动面越大越可能编译不过，而每轮验证要等一次完整的
+    /// CI 构建）。改成让 `ToneLabel` 在文本变化时回调，配色只在这一处；
+    /// 将来若要更精确，再把色调从调用点显式传下来。
+    private func applyTone(for text: String) {
+        let tone: UIColor
+        if text.contains("失败") || text.contains("错误") || text.contains("— JS —") || text.contains("— supervisor —") {
+            tone = .systemRed
+        } else if text.contains("正在启动") || text.contains("等待") {
+            tone = .systemOrange
+        } else {
+            tone = .systemYellow
+        }
+        statusBar.backgroundColor = tone.withAlphaComponent(0.95)
+        // 红/橙底比黄底深，用白字更清楚
+        statusLabel.textColor = tone == .systemYellow ? .black : .white
+    }
+
+    /// 点状态胶囊：把完整诊断串放进一个小窗（可重试、可关闭）
+    @objc private func onStatusTap() {
+        let text = statusLabel.text ?? ""
+        let alert = UIAlertController(
+            title: "运行日志",
+            message: text.isEmpty ? "（暂无内容）" : text,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "重试", style: .default) { [weak self] _ in self?.onRetry() })
+        alert.addAction(UIAlertAction(title: "关闭", style: .cancel))
+        present(alert, animated: true)
     }
 
     // MARK: - 面板自检（网关起来了但页面空白时，告诉我们是 404 还是空响应）
@@ -412,10 +467,84 @@ final class PanelViewController: UIViewController {
     /// 在「手机面板 /m」与「桌面面板 /」之间切换。
     /// 手机面板的「网关 Key」页是只读的（上游设计），桌面面板才有完整的
     /// Key 新建、可用范围（提供商/模型白名单）等管理能力。
-    @objc private func toggleDesktopPanel() {
-        showingDesktop.toggle()
-        navigationItem.rightBarButtonItem?.title = showingDesktop ? "手机面板" : "桌面面板"
-        webView.load(URLRequest(url: showingDesktop ? panelBaseURL : panelBaseURL.appendingPathComponent("m")))
+    // MARK: - 顶部悬浮 chrome
+
+    /// 顶部悬浮三件套：左胶囊显示构建戳、右两枚圆形图标按钮切换手机/桌面面板。
+    ///
+    /// 为什么只改外观、不藏导航栏：导航栏负责安全区与内容避让（`viewWillAppear`
+    /// 里就是靠它把内容顶开的）。把导航栏藏掉再自己铺一层浮层，Web 内容会钻到
+    /// 刘海/状态栏下面；只把它的**外观**改成透明，避让逻辑一行都不用动。
+    private func installFloatingChrome() {
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithTransparentBackground()
+        navigationItem.standardAppearance = appearance
+        navigationItem.scrollEdgeAppearance = appearance
+        navigationItem.compactAppearance = appearance
+
+        let capsule = UIView()
+        capsule.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.75)
+        capsule.layer.cornerRadius = 15
+        capsule.layer.cornerCurve = .continuous
+        capsule.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = UILabel()
+        label.text = Self.buildStamp
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = .label
+        label.lineBreakMode = .byTruncatingMiddle
+        label.translatesAutoresizingMaskIntoConstraints = false
+        capsule.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: capsule.trailingAnchor, constant: -12),
+            label.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
+            capsule.heightAnchor.constraint(equalToConstant: 30),
+        ])
+        navigationItem.titleView = capsule
+
+        // 顺序即显示顺序：右起第一枚是桌面面板，第二枚是手机面板
+        let desktop = panelButton(symbol: "desktopcomputer", label: "桌面面板", action: #selector(showDesktopPanel))
+        let phone = panelButton(symbol: "iphone", label: "手机面板", action: #selector(showMobilePanel))
+        navigationItem.rightBarButtonItems = [desktop, phone]
+        updatePanelButtons()
+    }
+
+    /// 一枚圆形图标按钮（悬浮感来自自带底色 + 圆角，而不是贴一条 bar 背景）
+    private func panelButton(symbol: String, label: String, action: Selector) -> UIBarButtonItem {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: symbol), for: .normal)
+        button.frame = CGRect(x: 0, y: 0, width: 30, height: 30)
+        button.layer.cornerRadius = 15
+        button.tintColor = .label
+        button.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.75)
+        button.accessibilityLabel = label
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return UIBarButtonItem(customView: button)
+    }
+
+    /// 当前显示哪一面就点亮哪一枚（图标按钮没有文字，用配色区分）
+    private func updatePanelButtons() {
+        for item in navigationItem.rightBarButtonItems ?? [] {
+            guard let button = item.customView as? UIButton else { continue }
+            let active = (button.accessibilityLabel == "桌面面板") == showingDesktop
+            button.tintColor = active ? .white : .label
+            button.backgroundColor = active
+                ? UIColor.systemBlue
+                : UIColor.secondarySystemBackground.withAlphaComponent(0.75)
+        }
+    }
+
+    @objc private func showMobilePanel() { switchPanel(desktop: false) }
+
+    @objc private func showDesktopPanel() { switchPanel(desktop: true) }
+
+    /// 切到指定面板。幂等：重复点当前这一面不重载（原来那个 toggle 会白刷一次页面）。
+    private func switchPanel(desktop: Bool) {
+        guard showingDesktop != desktop else { return }
+        showingDesktop = desktop
+        updatePanelButtons()
+        webView.load(URLRequest(url: desktop ? panelBaseURL : panelBaseURL.appendingPathComponent("m")))
     }
 
     private func reload() {
