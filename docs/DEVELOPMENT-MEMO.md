@@ -2657,3 +2657,40 @@ check-mobile-ui.py --root <repo> → exit 0
 三项本地检查：tsc 0 · build 1,338.79 → 1,338.94 kB · self-check 0。
 
 新增/改动：`components/MobileMessageActions.tsx`（新）、`pages/AssistantPage.tsx`（换用 + 清 import）。
+
+#### 记忆点 · 步骤 51（助手本地图片/文件：手机端本来是完整的；我判错一次，并修掉两处真窄）
+
+**问题**：助手支持发本地图片和文件吗？手机版优化过没有？
+
+**结论（先回答）**：**支持，而且手机端是完整的** ——
+- **图片**：走多模态内容块 `{type:'image_url', image_url:{url}}`（不是自定义字段，模型侧本来就能看见）；
+  上限 6 张 / 单张 10 MiB / 桌面端同口径；超过 1600px 或体积偏大时用 canvas 重编码（webp，**只在更小时才用**）。
+- **文本文件**：读原文 → 每轮请求带「元信息 + 顶层字段 + 前 1200 字符」→ 全文由
+  **`read_attachment` 工具分页读取**；这三件事都在**共享层**（`ui-shared/assistant-files.ts`、
+  `assistant-account-import-tools.ts`），两端同一套。
+
+**★ 我先判错了一次（同类第四次）**：我说「手机端缺 `read_attachment` 工具」——**错**。
+它通过共享工厂注册在 `lib/assistantTools.ts`：`const readAttachment = createAttachmentReadTool(t)`
+并放进 `ASSISTANT_TOOLS`。错因：我搜的是字面量 `read_attachment`，而手机端引用的是**工厂产物** `readAttachment`。
+⇒ 教训再收紧：**共享工厂的产物名 ≠ 工具 id 字符串**；核对「有没有某能力」时要沿**工厂函数名**一起搜。
+
+**但两处「真窄」确实存在，已修（纯手机端）**：
+
+| 问题 | 旧行为 | 现在 |
+|---|---|---|
+| **图片类型被硬限制**（两道：选择器 accept + `prepareImage` 白名单） | 只收 PNG/JPEG/WebP ⇒ **iPhone 默认拍照是 HEIC，用户在手机上根本选不了自己的照片**（桌面端是 `image/*`，所以只在手机端暴露） | 只按 `image/` 前缀判断；解不开的格式给**可读原因**（提示转 JPEG/PNG），而不是一律拒绝 |
+| **文本文件只收 `.json`/`.info`** | `.txt`/`.md`/`.csv`/`.log` 附不上，而底层管线本来就是通用的 | 放宽到 **14 种纯文本扩展名**；二进制仍被两道挡住（扩展名不在表里不收 + `\u0000` 嗅探）；刻意**不含** `.env`/`.pem`/`.key` |
+
+**一处刻意的结构性做法**：`accept` 与判定**同源于一个 `TEXT_FILE_EXTENSIONS` 常量**
+（页面用 `accept={ATTACHMENT_ACCEPT}`，不再硬编码），所以"可选类型"与"实际判定"**结构上不可能漂移** ——
+这类不一致的典型症状是「选了文件却什么都没发生」，很难查。
+
+**★ 检查器自身翻车四次（本轮最花时间的地方）**：我先想用正则比对 accept 取值，
+被 `.map()` 生成式写法骗过；改用构建产物 grep，又被 **minify 把字符串拆开**骗过。
+最后改成**结构性断言**（accept 与判定是否同源同一个常量）——它不依赖取值形态，反而更强。
+**教训**：检查器被生成式/压缩后的代码骗到时，**换断言层次**（结构 > 取值），别在同一层反复调正则。
+
+**遗留（已写进 PLAN §可选）**：**桌面端**文本附件仍只收 `.json`/`.info`（本轮范围是手机端未改）；
+要统一的话，把手机端那张 `TEXT_FILE_EXTENSIONS` 上移到 `ui-shared/assistant-files.ts` 两端共用。
+
+三项检查：tsc 0 · build 1,338.94 → 1,339.23 kB · self-check 0；结构性断言 7/7。

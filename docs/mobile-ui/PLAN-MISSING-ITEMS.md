@@ -326,4 +326,5 @@
 | 路由「画布」可视化 | 桌面端拖拽式画布 | 手机端用列表 + 详情面板 + 预演替代 | 不做（窄屏拖拽体验差） |
 | KukuAI 短信登录 | 桌面端由壳开隐藏窗口发码、读 HttpOnly Cookie | 手机 App 没有这套壳能力 | 需要壳加一条桥（Swift 改动） |
 | 在 App 内打开外部验证页 | 桌面端用桥打开系统浏览器 | Capacitor WebView 忽略 `window.open` | 需要壳加一条 openURL 桥（Swift 改动） |
+| **桌面端文本附件仍只收 `.json` / `.info`** | 桌面 composer 的 accept 是 `image/*,.json,.info,application/json` | 手机端本轮已放宽到 14 种纯文本扩展名（`.txt`/`.md`/`.csv`/`.log`/`.yml`/…），桌面端**未改**（本轮范围是手机端） | 把手机端那套 `TEXT_FILE_EXTENSIONS` 上移到 `ui-shared/assistant-files.ts`，两端共用一张表（现在手机端是本地常量） |
 

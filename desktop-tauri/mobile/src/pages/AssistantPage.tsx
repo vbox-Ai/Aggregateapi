@@ -23,7 +23,7 @@ import { assistantFileContext, formatFileSize, type AssistantTextFile } from '..
 import { AssistantImageResults } from '../../../ui-shared/assistant-image-results'
 import { loadAssistantImage } from '../api/assistant-images'
 import { saveMobileAssistantImage } from '../lib/assistant-image-save'
-import { readMobileAttachments } from '../lib/assistant-attachments'
+import { readMobileAttachments, ATTACHMENT_ACCEPT } from '../lib/assistant-attachments'
 import { serverIdentity } from '../lib/servers'
 import { MobileMessageActions } from '../components/MobileMessageActions'
 import { AssistantTitleSettings } from '../../../ui-shared/assistant-title-settings'
@@ -689,8 +689,9 @@ export function AssistantPage() {
             <span style={{ color: 'var(--m-text-3)', flex: 'none' }}>✕</span>
           </Button>)}
         </div> : null}
-        {textFiles.length ? <div style={{ paddingBottom: 8, fontSize: 10.5, color: 'var(--m-warn)', lineHeight: 1.5 }}>{t('JSON 文件会以文本发送给当前对话模型，其中的凭证也会保存在这条会话里。')}</div> : null}
-        <input ref={fileRef} type='file' hidden multiple accept='image/png,image/jpeg,image/webp,.json,.info,application/json' onChange={event => {
+        {textFiles.length ? <div style={{ paddingBottom: 8, fontSize: 10.5, color: 'var(--m-warn)', lineHeight: 1.5 }}>{t('文本文件会以文本发送给当前对话模型，其中的凭证也会保存在这条会话里。')}</div> : null}
+        {/* accept 与 lib/assistant-attachments 的判定共用同一个常量：不一致会出现"选了却什么都没发生" */}
+        <input ref={fileRef} type='file' hidden multiple accept={ATTACHMENT_ACCEPT} onChange={event => {
           const files = event.currentTarget.files
           if (files) void addAttachments(files)
           event.currentTarget.value = ''
