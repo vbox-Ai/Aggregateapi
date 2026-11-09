@@ -19,6 +19,15 @@ on:
         default: "false"
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+
+# 同一 ref 上只保留最新一次**推送**构建：新提交会自动取消旧提交的构建，
+# 避免多个矩阵同时抢占 macOS runner（发布是 workflow_dispatch，绝不被取消）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: write
@@ -40,6 +49,7 @@ jobs:
     # 一只 deb 都没出）。插件包只是"锦上添花"，拿不到就出不带预置插件的 deb。
     if: ${{ always() && (!inputs.only || inputs.only == 'all' || inputs.only == 'ios' || inputs.only == 'store') }}
     runs-on: macos-15
+    timeout-minutes: 45
     continue-on-error: true
     # deb 里要预置插件包，所以先等插件作业出包（它的产物下载是尽力而为）
     needs: [plugins]
@@ -304,6 +314,7 @@ jobs:
     name: Plugins (iOS packs)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'plugins' || inputs.only == 'store' }}
     runs-on: macos-15
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -471,6 +482,7 @@ jobs:
     name: macOS (dmg)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'macos' }}
     runs-on: macos-15
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -503,6 +515,7 @@ jobs:
     name: Windows (msi/exe)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'windows' }}
     runs-on: windows-latest
+    timeout-minutes: 40
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -548,6 +561,7 @@ jobs:
     name: Linux (AppImage/deb)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'linux' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -586,6 +600,7 @@ jobs:
     name: Android (KSU zip)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'android' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -607,6 +622,7 @@ jobs:
     name: Web (docker + 面板)
     if: ${{ !inputs.only || inputs.only == 'all' || inputs.only == 'web' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -645,6 +661,7 @@ jobs:
     needs: [ios, plugins]
     if: ${{ always() && inputs.publish == 'true' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:

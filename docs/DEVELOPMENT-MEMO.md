@@ -3122,3 +3122,33 @@ build 1,350.61 → 1,397.78 kB（+47 KB 就是这份 27 家配置真被打进去
 （要读电脑上的客户端文件，部分家还要 Windows DPAPI 解密），界面已注明原因并给出替代路径。
 
 **改动**：`pages/add-account-static-sheet.tsx`。
+
+#### 记忆点 · 步骤 63（CI 优化 A 档：取消过期构建 + 文档不触发 + 作业超时）
+
+**背景**：操作者问"是不是编译得太多了"。量化后的结论（都从运行记录里量的）：
+- 仓库是 **public** ⇒ **Actions 分钟不计费**，损失的是**等待时间与排队竞争**，不是钱；
+- 单次 push 会跑满矩阵：iOS 13–23 分、Plugins 3–6 分、**macOS dmg 22–27 分**、Windows 13–21 分、
+  Linux 11–15 分、Web 4–5 分、Android≈跳过 —— **约 25–27 分钟墙钟、5–6 个作业并行**；
+- **2026-11-09 当天共触发 29 次运行**；
+- 实测工作流里 **没有 `concurrency`**（0 处）⇒ 新提交不会取消旧构建 ⇒ run 328–333 同时开跑，
+  白烧还**占住 macOS runner**，这正是那次发布（run 334）的 iOS 作业**排队近 10 分钟**的原因；
+- **没有 `paths` 过滤**（0 处）⇒ 改一行面板 CSS 也要连编 4 个桌面平台。
+
+**顺带纠正一处我自己的错误表述**：上一轮我说"平台作业无条件全跑"是**不准的** —— 它们**都有
+`if: ${{ !inputs.only || inputs.only == 'all' || … }}`**；push 时 `inputs.only` 为空、`!inputs.only`
+成立，所以全跑。B 档（push 只跑 iOS+Plugins）的落点就在这些 `if:` 上，不是新加条件。
+
+**A 档已实施**（`.github/workflows/build.yml`，8 作业超时全部加上）：
+1. `concurrency: group: ${{ github.workflow }}-${{ github.ref }}` +
+   **`cancel-in-progress: ${{ github.event_name == 'push' }}`** —— 关键是**只让 push 互相取消**，
+   手动发布（workflow_dispatch）**绝不被取消**；
+2. `push.paths-ignore: ['docs/**', '**.md']` —— 只改文档/备忘不再触发构建；
+3. 各作业 `timeout-minutes`：macOS 45、Windows 40、其它 30（按 runner 分别给），防止卡死作业白占。
+
+**校验**：环境里没有 PyYAML/js-yaml（两种都试过，实测不在），所以用**结构自查 6 项**代替：
+push 段含 paths-ignore ✓、concurrency 位于 permissions 之前 ✓、cancel-in-progress 只看 push ✓、
+三种超时值都在 ✓。缩进按原文件既有层级写（`push:` 下的键 4 空格、`concurrency:` 键 2 空格、
+`timeout-minutes` 与 `runs-on` 同缩进），改动摘要已逐行核过。**未做**：B 档（push 只跑 iOS+Plugins）
+与 C 档（push 只编译检查不打包）—— 操作者选定"就 A 方案"。
+
+**改动**：`.github/workflows/build.yml`（30,797 → 31,260 字节，备份 build.yml.bak）。
