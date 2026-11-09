@@ -111,3 +111,56 @@ export async function verifyPlanChannel(id: string, signal?: AbortSignal, onPhas
 export function cancelPlanCaptcha(): void {
   captchaApi()?.cancel()
 }
+
+/* ─── 定时领取的「验证任务」（`POST /api/zcode/claim-verification`）─────────
+ *
+ * 上游只有这一个入口，靠 body 里的 `action` 分两个动作（`zcode_claim_verification.rs`）：
+ *   · `poll`     —— 问后端"有没有正在等我验证的任务"，回 `{supported, task}`
+ *   · `complete` —— 把验证结果交回去
+ * 协议是从桌面端 `ui/zcode-claim-verification.js` 逐字对齐来的（那份是权威实现）：
+ *   poll      → { action:'poll', clientId, ready }
+ *   complete  → { action:'complete', clientId, requestId, accountId, planId, status, param?, message? }
+ * 其中 `status` 四态：verified / timeout / cancelled / failed ——
+ * **失败也要回传**，否则后端会一直把同一个任务发给客户端。
+ */
+
+export type ClaimVerificationTask = {
+  requestId?: string
+  accountId?: string
+  planId?: string
+  planName?: string
+  config?: CaptchaConfig
+  remainingMs?: number
+}
+
+export type ClaimVerificationResult = {
+  supported?: boolean
+  task?: ClaimVerificationTask | null
+  accepted?: boolean
+}
+
+export function pollClaimVerification(clientId: string, ready: boolean, signal?: AbortSignal): Promise<ClaimVerificationResult> {
+  return apiCall('/api/zcode/claim-verification', {
+    method: 'POST', body: { action: 'poll', clientId, ready }, signal,
+  })
+}
+
+export function completeClaimVerification(input: {
+  clientId: string
+  requestId: string
+  accountId: string
+  planId: string
+  status: 'verified' | 'timeout' | 'cancelled' | 'failed'
+  param?: string
+  message?: string
+}): Promise<ClaimVerificationResult> {
+  return apiCall('/api/zcode/claim-verification', { method: 'POST', body: { action: 'complete', ...input } })
+}
+
+/** 求解一次验证码、只取令牌（复用主程序的阿里云实现，不新增第二套）。 */
+export async function requestClaimCaptchaToken(
+  config: CaptchaConfig, signal?: AbortSignal, onPhase?: (phase: CaptchaPhase) => void,
+): Promise<{ param: string }> {
+  const captcha = await loadCaptcha()
+  return captcha.requestToken(config, signal, { onPhase })
+}

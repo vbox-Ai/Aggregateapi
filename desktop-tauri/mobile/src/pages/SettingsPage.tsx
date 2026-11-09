@@ -12,6 +12,7 @@ import { AppUpdatePanel } from '../components/AppUpdatePanel'
 import { CommunitySheet } from '../components/CommunitySheet'
 import { SystemInfoSheet } from '../components/SystemInfoSheet'
 import { ChangePasswordSheet } from './change-password-sheet'
+import { fetchPanelAccount, type PanelAccount } from '../api/auth'
 import { BackupRestoreSheet } from './backup-restore-sheet'
 import { ResetLibrarySheet } from './reset-library-sheet'
 import { ConnectionSecuritySheet } from './connection-security-sheet'
@@ -84,9 +85,32 @@ export function SettingsPage() {
   const [supervisor, setSupervisor] = useState<SupervisorStatus | null>(null)
   const [supervisorBusy, setSupervisorBusy] = useState('')
   const [lanBusy, setLanBusy] = useState(false)
+  const [panelAccount, setPanelAccount] = useState<PanelAccount | null>(null)
   const currentLocale = locale()
   const options = localeOptions()
   const identity = serverIdentity()
+
+  /**
+   * 面板账户信息（`GET /api/panel/account`）—— 只读展示「当前是谁 / 是否已注册」。
+   *
+   * 上游注释写明它「只回用户名与『是否由环境变量播种』这类展示信息，**绝不回哈希**」，
+   * 所以这里可以常驻显示。读不到**不报错**：未登录、会话过期、网关不可达都会失败，
+   * 那些情况由页面其他地方负责提示，这里只是少一行展示。
+   */
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const next = await fetchPanelAccount()
+        if (!cancelled && serverIdentity() === identity) setPanelAccount(next)
+      } catch {
+        if (!cancelled && serverIdentity() === identity) setPanelAccount(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [identity])
 
   /** supervisor 状态（网关是否在跑）—— 只读读数，失败不打扰 */
   const loadSupervisor = async () => {
@@ -435,6 +459,25 @@ export function SettingsPage() {
       <div className='m-section'>
         <SectionHead title={t('账号')} />
         <Card className='m-card'>
+          {/* 面板账户（`GET /api/panel/account`）：只读一行，回答「当前是谁」。
+              上游未注册时只回 `{registered:false}`、不用户名；那种情况不渲染这一行。
+              `loginEnabled=false` 表示面板密码登录被环境变量关掉了，要说清楚，
+              否则用户会以为自己密码错了。 */}
+          {panelAccount?.registered ? (
+            <div className='m-row' style={{ cursor: 'default' }}>
+              <span className='m-logo'>
+                <Icon name='shield' />
+              </span>
+              <div className='m-grow'>
+                <div className='m-t1'>{panelAccount.username || t('面板账户')}</div>
+                <div className='m-t2'>
+                  {panelAccount.loginEnabled === false
+                    ? t('面板密码登录已关闭（由环境变量控制）')
+                    : t('当前登录的面板管理员')}
+                </div>
+              </div>
+            </div>
+          ) : null}
           {/* APK 有真正的登录态，给「退出登录」；浏览器端只有 API Key 可清 */}
           {packaged ? (<>
             <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left' onClick={() => setPasswordOpen(true)}>

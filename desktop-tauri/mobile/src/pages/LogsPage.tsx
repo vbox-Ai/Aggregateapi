@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Input, SegmentedControl, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle, Switch , Label, Card } from '@ui'
 import { PageIntro, IconButton, Empty, ErrorNote, SkeletonList } from '../components/ui'
 import { store } from '../state/store'
-import { fetchLogs, downloadLogsFile } from '../api/gateway'
+import { fetchLogs, downloadLogsFile, fetchLogStats, type LogStats } from '../api/gateway'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
 import {
@@ -49,6 +49,7 @@ export function LogsPage() {
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [stats, setStats] = useState<LogStats | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const snapshotRef = useRef<number | undefined>(undefined)
   const seqRef = useRef(0)
@@ -60,6 +61,28 @@ export function LogsPage() {
     const timer = window.setTimeout(() => setSearch(keyword.trim()), 300)
     return () => window.clearTimeout(timer)
   }, [keyword])
+
+  /**
+   * 库内日志总量（`GET /api/logs/stats`）。
+   *
+   * 只取一次、只做展示：页面副标题里的「原始记录 N 条」是**当前筛选的匹配数**，
+   * 容易被读成"库里就这么多"。补一个总量，用户才知道筛选掉了多少。
+   * 读不到就不显示这一段（统计不该影响日志本身的可用性）。
+   */
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const next = await fetchLogStats()
+        if (!cancelled) setStats(next)
+      } catch {
+        if (!cancelled) setStats(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const load = useCallback(async (latest = false, silent = false) => {
     const state = stateRef.current
@@ -195,7 +218,10 @@ export function LogsPage() {
     <div className='m-page m-fixed' ref={pull.bindRef}>
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <div className='m-sticky'>
-        <PageIntro subtitle={data ? t('显示 {groups} 组 · 原始记录 {entries} 条', { groups: totalGroups, entries: Number(data.matched) || 0 }) : undefined}
+        <PageIntro subtitle={data
+          ? t('显示 {groups} 组 · 原始记录 {entries} 条', { groups: totalGroups, entries: Number(data.matched) || 0 })
+            + (stats && stats.total !== undefined ? ` · ${t('库内共 {n} 条', { n: stats.total })}` : '')
+          : undefined}
           actions={<>
             <IconButton name='pause' label={paused ? t('恢复刷新') : t('暂停刷新')} onClick={() => {
               const next = !stateRef.current.paused

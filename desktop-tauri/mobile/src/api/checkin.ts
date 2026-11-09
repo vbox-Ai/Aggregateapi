@@ -68,6 +68,54 @@ export function saveAutoCheckin(enabled: boolean): Promise<AutoState> {
   return apiCall('/api/auto-checkin', { method: 'POST', body: { enabled } })
 }
 
+/**
+ * 立即跑一次自动签到（`POST /api/auto-checkin/run`，处理器 `auto_checkin::run_now`）。
+ *
+ * 上游语义（源码注释写明）：返回体是 `{...summary, state}`——**本次运行摘要**再叠上
+ * **当前开关状态**；若已有一次在执行，则不是 200 而是 **400「签到正在执行中，请稍候」**。
+ * 所以调用方必须把 400 当成"**正在跑**"来提示，而不是当失败抱怨。
+ */
+export function runAutoCheckin(): Promise<CheckinRun & AutoState> {
+  return apiCall('/api/auto-checkin/run', { method: 'POST' })
+}
+
+/**
+ * 积分简报（`GET /api/usage`，处理器 `billing::get_usage`）。
+ *
+ * 形状由插件归一：`{kind, unlimited, totalLeft, planLeft, bonusLeft}` 外加明细与套餐。
+ * 两种非 200 要知道怎么说（上游注释里写明）：
+ *   · **400**：当前没有活动账号会话（「找不到该会话对应的账号记录」）
+ *   · **503**：该提供商的积分查询需要装插件
+ */
+export type CreditsSummary = {
+  kind?: string
+  unlimited?: boolean
+  totalLeft?: number
+  planLeft?: number
+  bonusLeft?: number
+  [key: string]: unknown
+}
+
+export function getCreditsSummary(signal?: AbortSignal): Promise<CreditsSummary> {
+  return apiCall('/api/usage', { signal })
+}
+
+/**
+ * 签到活动状态（`GET /api/checkin/status`，处理器 `billing::checkin_status`）。
+ *
+ * 上游把各版本归一成同一套键（`active` / `todayCheckedIn`），**没有活动或没有数据时
+ * 返回 `null`** —— 调用方要能接受 null，而不是把 null 当错误。
+ */
+export type CheckinActivityStatus = {
+  active?: boolean
+  todayCheckedIn?: boolean
+  [key: string]: unknown
+}
+
+export function getCheckinStatus(signal?: AbortSignal): Promise<CheckinActivityStatus | null> {
+  return apiCall('/api/checkin/status', { signal })
+}
+
 export function saveCheckinSchedule(body: SchedulePatch): Promise<AutoState> {
   return apiCall('/api/checkin-schedules', { method: 'POST', body })
 }

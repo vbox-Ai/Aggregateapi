@@ -286,3 +286,20 @@ export async function logout(): Promise<void> {
 export async function fetchPanelStatus(): Promise<PanelStatus> {
   return apiCall<PanelStatus>('/api/panel/status', { quiet: true })
 }
+
+/**
+ * 当前管理员信息（`GET /api/panel/account`，设置页「账户」用）。
+ *
+ * 字段与桌面端 `PanelAccount` 一致：`registered` / `username` / `loginEnabled`。
+ * 上游注释写明「只回用户名与『是否由环境变量播种』这类展示信息，**绝不回哈希**」，
+ * 所以这里可以安全地在设置页常驻显示。
+ */
+export type PanelAccount = {
+  registered?: boolean
+  username?: string
+  loginEnabled?: boolean
+}
+
+export async function fetchPanelAccount(): Promise<PanelAccount> {
+  return apiCall<PanelAccount>('/api/panel/account', { quiet: true })
+}

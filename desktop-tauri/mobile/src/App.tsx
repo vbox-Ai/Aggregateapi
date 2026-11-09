@@ -32,6 +32,7 @@ import type { ScreenId } from './lib/routes'
 import { NavBar } from './components/NavBar'
 import { t } from './i18n'
 import { RequiredUpdateGate } from './components/RequiredUpdateGate'
+import { ZcodeClaimVerification } from './components/ZcodeClaimVerification'
 
 /**
  * 路由表。
@@ -186,6 +187,9 @@ export function App() {
       <TabBar />
       <Toast />
       <RequiredUpdateGate />
+      {/* ZCode 定时领取的验证任务：后端会把「等着过风控」的任务挂在这里，
+          不主动轮询那次领取就会一直卡住（此前手机端没有这份逻辑）。 */}
+      <ZcodeClaimVerification />
       <AuthGate key={state.serverRevision} />
     </AppFrame>
   )

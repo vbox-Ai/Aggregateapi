@@ -15,7 +15,7 @@
 
 | 类别 | 条数 | 处理态度 |
 |---|---|---|
-| A. 真缺口 | **13** | 要补（本清单 §A）。其中 4 条由 §E 的逐页核对**升格**而来 |
+| A. 真缺口 | **12** | 要补（本清单 §A）。其中 4 条由 §E 的逐页核对**升格**而来，另有 **1 条经复查撤销**（原 A13 工具服务文档，见 §H.2） |
 | B. 真 bug | **1** | 先修（本清单 §B） |
 | C. 平台不适用 | 20 | **不要派活**（§C 给了理由） |
 | D. 已用等价端点实现 | 11 | 不用动（§D） |
@@ -145,15 +145,20 @@
 - 影响：看不到"活动积分/签到活动"这类概览（与"账号额度"不是一回事）
 - 量级：**S**
 
-### A13 工具服务 API 的文档与调试入口（原 E8 升格）
+### ~~A13 工具服务 API 的文档与调试入口~~ —— **复查后撤销**
 - 端点（**接口本身手机上已经在提供**，缺的是"展示与调试"）：
   `POST /api/web-search/search`、`POST /api/web-search/fetch`（以及 `/mcp/*`、`/skill/*`）
 - 桌面入口：`ui-shared/tools-api-doc.ts`、`docs-api-tools.ts`、`docs-api-endpoints.ts`、
   `ui-islands/src/islands/tools-detail.tsx`
 - 手机现状：全树无 `web-search` / `tools-api` / 「工具服务 API」字样；
   `pages/DocsPage.tsx` 是手机端文档页，但没有这一节
-- 影响：网关提供的联网搜索/抓取接口在手机上看不到说明与用法（**能力在，说明书不在**）
-- 量级：**S～M**（纯文档 + 可选一个"试一下"的调试框）
+- ~~影响~~ / ~~量级~~
+- **复查结论（2026-11-09，撤销本条）**：手机端文档页 `pages/DocsPage.tsx` 用的是**共享组件**
+  `ui-shared/docs-api-browser`，而它会调 `apiReferenceSections()` —— 其中已经包含
+  `toolApiSections`（`ui-shared/docs-api-tools.ts` → `tools-api-doc.ts` 那份 Markdown），
+  并且有专门的 `MarkdownArticle` 与「复制文档」按钮。⇒ **手机端本来就有这份文档**。
+- **我当时为什么会判错**：只在 `desktop-tauri/mobile/src` 里搜，而手机端**大量复用 `ui-shared`**。
+  搜不到 ≠ 没有（详见 §H.2 的方法教训）。
 
 ### A14 路由组的「结构性编辑」（原 E10 升格）
 - 端点：`PUT /api/routing/groups`（**载荷的其余字段**）
@@ -234,7 +239,7 @@
 | E5 | 积分简报 / 签到活动状态 | **真缺口 → §A12** | 全树无 `/api/usage`、`/api/checkin/status` |
 | E6 | 模型映射「新增」 | **已实现 → 撤销 A9** | `lib/assistantTools.ts`：`` `/api/models/mappings${action === 'remove' ? '/remove' : ''}` `` |
 | E7 | 账号批量操作 | **已实现** | `/api/accounts/batch` 在 `api/gateway.ts` 与 `pages/AccountsPage.tsx` |
-| E8 | 工具服务 API 文档/调试 | **真缺口 → §A13** | 全树无 `web-search` / `tools-api`；桌面有 `tools-api-doc.ts`、`docs-api-tools.ts` |
+| E8 | 工具服务 API 文档 | **已实现（撤销 A13）** | 手机端复用共享的 `DocumentationBrowser`，它已含 `toolApiSections`；只在 `mobile/src` 里搜会漏掉共享层 |
 | E9 | 助手（子功能） | 主体已实现，子项待比 | 手机 14 个助手相关文件（chat/sessions/images/附件/模型选择/工具/历史）；桌面 39 个（含回放、消息操作等更细能力） |
 | E10 | 路由组结构编辑 | **真缺口（部分）→ §A14** | 手机 `routing-group-edit-sheet.tsx` 只改 组名/说明/成员参与；对外模型 ID、策略、粘性、成员增删、账号范围不可改 |
 | E11 | 设置项字段级 | 转 **M3 调研** | 主要设置项手机端都有对应细粒度端点（`queueMaxWaits`/`retryCount`/`connectTimeoutSeconds`/`promptMode`/`sanitizeFingerprintProviders` 等均已使用）；`/api/config` 是否独占某些项未定论 |
@@ -303,9 +308,24 @@
 
 ## H. 口径提醒
 
+### H.1 端点被引用 ≠ 字段做全
+
 本清单的"有/没有"是**按端点引用**判定的，属于**必要证据但不是充分证据**：
-端点被引用 ≠ 每个字段都做了。§E 列的就是"还没核到字段级"的部分。
-做实现计划时，A 类每条都要走一遍"契约先核对"，不要照抄本清单的字段列表。
+端点被引用 ≠ 每个字段都做了。做实现计划时，A 类每条都要走一遍"契约先核对"，
+不要照抄本清单的字段列表。
+
+### H.2 ★ 搜索范围必须包含共享层（我在这上面判错过两次）
+
+手机端**大量复用** `desktop-tauri/ui-shared` 与 `ui-kit`，所以"在 `mobile/src` 里搜不到"
+**不能**推出"手机上没有"。已经因此判错两次：
+
+| 误判 | 真相 | 教训 |
+|---|---|---|
+| A9 模型映射新增 | `mobile/src/lib/assistantTools.ts` 里有（判错是因为关键词写法） | 关键词要覆盖多种写法 |
+| **A13 工具服务 API 文档** | 手机端文档页用共享的 `DocumentationBrowser`，其中已含工具服务 API 的 Markdown 文档 | **搜索范围要含 `ui-shared` / `ui-kit`** |
+
+⇒ 核对任何一项时，**三处都要搜**：`mobile/src`、`ui-shared`、`ui-kit`。
+（本轮已按此复查全部 A 项：除 A13 撤销外，其余缺口在共享层确实也没有。）
 
 ---
 

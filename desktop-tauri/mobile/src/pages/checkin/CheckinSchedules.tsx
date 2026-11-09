@@ -6,7 +6,7 @@ import {
 import { Empty, SectionHead } from '../../components/ui'
 import { store } from '../../state/store'
 import {
-  deleteCheckinSchedule, runCheckinSchedule, saveAutoCheckin, saveCheckinSchedule,
+  deleteCheckinSchedule, runAutoCheckin, runCheckinSchedule, saveAutoCheckin, saveCheckinSchedule,
   type CheckinCenter, type ScheduleEntry,
 } from '../../api/checkin'
 import { checkinSummary } from '../../lib/checkin'
@@ -41,6 +41,22 @@ export function CheckinSchedules({ center, busy, action }: {
     }
   }
 
+  /**
+   * 立即跑一次（`POST /api/auto-checkin/run`）。
+   *
+   * 与上面每个条目的「跑」不同：那个跑**指定条目**（`/checkin-schedules/{id}/run`），
+   * 这个是把**当前启用的计划**按网关的规矩立刻走一遍 —— 改完配置想马上验证时用。
+   * 若已有一次在执行，网关返回 **400「签到正在执行中，请稍候」**；`action()` 会把
+   * 这句原样提示出来（对用户来说那确实是"请稍候"，不是故障）。
+   */
+  const runAll = async () => {
+    const result = await action('run-all', () => runAutoCheckin())
+    if (result) {
+      const summary = checkinSummary(result)
+      store.toast(summary.text, summary.tone)
+    }
+  }
+
   return (
     <>
       <div className='m-section' style={{ marginTop: 0 }}>
@@ -57,6 +73,10 @@ export function CheckinSchedules({ center, busy, action }: {
           <p className='m-ck-note'>{t('北京时间 · 错过区间会补跑未执行账号，重启保留当天安排；任务在网关执行，关闭手机不影响排程。')}</p>
           <Button size='sm' variant='outline' disabled={Boolean(busy) || !options.length} onClick={() => setEditing('new')}>
             {t('添加条目')}
+          </Button>
+          {/* 立刻验证配置：把当前启用的计划走一遍，不想等下一个时间窗时用 */}
+          <Button size='sm' variant='outline' disabled={Boolean(busy)} onClick={() => void runAll()}>
+            {t('立即执行一次')}
           </Button>
         </Card>
       </div>

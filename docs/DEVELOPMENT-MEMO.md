@@ -2254,3 +2254,47 @@ out/packs/agent2api-web-providers-<pv>-aarch64-unknown-linux-gnu.zip
 | 7 | 前端"验证成功"但服务端"无效" | `altcha::secret()` 不可用时每次随机 | 0005 `OnceLock` + 幂等补写 |
 | 8 | 「网关未响应 3065」 | RootHide 上 plist 写死 `/usr/local/...` | postinst 解 jbroot 并改写 plist |
 | 9 | 「数据库不可用」 | 数据在 jbroot 里 + daemon 以 mobile 跑 | 数据固定 `/var/mobile`；daemon 改 root |
+
+#### 记忆点 · 步骤 41（M0 + M1 落地：备份进度 bug + 五个小项）
+
+**本轮做完的**（按计划 M0 + M1）：
+
+| 编号 | 做了什么 | 契约依据 |
+|---|---|---|
+| **M0** | 修备份恢复进度路径：`/api/backup/restore/progress` → **`/api/backup/progress`**（输出到 `api/backup.ts` 与 `pages/backup-restore-sheet.tsx` 两处，注释一并更正） | 上游 `http.rs` 的 backup 五条路由里**没有** `restore/progress`；处理器是 `backup_api::restore_progress`。此前该请求一直 404，进度条永远停在 0% |
+| **M1.1** | 设置页新增「面板账户」只读行（用户名 / 是否可登录）| 上游 `panel.rs::panel_account`：未注册只回 `{registered:false}`；否则 `{registered:true, username, loginEnabled}`。字段名与桌面端 `PanelAccount` 类型一致 |
+| **M1.2** | 日志页副标题补「库内共 N 条」 | 上游 `logs_api::stats_logs` 序列化 `store.stats()`，桌面端 `LogStats = {lastId?, total?}`；`total` 是库里总量（原来的「原始记录 N 条」只是**当前筛选**的匹配数，容易被读成总量）|
+| **M1.3** | 定时签到页加「立即执行一次」按钮 | 上游 `auto_checkin::run_now`：返回 `{...summary, state}`；**已有一次在执行时返回 400「签到正在执行中，请稍候」**（所以 400 要当"正在跑"提示，不是故障）|
+| **M1.4** | ZCode 定时领取的**验证任务**常驻提示（轮询 + 滑块 + 回传 + 取消）| `zcode_claim_verification.rs` 用 body 的 `action` 分两个动作；协议逐字对齐桌面端 `ui/zcode-claim-verification.js`：poll `{action,clientId,ready}` / complete `{action,clientId,requestId,accountId,planId,status,param?,message?}`，`status` 四态 verified/timeout/cancelled/failed |
+| **M1.5** | 签到「活动福利」段加「积分与活动」卡 | `/api/usage`（`{kind,unlimited,totalLeft,planLeft,bonusLeft}`+明细，400=无活动会话、503=需插件）；`/api/checkin/status`（归一成 `active`/`todayCheckedIn`，**无活动回 null**）|
+
+**验证**（三项本地检查全过）：
+
+```
+pnpm exec tsc --noEmit          → exit 0
+pnpm run build                  → exit 0   mobile.js 1,290.63 → 1,296.80 kB
+check-mobile-ui.py --root <repo> → exit 0
+```
+Rust/Swift 未改动，所以不涉及 CI 第 9/16 步；手机端改动会在 CI 第 14/15 步复核。
+
+**★ 撤销一条：A13「工具服务 API 文档」不是缺口。**
+
+手机端文档页 `pages/DocsPage.tsx` 用的是**共享组件** `ui-shared/docs-api-browser`，
+它内部调 `apiReferenceSections()` —— 其中已含 `toolApiSections`（就是
+`ui-shared/docs-api-tools.ts` → `tools-api-doc.ts` 那份 Markdown，含端点/参数/错误码/示例），
+还有专门的 `MarkdownArticle` 与「复制文档」按钮。**手机端本来就有这份文档。**
+
+**★ 根因是搜索范围，不是关键词**：我只在 `desktop-tauri/mobile/src` 里搜。
+手机端**大量复用 `ui-shared` 与 `ui-kit`**，所以"mobile/src 里搜不到"**推不出**"手机上没有"。
+这已经是第二次同类误判（第一次是 A9 模型映射新增）。
+
+⇒ 已把该教训写进 `MISSING-LIST.md` §H.2：**核对任何一项都要搜三处**
+（`mobile/src`、`ui-shared`、`ui-kit`），并已按此**复查全部 A 项**：
+除 A13 撤销外，其余缺口（短信登录、插件本地安装、请求维护三件套、精简路由、
+`/api/config`、账号限流器配置、路由结构编辑）在共享层确实也没有。
+
+**一条也顺手核实了**：A11 限流器配置在共享层有一个 `limiters` 命中，但那是
+`ui-shared/assistant-read-accounts.ts` 里**给助手工具读**的段（`section==='limiters'`），
+属于"读"，不是"配置界面" ⇒ **A11 仍是真缺口**。
+
+**真缺口总数因此从 13 修正为 12。**

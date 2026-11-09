@@ -327,6 +327,21 @@ export function fetchLogs(params: LogQuery, signal?: AbortSignal): Promise<LogPa
 }
 
 /**
+ * 日志总量读数（`GET /api/logs/stats`，处理器 `logs_api::stats_logs`）。
+ *
+ * 形状来自上游 `store.stats()`（桌面端 `LogStats` 与之一致），只两枚数字：
+ *   · `total`  —— 当前库里的日志条数（用来做概览，替换掉「当前页 N 条」这种误导读数）
+ *   · `lastId` —— 最新一条的自增 id（桌面端用它做「有没有新错误」的水位线）
+ *
+ * 响应里还会附一段词典（`attach_dictionary`），界面不用它，忽略即可。
+ */
+export type LogStats = { total?: number; lastId?: number }
+
+export function fetchLogStats(signal?: AbortSignal): Promise<LogStats> {
+  return apiCall<LogStats>('/api/logs/stats', { signal })
+}
+
+/**
  * 下载网关的**运行日志文件**（`api/logs_api::download_logs`）。
  *
  * 与「导出」的区别（这是两件不同的事，界面上分成两个动作）：

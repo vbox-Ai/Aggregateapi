@@ -93,7 +93,11 @@ export type RestoreProgress = {
 }
 
 export function fetchRestoreProgress(): Promise<RestoreProgress> {
-  return apiCall<RestoreProgress>('/api/backup/restore/progress')
+  // 路径是 `/api/backup/progress`（处理器 `backup_api::restore_progress`）。
+  // 这里曾经写成 `/api/backup/restore/progress` —— 那个路由在网关里**不存在**
+  // （上游 http.rs 的 backup 只有 export/import/progress/download/upload 五条），
+  // 于是恢复进度一直在 404，进度条永远停在 0%。2026-11-09 对照路由表改正。
+  return apiCall<RestoreProgress>('/api/backup/progress')
 }
 
 /** 导出密码规则（与 `archive::validate_password` 对齐：≥12 字、≤1024 字节） */

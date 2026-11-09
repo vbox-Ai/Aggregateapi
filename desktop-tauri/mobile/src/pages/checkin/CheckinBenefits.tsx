@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button , Card } from '@ui'
 import { Badge, Empty, SectionHead } from '../../components/ui'
 import { ProviderLogo } from '../../components/ProviderLogo'
-import { claimOnboarding, getOnboarding, type CheckinCenter, type CheckinSection, type OnboardingEntry, type OnboardingResult } from '../../api/checkin'
+import { claimOnboarding, getCheckinStatus, getCreditsSummary, getOnboarding, type CheckinActivityStatus, type CheckinCenter, type CheckinSection, type CreditsSummary, type OnboardingEntry, type OnboardingResult } from '../../api/checkin'
 import { claimedPlansToday } from '../../lib/checkin'
 import { formatStamp } from '../../lib/format'
 import type { CheckinAction } from '../CheckinPage'
@@ -27,6 +27,7 @@ export function CheckinBenefits({ center, section, busy, action, onChange }: {
         </div> : <Empty text={t('没有支持新手福利的账号')} />}
       </div>
       <div hidden={section !== 'plans'}>
+        <CreditsCard />
         {center.extras?.plans?.length ? <div className='m-section'>
           <SectionHead title={t('活动福利')} />
           <Card className='m-card'>
@@ -56,6 +57,77 @@ export function CheckinBenefits({ center, section, busy, action, onChange }: {
       </div>
       {plan ? <CheckinPlansSheet key={plan.id} entry={plan} onClose={() => setPlanId('')} onChange={onChange} /> : null}
     </>
+  )
+}
+
+/**
+ * 积分简报 + 签到活动状态（`GET /api/usage`、`GET /api/checkin/status`）。
+ *
+ * 这两个读数**都可能取不到**，而且原因各不相同，必须分开说清（不能显示成 0）：
+ *   · `/api/usage` 400 —— 当前没有活动账号会话；503 —— 该提供商要装插件才有积分查询；
+ *   · `/api/checkin/status` 200 但 **null** —— 没有活动 / 没有数据（这不是错误）。
+ *
+ * 放在「活动福利」段里：它与"今天能领什么"是同一件事的两个读数（余额与活动开关）。
+ */
+function CreditsCard() {
+  const [credits, setCredits] = useState<CreditsSummary | null>(null)
+  const [activity, setActivity] = useState<CheckinActivityStatus | null>(null)
+  const [note, setNote] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const [summary, status] = await Promise.allSettled([getCreditsSummary(), getCheckinStatus()])
+      if (cancelled) return
+      if (summary.status === 'fulfilled') setCredits(summary.value)
+      else setNote(summary.reason instanceof Error ? summary.reason.message : String(summary.reason))
+      if (status.status === 'fulfilled') setActivity(status.value)
+      setLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const number = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? String(value) : '—')
+
+  return (
+    <div className='m-section'>
+      <SectionHead title={t('积分与活动')} />
+      <Card className='m-card m-card-pad'>
+        {loading ? (
+          <div className='m-ck-note'>{t('读取中…')}</div>
+        ) : credits ? (
+          <>
+            <div className='m-ck-toolbar'>
+              <div className='m-ck-grow'>
+                <div className='m-ck-title'>{t('剩余积分')}</div>
+                <div className='m-ck-note'>
+                  {credits.unlimited
+                    ? t('该账号积分不限量')
+                    : t('套餐 {plan} · 赠送 {bonus}', { plan: number(credits.planLeft), bonus: number(credits.bonusLeft) })}
+                </div>
+              </div>
+              <Badge tone='brand'>{credits.unlimited ? t('不限量') : number(credits.totalLeft)}</Badge>
+            </div>
+            {activity ? (
+              <div className='m-ck-note'>
+                {activity.active === false
+                  ? t('当前没有进行中的签到活动')
+                  : activity.todayCheckedIn
+                    ? t('签到活动进行中 · 今天已签到')
+                    : t('签到活动进行中 · 今天还没签到')}
+              </div>
+            ) : (
+              <div className='m-ck-note'>{t('读不到签到活动状态')}</div>
+            )}
+          </>
+        ) : (
+          <div className='m-ck-note'>{note || t('读不到积分简报（可能需要给该账号装提供商插件）')}</div>
+        )}
+      </Card>
+    </div>
   )
 }
 
