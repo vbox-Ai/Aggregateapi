@@ -2511,3 +2511,47 @@ pnpm exec tsc --noEmit          → exit 0
 pnpm run build                  → exit 0   mobile.js 1,317.22 → 1,329.46 kB
 check-mobile-ui.py --root <repo> → exit 0
 ```
+
+#### 记忆点 · 步骤 47（M2.7 路由组结构性编辑：模型 ID / 策略 / 粘性 / 成员增删 / 账号范围 / 删除）
+
+**先评估后改**：语义评估单独成文并**先推送**（`docs/mobile-ui/M2.7-ROUTING-EDIT-EVALUATION.md`，
+提交 `fb57bd1`），之后才动代码。这正是评估要回答的问题：改哪些字段会改变**真实转发行为**。
+
+**评估的三条结论（都有源码依据）**
+
+1. **保存后清旧模型的粘性**：`put_group` 里写死
+   `if let Some(old) = old { clear_route_sticky(None, Some(&old.model)); }` ——
+   即使只改了策略，进行中的会话也会重新选号。**必须让用户知道**。
+2. **改「对外模型 ID」= 换入口名**：客户端请求里的 `model` 要跟着改，否则落到别的路由或不匹配。
+3. **有护栏可用**：`POST /api/routing/preview` 是**无副作用**草稿预演 → 保存前先看
+   「会选中谁、谁被挡、为什么」。结构性编辑唯一能"先看后改"的手段。
+
+**实现（`PUT /api/routing/groups`，与 ② 同一接口，这次是加字段）**
+
+- 新增可改：`model`（带显式确认 + 红字提示）、`strategy`/`sticky`（选择器）、
+  成员**增删**、成员的**参与账号**白名单；并新增**删除整组**（`group: null` + revision）。
+- 三条护栏落地：① 草稿从读到的对象**展开**，只覆盖动过的字段；② 面板内可直接**预演草稿**；
+  ③ 改模型 ID 时确认框里明说两句（客户端改名 + 清粘性），另在改动摘要里红字再写一遍。
+- 未知 `strategy`/`sticky` 取值**原样保留**（不让一次编辑把配置改掉）。
+- 账号白名单用 `/api/accounts`（catalog 里没有账号 id，只有 `accountCount`）；
+  「加成员」用 catalog（provider+model 唯一，已存在的自动排除）。
+
+**★ 遗漏复查（按你的要求，每项做完都要查）**
+
+我写了一个对账脚本，把「我写入的键集合 / 载荷键」与**上游结构体**逐字对照，并扫陈旧表述：
+
+| 检查 | 结果 |
+|---|---|
+| 组对象键 = `id,name,model,description,strategy,sticky,members`（展开 + 显式覆盖） | ✅ 逐字一致（`deny_unknown_fields` 多一个键就 400，这条必须过） |
+| 成员对象键 = `id,provider,model,included,accounts` | ✅ 逐字一致 |
+| PUT 载荷 = `{id, group, revision}` / DEL = `{id, revision}` / PREVIEW = `{model, group}` | ✅ 与 `GroupSave`/`Preview` 一致（后者的 profile/global/needs/failFirst 有缺省，不发） |
+| 陈旧表述（"都在桌面端""只做安全子集""路由组（只读）""只读成员增删"） | ⚠️ **查出 3 处矛盾表述 —— 已修**：`routing-groups.tsx` 的模块注释与页面提示仍写着"结构性编辑在桌面端"，`routing-group-edit-sheet.tsx` 的 catalog 注释含糊 |
+| 护栏自检 9 项（模型确认两句 / 预演 / 展开 / 409 / 删除确认 / 未知值保留 / 成员 id 去重 / 已存在成员排除） | ✅ 9/9 |
+| 三项本地检查 | ✅ tsc 0 · build 1,329.46 → 1,337.48 kB · self-check 0 |
+
+**复查脚本自身也修了两次**：第一版用正则截断提取代码块（误报键集合不一致），第二版用括号配对
+但把 JS 简写 `id, provider,` 与 `model: choiceModel` 的值当成键（又误报）——最终改成
+**精确断言源码字面量**。教训：检查器本身也要对齐事实，误报会浪费在追假问题上。
+
+新增/改动：`api/routing.ts`（预览 + 删除辅助）、`pages/routing-group-edit-sheet.tsx`（整份扩展）、
+`pages/routing-groups.tsx`（接线 + 表述更新）、评估文件（未决点归档）。

@@ -19,13 +19,17 @@ import { store } from '../state/store'
 import { RoutingGroupEditSheet } from './routing-group-edit-sheet'
 
 /**
- * 路由组（只读）与选路预演。
+ * 路由组与选路预演。
  *
- * ── 能改什么、不能改什么 ──────────────────────────────────────
+ * ── 能改什么 ──────────────────────────────────────────────────
  * 保存走 `PUT /api/routing/groups`（上游 v3.4.2 就有这条路由，见
  * `api/routing.ts` 的说明 —— 我早前记的「网关没有写路由」是拿旧二进制推的，错的）。
- * 但手机端**只做安全子集**：组名、说明、成员的参与开关。对外模型 ID、策略、粘性，
- * 以及成员本身的增删都留在桌面端 —— 那几项直接影响真实转发，改错代价大。
+ * 手机上可改**整组结构**：组名、说明、对外模型 ID、策略、粘性、成员的增删与参与开关、
+ * 成员的参与账号范围；也可以**删除整组**（`group: null`）。
+ * 那条路带三条护栏（见 `docs/mobile-ui/M2.7-ROUTING-EDIT-EVALUATION.md`）：
+ *  ① 草稿从读到的对象展开、逐字回传（上游 `deny_unknown_fields`，多一个键就 400）；
+ *  ② 保存前可用**无副作用的预演**先看会选中谁；
+ *  ③ 改**对外模型 ID** 时明确告知：客户端要跟着改名字，且保存后会清空旧模型的会话粘性。
  * 旧版网关没有这条路由，所以编辑入口先做**零副作用探测**（`probeRoutingGroupWrite`），
  * 不支持就保持只读并说明原因。
  *
@@ -154,7 +158,7 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
     <div className='m-section'>
       <SectionHead title={t('路由组')} />
       <p className='m-ck-note'>
-        {t('按模型把候选账号分组。手机端可以改组名、说明与成员是否参与；对外模型 ID、策略、粘性以及成员增删在桌面端「路由」画布上改。')}
+        {t('按模型把候选账号分组。可改组名、说明、对外模型 ID、策略与粘性，以及成员的增删、参与开关与参与账号范围；改对外模型 ID 会清空旧模型的会话粘性，客户端也要改用新名字。')}
       </p>
       {error ? <ErrorNote text={error} /> : null}
 
@@ -253,8 +257,14 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
         <RoutingGroupEditSheet<RouteModelChoice>
           group={editing.group}
           revision={editing.revision}
+          catalog={data?.catalog || []}
+          canWrite={writable !== false}
           onClose={() => setEditing(null)}
           onSaved={next => {
+            setData(next)
+            setError('')
+          }}
+          onDeleted={next => {
             setData(next)
             setError('')
           }}

@@ -160,7 +160,7 @@
 - **我当时为什么会判错**：只在 `desktop-tauri/mobile/src` 里搜，而手机端**大量复用 `ui-shared`**。
   搜不到 ≠ 没有（详见 §H.2 的方法教训）。
 
-### A14 路由组的「结构性编辑」（原 E10 升格）
+### A14 路由组的「结构性编辑」（原 E10 升格）—— **✅ 已实现（2026-11-09）**
 - 端点：`PUT /api/routing/groups`（**载荷的其余字段**）
 - 桌面入口：`routing-group-form.tsx`、`routing-member-card.tsx`、`routing-account-order.tsx`、
   `routing-account-sections.ts`（对外模型 ID / 策略 / 粘性 / 成员增删 / 账号范围）

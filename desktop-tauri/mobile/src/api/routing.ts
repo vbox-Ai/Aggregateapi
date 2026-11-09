@@ -234,6 +234,61 @@ export function putRoutingGroup<Catalog = unknown>(payload: {
   return apiCall<RoutingGroupsPayload<Catalog>>('/api/routing/groups', { method: 'PUT', body: payload })
 }
 
+/** 预演里的一行：候选账号或"被挡住的成员" */
+export type RoutingPreviewRow = {
+  id?: string
+  candidateId?: string
+  memberId?: string
+  model?: string
+  name?: string
+  provider?: string
+  providerLabel?: string
+  /** `pickable` / `tried` / …（上游 `PlanEntry::state`） */
+  state?: string
+  reason?: string
+  resetAt?: number
+}
+
+export type RoutingPreview = {
+  model?: string
+  customized?: boolean
+  group?: RoutingGroupBody | null
+  settings?: unknown
+  queue?: {
+    strategy?: string
+    sticky?: string
+    /** 会选中的那一个（`ordered[0]`） */
+    pickedId?: string
+    ordered?: RoutingPreviewRow[]
+    blocked?: RoutingPreviewRow[]
+  }
+}
+
+/**
+ * 草稿预演：`POST /api/routing/preview` —— **无副作用**（上游注释：无副作用的草稿预演）。
+ *
+ * 用途：结构性编辑（改模型 ID / 策略 / 粘性 / 成员）在**保存前**先看一遍
+ * 「现在会选中哪些账号、谁被挡了、为什么」。这是这类改动唯一能"先看后改"的手段。
+ *
+ * ⚠️ 载荷受 `deny_unknown_fields` 约束：只发 `model` 与 `group`。
+ * `profile` / `global` / `needs` / `failFirst` 都有缺省值，不发即可；
+ * 而且 `group.model` 必须与 `model` 一致（大小写不敏感），否则 400。
+ */
+export function previewRoutingGroup(payload: {
+  model: string
+  group?: RoutingGroupBody | null
+}): Promise<RoutingPreview> {
+  return apiCall<RoutingPreview>('/api/routing/preview', { method: 'POST', body: payload })
+}
+
+/** 删除一个路由组：`group: null` + 当前 `revision`（不一致同样 409） */
+export function deleteRoutingGroup<Catalog = unknown>(payload: {
+  id: string
+  revision: string
+}): Promise<RoutingGroupsPayload<Catalog>> {
+  return putRoutingGroup<Catalog>({ id: payload.id, group: null, revision: payload.revision })
+}
+
 /**
  * 探测网关是否支持保存路由组 —— **零副作用**。
  *
