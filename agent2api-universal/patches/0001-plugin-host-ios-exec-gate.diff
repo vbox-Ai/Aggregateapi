@@ -40,8 +40,8 @@ index 3a469d6..7349c1f 100644
      async fn start(self: &Arc<Self>) -> Result<Vec<proto::ProviderInfo>, String> {
          let _serial = self.starting.lock().await;
          if self.closing.load(Ordering::Acquire) { return Err("插件宿主正在关闭".to_string()); }
-@@ -99,6 +130,18 @@ impl Host {
-         }
+@@ -103,6 +134,18 @@ impl Host {
+         if self.options.script { super::script::clear_transport(); }
          *self.inner.lock().await = None;
  
 +        // ── 宿主能力闸门：在 spawn 之前，而不是在 spawn 失败之后 ──────

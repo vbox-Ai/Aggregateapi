@@ -31,9 +31,9 @@ diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.r
 index 40db6e7..fce12a8 100644
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
-@@ -12,8 +12,9 @@ use crate::server::core::update::client::{
+@@ -10,8 +10,9 @@ use crate::server::core::update::client::{
  };
- use crate::server::core::update::{compare_versions, is_prerelease_version, source};
+ use crate::server::core::update::{compare_versions, is_prerelease_version, source, UpdateError};
  
 -pub const INDEX_REPO: &str = "Agent2plugin/Agent2plugin";
 -pub const FALLBACK_REPO: &str = "Agent2Builder/agent2api-providers-releases";

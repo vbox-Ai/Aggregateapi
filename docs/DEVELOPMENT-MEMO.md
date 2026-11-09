@@ -3334,3 +3334,32 @@ build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
 
 **改动**：`agent2api-ios/app/Agent2API/PanelViewController.swift`、
 `desktop-tauri/mobile/src/lib/add-account-static.ts`。
+
+#### 记忆点 · 步骤 70（上游适配：6 个补丁对齐 v3.5.0-beta.1）
+
+**背景**：上游发布了 v3.5.0-beta.1（`main` 仍停在 v3.4.2 的树），CI 按 `ls-remote --tags 'v*'` 取到新 tag
+后，补丁 0004 打不上 ⇒ 构建在「打补丁」这步失败、**不出 deb**（那次发布只产出了插件 zip）。
+
+**适配做法（逐补丁自检，不靠猜）**：环境里**没有 git**，所以我写了一个补丁解析器做自检：
+逐 hunk 取其「上下文 + 删除行」序列，在目标文件里做容错匹配（允许行号偏移）⇒ 精确区分
+「只是挪了位置」与「代码已变必须重写」。过程中修掉我自己工具的两处缺陷：
+① 把「补丁新建的文件」误判为「目标不存在⇒失败」；② 自检读的是镜像副本而非推送树（导致改完仍显失败）。
+
+**逐个结论**：
+- **0001**（iOS 执行闸门）：纯新增的两个 hunk，插入点前新版多了一行
+  `if self.options.script { super::script::clear_transport(); }` ⇒ 只刷新上下文与行号，插入代码一字未改；
+- **0002/0005/0006**：对 v3.5.0-beta.1 **可直接应用**，无需改动；
+- **0003**：`update.rs` 那处只是新版 import 行末尾多了 `, UpdateError` ⇒ 刷新上下文；要改的两个常量
+  （`INDEX_REPO` / `FALLBACK_REPO` → 我们自己的仓库）一字未动；
+- **0004**（自建源免签名）**按新结构重写**：上游把签名判定改成**三态模型**
+  （`install.rs` 的 `SignatureState`：`Unsigned` / `Invalid` / `Verified`），我们原来改的
+  `compatibility.rs` 三个 hunk 的**目标函数已被删除**（该文件从 8996 B 缩到 2022 B，只剩公共接口校验）。
+  新版真正的闸门是：`packages.rs` 的 `if require_signed && signature != Verified { 拒绝 }`，
+  而 `require_signed` 由 `update.rs` 的 `let require_signed = !response.official;` 等三处算出
+  —— 我们自建源在"上游眼里"正是非官方 ⇒ 会被强制要求官方签名 ✗。
+  所以重写为：把那三处钉成 `false`、下载后的完整性校验改为**始终执行但末参传 false**（sha256 与结构照查、
+  不强制验签），并**保留**仍适用的 `policy.rs` hunk（`InstallPolicy::signed()` 返回 false）。
+
+**自检结果：6/6 全部通过**（0001 2/2、0002 3/3、0003 2/2、0004 5/5、0005 1/1、0006 1/1）。
+
+**改动**：`agent2api-universal/patches/{0001,0003,0004}-*.diff`。

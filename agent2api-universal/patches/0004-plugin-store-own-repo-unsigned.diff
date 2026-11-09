@@ -1,40 +1,3 @@
-diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/compatibility.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/compatibility.rs
-index 340b040..d280939 100644
---- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/compatibility.rs
-+++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/compatibility.rs
-@@ -41,8 +41,7 @@ fn cached_asset(state: &task_state::TaskState, id: &str) -> Option<update::PackA
-     let asset: update::PackAsset = serde_json::from_value(state.value.as_ref()?.clone()).ok()?;
-     let minimum = minimum_version(id)?;
-     (matches!(compare_versions(&asset.version, minimum), Some(0 | 1))
--        && asset.name == update::asset_name(id, &asset.version, &super::host_target())
--        && asset.require_signed)
-+        && asset.name == update::asset_name(id, &asset.version, &super::host_target()))
-         .then_some(asset)
- }
- 
-@@ -75,7 +74,7 @@ pub(super) fn update_for(pack: &PackSummary) -> Option<Value> {
-         "checkedAt": state.last_success_at, "retryAt": state.retry_at.max(operation_state.retry_at),
-         "asset": asset.as_ref().map(|asset| json!({
-             "target": super::host_target(), "url": asset.url, "size": asset.size,
--            "current": true, "requireSigned": true,
-+            "current": true, "requireSigned": asset.require_signed,
-         })),
-         "page": asset.as_ref().map(|asset| &asset.page),
-         "prerelease": asset.as_ref().is_some_and(|asset| {
-@@ -97,8 +96,12 @@ async fn find_asset(id: &str) -> Result<update::PackAsset, String> {
-     match update::read_index_result().await {
-         Ok(entries) => {
-             if let Some(entry) = entries.into_iter().find(|entry| entry.id == id) {
-+                // 本构建：自建索引不标 official，仍然允许自动补齐。
-                 if !entry.official {
--                    return Err(format!("插件「{id}」在当前索引中不是官方包，未自动替换"));
-+                    logging::verbose(
-+                        "[Plugin]",
-+                        &format!("插件「{id}」不是官方包，仍按当前索引补齐"),
-+                    );
-                 }
-                 if let Some(remote) = update::read_detail(&entry.manifest).await {
-                     detail = remote;
 diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations/policy.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations/policy.rs
 index 4528273..c106ce7 100644
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations/policy.rs
@@ -52,78 +15,52 @@ index 4528273..c106ce7 100644
  
      pub(super) fn automatic(self) -> bool {
 diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
-index e452b24..c3d36a8 100644
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
-@@ -31,6 +31,18 @@ pub fn asset_name(pack_id: &str, version: &str, target: &str) -> String {
-     format!("{pack_id}-{version}-{target}.zip")
- }
- 
-+/// 索引/清单里的签名要求开关（`require_signed` / `requireSigned`）。
-+///
-+/// 上游用「是不是官方 API 域名」来推断这个值，导致任何自建索引都变成
-+/// 「必须官方签名」。改成读文档字段，缺省为「不要求」。
-+fn require_signed_flag(document: &Value) -> bool {
-+    document
-+        .get("require_signed")
-+        .or_else(|| document.get("requireSigned"))
-+        .and_then(Value::as_bool)
-+        .unwrap_or(false)
-+}
-+
- #[derive(Clone, Debug)]
- pub struct IndexEntry {
-     pub id: String,
-@@ -156,8 +168,9 @@ pub async fn read_index_result() -> Result<Vec<IndexEntry>, String> {
+@@ -110,7 +110,10 @@
              response.status.as_u16()
-         ));
+         )));
      }
 -    let require_signed = !response.official;
++    // 本构建：索引与发布都指向我们自己的仓库（见 INDEX_REPO / FALLBACK_REPO）。
++    // 该源在上游眼里是「非官方」，默认会强制要求 ed25519 验签；而我们的包由自己构建，
++    // 没有官方私钥，所以在**我们自己的源**上不要求签名 —— 完整性仍由 sha256 与结构校验负责。
++    let require_signed = false;
      let document = response.value;
-+    // 本构建：签名要求以索引文档自己声明的为准（自建索引 = 不要求官方签名）。
-+    let require_signed = require_signed_flag(&document);
      let items = document
          .get("plugins")
-         .and_then(Value::as_array)
-@@ -238,7 +251,7 @@ pub async fn read_detail(path: &str) -> Option<PluginDetail> {
+@@ -191,7 +191,7 @@
              .filter(|value| !value.is_empty())
              .unwrap_or_else(|| "{id}-{version}-{target}.zip".to_string()),
          homepage: text(&document, "homepage"),
 -        require_signed: !response.official,
-+        require_signed: require_signed_flag(&document),
++        require_signed: false,
      })
  }
  
-@@ -361,7 +374,12 @@ pub(super) async fn release_for_channels(
-     let custom_tag = detail
-         .map(|detail| detail.tag_template != "v{version}")
-         .unwrap_or(false);
--    let listed = channels.beta || custom_tag;
-+    // 本构建：一律列出 release 再按 tag 模板挑最新版本。
-+    // `/releases/latest` 指向哪个 tag 由发布侧决定；我们把它留给应用快照
-+    // （ios-*），按 latest 解析会让「v{version}」解析失败，目录就显示
-+    // 「当前网关平台暂无插件包」。列全量后按模板匹配，与 latest 脱钩。
-+    let _ = custom_tag;
-+    let listed = true;
-     let response = match query_releases(
-         repo,
-         if listed { "?per_page=100" } else { "/latest" },
-@@ -390,8 +408,7 @@ pub(super) async fn release_for_channels(
+@@ -343,7 +343,7 @@
          let Some(mut assets) = pick_release_assets(release, id, detail) else {
              continue;
          };
 -        assets.require_signed =
 -            !response.official || detail.is_some_and(|detail| detail.require_signed);
-+        assets.require_signed = detail.is_some_and(|detail| detail.require_signed);
++        assets.require_signed = false;
          if !channels.accepts(assets.prerelease) {
              continue;
-         }
-@@ -523,7 +540,7 @@ pub async fn download(
+@@ -467,12 +467,14 @@
          candidate.observe("ok", started.elapsed().as_millis() as u64, false);
          match read_download(response, asset, &mut progress).await {
              Ok(buffer) => {
 -                if asset.require_signed || candidate.source == source::Source::Mirror {
-+                if asset.require_signed {
++                // 本构建：不再要求官方签名（自建源没有官方私钥）。无论来自哪个源，
++                // 这里都做一次完整性校验：sha256 与结构照查，验签不强制（末参 false）。
++                {
                      let verify = buffer.clone();
                      let id = pack_id.clone();
                      let version = asset.version.clone();
+                     let prepared = tokio::task::spawn_blocking(move || {
+-                        super::packages::prepare(&verify, id.as_deref(), Some(&version), true)
++                        super::packages::prepare(&verify, id.as_deref(), Some(&version), false)
+                     })
+                     .await
+                     .map_err(|error| error.to_string())
