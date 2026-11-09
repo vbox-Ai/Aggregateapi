@@ -3382,3 +3382,21 @@ build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
    （嵌套函数里给模块级变量赋值要 `global`，`nonlocal` 绑不上）。
 
 **改动**：`agent2api-universal/patches/0004-plugin-store-own-repo-unsigned.diff`（3528 B，5 个 hunk）。
+
+#### 记忆点 · 步骤 72（顶部悬浮重构漏改一处变量名 ⇒ Swift 编译失败）
+
+**现象**：CI run 350 的 iOS 作业第 16 步「打 IPA + 打包 deb」失败；
+日志原文 `PanelViewController.swift:673:9: error: cannot find 'button' in scope`。
+
+**根因（我的疏漏）**：U16 顶部悬浮重构把切换按钮从 `navigationItem.rightBarButtonItems` 改为
+自己持有的属性 `topPanelButton`，但 `updatePanelButton()` 里**漏改一处**：仍在写
+`button.accessibilityLabel = …` ⇒ 变量不存在、Swift 编译中断 ✗（全文仅此一处悬空，已核实）。
+
+**修法**：改为 `topPanelButton.accessibilityLabel = …`。
+
+**另一个必须记住的坑（我自己的守候脚本判断错误）**：run 350 的**运行级结论是 success**，
+因为 iOS 作业带 `continue-on-error` —— 我的守候只查「run 是否成功」就自动发发布，
+结果产出 `ios-…-b351`：**只有 2 个插件 zip、没有 deb** ✗。
+⇒ 判断"能不能发包"**必须看 iOS 作业的 conclusion，不能看 run 的 conclusion**。
+
+**改动**：`agent2api-ios/app/Agent2API/PanelViewController.swift`（一行）。

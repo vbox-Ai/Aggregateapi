@@ -670,7 +670,7 @@ final class PanelViewController: UIViewController {
     /// 刷新那枚切换按钮：图标与无障碍标签都表示"切过去的那一面"。
     private func updatePanelButton() {
         topPanelButton.setImage(UIImage(systemName: showingDesktop ? "iphone" : "desktopcomputer"), for: .normal)
-        button.accessibilityLabel = showingDesktop ? "手机面板" : "桌面面板"
+        topPanelButton.accessibilityLabel = showingDesktop ? "手机面板" : "桌面面板"
     }
 
     /// 在两面之间切换。图标/胶囊表达的是"另一面"，所以这里取反。
