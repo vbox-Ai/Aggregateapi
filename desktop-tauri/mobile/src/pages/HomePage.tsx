@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { PageHead, IconButton, SectionHead, Empty, ErrorNote, copyWithToast } from '../components/ui'
+import { PageHead, SectionHead, Empty, ErrorNote, copyWithToast } from '../components/ui'
 import { ProviderLogo, GlyphLogo } from '../components/ProviderLogo'
 import { HiddenAccountsNotice } from '../components/HiddenAccountsNotice'
 import { Icon } from '../components/Icon'
@@ -78,13 +78,43 @@ export function HomePage() {
   const recent = requests?.entries || []
   const checkinKey = 'checkin'
 
+  /*
+   * 页头那枚「刷新」按钮。
+   *
+   * ── 为什么原来"点了没反应" ──────────────────────────────────
+   * `store.refresh()` 开头有一条守卫：`if (packaged && !server) return` ——
+   * 打包形态（App / APK）且没选服务器时**直接返回，什么都不做**；而这个按钮
+   * 一直是常驻的。另外刷新过程没有任何可见反馈（按钮不转、也不弹提示），
+   * 所以即使真的刷新了，用户也看不出区别。
+   *
+   * 处理：① **做不到就不显示**（本页本来就有下拉刷新，不会少一个能力）；
+   * ② 刷新中按钮转起来；③ 刷新结束后给一条提示（失败时页面已有 ErrorNote，
+   * 所以只在没出错时提示"已刷新"）。
+   */
+  const canRefresh = !(state.packaged && !state.server)
+  const [refreshAsked, setRefreshAsked] = useState(false)
+  useEffect(() => {
+    if (!refreshAsked || state.loading) return
+    setRefreshAsked(false)
+    if (!state.sessionError) store.toast(t('已刷新'))
+  }, [refreshAsked, state.loading, state.sessionError])
+
   return (
     <div className='m-page' ref={pull.bindRef}>
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <PageHead
         title={t('网关运行中')}
         subtitle={t('{n} 个账号启用 · {m} 个限流中', { n: enabled, m: limited })}
-        actions={<IconButton name='refresh' label={t('刷新')} onClick={() => void store.refresh(true)} />}
+        actions={canRefresh ? (
+          <Button size='icon-touch' variant='outline' type='button' className='m-icon-btn'
+            aria-label={state.loading ? t('刷新中…') : t('刷新')}
+            title={state.loading ? t('刷新中…') : t('刷新')}
+            disabled={state.loading}
+            onClick={() => { setRefreshAsked(true); void store.refresh(true) }}>
+            {/* 复用下拉指示器那套 keyframes，不再另写一段动画 */}
+            <Icon name='refresh' style={state.loading ? { animation: 'm-ptr-rotate .9s linear infinite' } : undefined} />
+          </Button>
+        ) : undefined}
       />
 
       {state.sessionError ? <ErrorNote text={state.sessionError} /> : null}

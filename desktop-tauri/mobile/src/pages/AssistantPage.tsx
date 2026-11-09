@@ -422,6 +422,8 @@ export function AssistantPage() {
     setTitle('')
     sessionRef.current = crypto.randomUUID()
     setHistoryOpen(false)
+    // 清空是纯本地重置，原来没有任何反馈 —— 生效了也看不出来。
+    store.toast(t('已清空当前会话'))
   }
 
   const showSession = (detail: SessionDetail) => {
@@ -536,7 +538,12 @@ export function AssistantPage() {
           onClick={clear}
           disabled={!bubbles.length || busy || checkingModel}
         >
-          <Icon name='refresh' />
+          {/* 原来这里用的是环形箭头（`refresh`）—— 那是"刷新"的造型，而它做的是
+              「清空当前会话」，图标与动作对不上，用户认不出来（真机反馈：右上角
+              那个圆按钮不知道干嘛的、点了也没反应）。换成垃圾桶。
+              另外空会话时它是禁用的，所以"点了没反应"其实是"当前无内容可清空"；
+              清空后现在会弹一条提示（见 clear()），成功也看得见。 */}
+          <Icon name='trash' />
         </Button>
       </div>
 
