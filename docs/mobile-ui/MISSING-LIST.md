@@ -234,13 +234,13 @@
 |---|---|---|---|
 | E1 | 账号限流器配置 | **真缺口 → §A11** | 全树无 `limiter`；网关子路径 `/api/accounts/limiters` 存在但未被调用；桌面有 5 个 limiter 文件 |
 | E2 | 补签 | **已实现**（交互形态与桌面不同） | `api/checkin.ts` 有 `makeup` 类型与「补签轮时刻」；`CheckinRecords.tsx`、`CheckinSchedules.tsx` 都涉及补签 |
-| E3 | 签到计划 extras | 主体已实现，明细待比 | 手机有 `/api/checkin-schedules`（POST / delete / run）；桌面的 `checkin-schedule-extras.tsx` 附加项是否齐需逐字段比 |
+| E3 | 签到计划 extras | **已覆盖（M4 核对完成）** | 手机端 `SchedulePatch` 的字段面**比上游接口注释列的还多**（`timeEnd`/`providerTimes`/`retryTime`/`retryGapMinutes`）；桌面的「附加项」是**保活模型与出行时刻**，手机端接在「地区设置」里（`saveKeepalive` / `saveTravel` / `runTravel` 都有界面入口）——**功能在，落点不同** |
 | E4 | 报表 | **已实现**（维度待比） | 手机用 `/api/stats/summary` + `/api/stats/requests`，并用自绘 `components/MobileReportTrend.tsx` 出图（不用 recharts） |
 | E5 | 积分简报 / 签到活动状态 | **真缺口 → §A12** | 全树无 `/api/usage`、`/api/checkin/status` |
 | E6 | 模型映射「新增」 | **已实现 → 撤销 A9** | `lib/assistantTools.ts`：`` `/api/models/mappings${action === 'remove' ? '/remove' : ''}` `` |
 | E7 | 账号批量操作 | **已实现** | `/api/accounts/batch` 在 `api/gateway.ts` 与 `pages/AccountsPage.tsx` |
 | E8 | 工具服务 API 文档 | **已实现（撤销 A13）** | 手机端复用共享的 `DocumentationBrowser`，它已含 `toolApiSections`；只在 `mobile/src` 里搜会漏掉共享层 |
-| E9 | 助手（子功能） | 主体已实现，子项待比 | 手机 14 个助手相关文件（chat/sessions/images/附件/模型选择/工具/历史）；桌面 39 个（含回放、消息操作等更细能力） |
+| E9 | 助手（子功能） | **端点面完全一致**（M4 核对完成） | 两侧 `/api/assistant/*` 端点集合**逐条相同**（chat/config/images/sessions/fork/title）；回放、分叉、历史、停止生成、删除对话手机端都有。**唯一差异是「消息级操作」**（编辑/删除/重新生成某一条消息）——桌面端有、手机端没有，属**界面取舍**而非能力缺失，已记为可选（见 `PLAN` §可选）。~~桌面 39 个文件~~ 实测是 **21 个**（手机 14 个），当初那个数我记大了 |
 | E10 | 路由组结构编辑 | **真缺口（部分）→ §A14** | 手机 `routing-group-edit-sheet.tsx` 只改 组名/说明/成员参与；对外模型 ID、策略、粘性、成员增删、账号范围不可改 |
 | E11 | 设置项字段级 | 转 **M3 调研** | 主要设置项手机端都有对应细粒度端点（`queueMaxWaits`/`retryCount`/`connectTimeoutSeconds`/`promptMode`/`sanitizeFingerprintProviders` 等均已使用）；`/api/config` 是否独占某些项未定论 |
 | E12 | 请求详情 / 重放 | **已实现** | `/api/stats/requests/raw` + `/api/routing/replays` + `components/RequestRawPanel.tsx` + `pages/routing-replay.tsx` |
