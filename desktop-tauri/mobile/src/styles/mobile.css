@@ -291,3 +291,42 @@ body {
 
 /* 指示器定位基准：原 .m-page 没有 position 声明，这里补一条，不覆盖任何规则 */
 .m-page { position: relative; }
+
+/*
+ * 页头（一级页大标题 + 右侧动作）。
+ *
+ * ── 为什么需要这几条 ──────────────────────────────────────────
+ * `.m-head-actions` 之前**一条规则都没有**：动作区里的按钮（账号页有 5 个）
+ * 会按内容撑开、把左侧标题区压到只剩一个字宽，于是「账号」两个字各占一行、
+ * 副标题也竖排 —— 这正是账号页在窄屏上变形的样子。
+ *
+ * 处理原则：
+ *   · 标题区 `flex: 1 1 0` + `min-width: 0`：允许收缩，但由文字自己决定宽度；
+ *   · 标题/副标题**不换行**（超出用省略号）：一行读得完，比竖排可读；
+ *   · 动作区可**换行**（flex-wrap）：窄屏时按钮排两行，而不是抢标题的宽度。
+ */
+.m-head { align-items: flex-start; gap: 10px; }
+
+.m-head > *:first-child {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.m-head > *:first-child > :first-child,
+.m-head > *:first-child > :last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  /* 动作区最多占 62%：只靠 flex 收缩，标题仍可能被压到只剩省略号。
+     这条给标题一个兜底份额，按钮则改为换行（账号页 5 个按钮会排成两行）。 */
+  max-width: 62%;
+}

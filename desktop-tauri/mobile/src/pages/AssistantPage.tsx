@@ -707,7 +707,24 @@ export function AssistantPage() {
             border: '1px solid var(--m-line-strong)',
           }}
         >
-          <Button variant='ghost' size='icon-touch' aria-label={t('添加图片或文件')} disabled={busy || readingAttachments || checkingModel} onClick={() => fileRef.current?.click()}><Icon name='plus' /></Button>
+          <Button variant='ghost' size='icon-touch' aria-label={t('添加图片或文件')} disabled={busy || readingAttachments || checkingModel} onClick={() => fileRef.current?.click()}
+            style={{
+              // 几何与配色写死：之前依赖共享的 `icon-touch` + ghost 默认色，
+              // 结果在手机上「+」看不见（图标与底色同色/被压缩）。这里给出
+              // 明确的圆形尺寸与可见的前景色，不再受共享默认值影响。
+              width: 34,
+              height: 34,
+              flex: 'none',
+              display: 'grid',
+              placeItems: 'center',
+              padding: 0,
+              borderRadius: '50%',
+              border: '1px solid var(--m-line-strong)',
+              background: 'var(--m-surface-2)',
+              color: 'var(--m-text-2)',
+            }}>
+            <Icon name='plus' style={{ width: 18, height: 18 }} />
+          </Button>
           <Textarea
             ref={inputRef}
             disabled={checkingModel}
@@ -730,11 +747,18 @@ export function AssistantPage() {
             style={{
               flex: 1,
               minWidth: 0,
+              // 高度写死成一行起步、最多 5 行：截图里输入框占了近半屏高，
+              // 原因是高度交给了共享 Textarea 的默认值（它按多行排版）。
+              // 这里显式给出行高与上下限，并左对齐（共享默认曾把它居中）。
+              height: 36,
+              minHeight: 36,
               maxHeight: 120,
-              padding: '6px 0',
+              padding: '7px 0',
               border: 0,
               outline: 'none',
               resize: 'none',
+              textAlign: 'left',
+              appearance: 'none',
               background: 'transparent',
               color: 'var(--m-text)',
               fontSize: 16,
