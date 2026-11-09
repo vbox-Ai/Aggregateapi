@@ -78,20 +78,29 @@ export function TabBar() {
   if (keyboardOpen) return null
   const limited = state.session?.accounts?.accounts?.filter(a => a.enabled && isRateLimited(a)).length || 0
   return (
-    <BottomNavigation className='m-tabbar' aria-label={t('主导航')}>
-      {TABS.map(tab => (
-        <BottomNavigationItem
-          key={tab.id}
-          active={active === tab.id}
-          className='m-tab'
-          onClick={() => store.go(tab.id)}
-        >
-          <Icon name={tab.icon} />
-          <span>{tab.label}</span>
-          {tab.id === 'more' && limited > 0 ? <StatusDot variant='destructive' className='m-dot' /> : null}
-        </BottomNavigationItem>
-      ))}
-    </BottomNavigation>
+    <>
+      {/*
+        胶囊底栏是 `position: fixed`（悬浮形态），已经脱离布局流 —— 没有这个
+        同高的占位块，页面内容会一路排到屏幕底部、被胶囊盖住最后一截。
+        两者必须一起渲染 / 一起不渲染（下面那两个 return null 的分支同样如此），
+        所以它们放在同一个组件里返回。
+      */}
+      <div className='m-tabbar-gap' aria-hidden='true' />
+      <BottomNavigation className='m-tabbar' aria-label={t('主导航')}>
+        {TABS.map(tab => (
+          <BottomNavigationItem
+            key={tab.id}
+            active={active === tab.id}
+            className='m-tab'
+            onClick={() => store.go(tab.id)}
+          >
+            <Icon name={tab.icon} />
+            <span>{tab.label}</span>
+            {tab.id === 'more' && limited > 0 ? <StatusDot variant='destructive' className='m-dot' /> : null}
+          </BottomNavigationItem>
+        ))}
+      </BottomNavigation>
+    </>
   )
 }
 

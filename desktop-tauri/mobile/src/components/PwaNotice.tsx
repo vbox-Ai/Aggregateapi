@@ -1,21 +1,21 @@
 import { useState } from 'react'
-import { Icon } from './Icon'
 import { usePwa } from '../lib/usePwa'
 import { useStore } from '../state/store'
 import { applyUpdate } from '../lib/pwa'
 import { t } from '../i18n'
 import { Alert, Button } from '@ui'
+import { StatusCapsule } from './StatusCapsule'
 
 /**
  * PWA 状态条。
  *
  * 两件事，位置不同：
- *   · **离线**：常驻顶部细条。它解释的是「为什么页面上的数字不动了」，
- *     放在内容上方、一眼能看到，且不抢操作。
+ *   · **离线 / 网关已停止**：顶部状态胶囊（见 StatusCapsule）。它解释的是
+ *     「为什么页面上的数字不动了」，放在内容上方；点开能看到最近的错误日志。
  *   · **有新版本**：底部浮条。它需要一个明确的动作（重启），
  *     放在拇指够得到的地方；同时给「稍后」，不打断当前操作。
  *
- * 两者都是 `.m-app` 的 flex 子项 / 浮层，不遮挡导航：离线条把内容整体
+ * 两者都是 `.m-app` 的 flex 子项 / 浮层，不遮挡导航：胶囊把内容整体
  * 往下推，更新条浮在标签栏之上。
  *
  * 设置页不弹更新浮条：那一页的「应用状态」卡片常驻同样的按钮，
@@ -31,12 +31,12 @@ export function PwaNotice() {
 
   return (
     <>
-      {pwa.offline ? (
-        <Alert variant='warning' className='m-notice-top rounded-none border-x-0 border-t-0' role='status'>
-          <Icon name='alert' />
-          <span>{t('已离线 · 显示的是缓存内容')}</span>
-        </Alert>
-      ) : null}
+      {/*
+        离线 / 网关已停止统一由状态胶囊承载（原来是通栏 `<Alert>`）。
+        两者都描述"网关这条路现在通不通"，分两处显示会出现两条互相打架的提示；
+        胶囊还能点开看日志，比一条只读的横幅有用。
+      */}
+      <StatusCapsule />
 
       {showUpdate ? (
         <Alert className='m-notice-update' role='status'>

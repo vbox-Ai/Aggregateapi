@@ -178,29 +178,22 @@ body {
 
 /* ═══════════ PWA 状态条 ═══════════ */
 
-/* 离线：顶部细条。它自己吃下安全区，页面标题就不再让一次 —— 否则
-   iPhone 独立窗口里会多出一段空白（见 .m-app[data-offline] 下的覆盖）。 */
-.m-notice-top {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: calc(var(--m-safe-t) + 7px) 14px 7px;
-}
-.m-notice-top svg { width: 14px; height: 14px; flex: none; }
-.m-app[data-offline='true'] .m-head { padding-top: 10px; }
-.m-app[data-offline='true'] .m-navbar { padding-top: 8px; }
+/*
+ * 离线提示已改为**状态胶囊**（`.m-capsule`，见下），所以原来的通栏细条
+ * （`.m-notice-top`）与它配套的三条 `data-offline` 内边距覆盖一并删除。
+ *
+ * 为什么必须一起删：那三条覆盖的前提是"顶部有一条通栏、它自己吃掉了安全区，
+ * 所以页面标题不用再让一次"。胶囊是在流里的、自带外边距、不再吃安全区 ——
+ * 留着覆盖会让标题反而被胶囊挤住（少一段留白）。
+ */
 
 /*
  * AI 助手页的紧凑页头。
  *
  * 它是手写的（对话页要省纵向空间，不能用 26px 大标题的 .m-head），所以
- * 安全区得自己补。离线通知条出现时它已经占掉了 safe-t，这里退回 10px，
- * 与上面 .m-head / .m-navbar 的覆盖同口径 —— 否则刘海机型会多一条空白。
+ * 安全区得自己补。
  */
 .m-assistant-head { padding: calc(var(--m-safe-t) + 10px) 14px 10px; }
-.m-app[data-offline='true'] .m-assistant-head { padding-top: 10px; }
 
 /* 有新版本：浮在标签栏之上的胶囊条，拇指够得到 */
 .m-notice-update {
@@ -329,4 +322,137 @@ body {
   /* 动作区最多占 62%：只靠 flex 收缩，标题仍可能被压到只剩省略号。
      这条给标题一个兜底份额，按钮则改为换行（账号页 5 个按钮会排成两行）。 */
   max-width: 62%;
+}
+
+/*
+ * 悬浮胶囊底栏。
+ *
+ * ── 为什么不能只把 .m-tabbar 改成 fixed ────────────────────────
+ * 它原本是 `.m-app` 的 flex 子项（`flex: none`），自己占一条高度，
+ * 所以滚动容器不用留底部内边距。改成 fixed 之后它**脱离布局流**，
+ * 内容会一直排到屏幕最底下、被胶囊盖住最后一截。
+ * 所以配一个同高的占位块（`.m-tabbar-gap`）留在流里 —— 视觉上是悬浮，
+ * 布局上仍然"占位"，两边的滚动条都不用改。
+ *
+ * 胶囊本身的形态：左右各留 12px、离底部安全区 8px、整圆角 + 阴影 + 半透明毛玻璃，
+ * 去掉原来的通栏上边框（那是"贴在屏幕底边"的形态，与悬浮胶囊冲突）。
+ */
+.m-tabbar-gap {
+  flex: none;
+  height: calc(var(--m-tabbar-h) + var(--m-safe-b) + 8px);
+}
+
+/* 选择器带 `.m-app` 前缀：`.m-tabbar` 在共享 ui-kit 的样式表里也有同名规则，
+   同权重时胜负取决于两个样式表的导入顺序。加一层前缀把权重抬上去，
+   这样"悬浮形态"不依赖导入顺序（改顺序不该把底栏形态改回去）。 */
+.m-app .m-tabbar {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--m-safe-b) + 8px);
+  z-index: 30;
+  display: flex;
+  align-items: stretch;
+  height: var(--m-tabbar-h);
+  padding: 5px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--m-surface) 86%, transparent);
+  backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16), 0 0 0 1px var(--m-line);
+}
+
+/* 选中项：胶囊内的一枚实心药丸（悬浮底栏的通行做法，比换图标颜色更明确） */
+.m-app .m-tabbar .m-tab[data-active] {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--m-primary) 14%, transparent);
+  color: var(--m-primary);
+}
+
+.m-app .m-tabbar .m-tab {
+  border-radius: 999px;
+}
+
+/*
+ * 状态胶囊（离线 / 网关已停止）。
+ *
+ * 与悬浮底栏同一套视觉语言：整圆角 + 细描边 + 同色系半透明底，
+ * 宽度由内容决定、左右留 12px，不再像原来那样拉满整行。
+ * 颜色只承担一件事：**这一条属于哪种状态**。
+ */
+.m-capsule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.m-capsule svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.m-capsule-more {
+  margin-left: auto;
+  font-size: 11.5px;
+  opacity: 0.8;
+}
+
+.m-capsule-warn {
+  background: color-mix(in srgb, var(--m-warn) 16%, transparent);
+  border-color: color-mix(in srgb, var(--m-warn) 38%, transparent);
+  color: var(--m-warn);
+}
+
+.m-capsule-danger {
+  background: color-mix(in srgb, var(--m-danger) 16%, transparent);
+  border-color: color-mix(in srgb, var(--m-danger) 38%, transparent);
+  color: var(--m-danger);
+}
+
+/* 出错小日志窗的内容排版 */
+.m-logbox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.m-logline {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.m-logtime {
+  flex: none;
+  color: var(--m-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.m-logtext {
+  min-width: 0;
+  word-break: break-word;
+  color: var(--m-text);
+}
+
+.m-logsep {
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--m-text-3);
+}
+
+.m-logempty {
+  font-size: 12px;
+  color: var(--m-text-3);
 }
