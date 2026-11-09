@@ -2354,3 +2354,43 @@ pnpm run build                  → exit 0   mobile.js 1,296.80 → 1,303.35 kB
 check-mobile-ui.py --root <repo> → exit 0
 ```
 未改 Rust/Swift ⇒ 不涉及 CI 第 9/16 步。
+
+#### 记忆点 · 步骤 43（M2.2 请求记录维护三件套：预览 / 清理 / 压缩）
+
+**做成了什么**：请求页头部多一个垃圾桶按钮 → 维护面板：
+预览（命中明细 / 含报文原文 / 库占用 / 上次压缩）→ 选清理方式（全部删除 / 仅清空报文原文）
+→ 输入「删除」两个字确认 → 执行；面板里另有独立的「压缩数据库」入口。
+
+**★ 这一项的关键是"别把不可恢复的操作做错"**，所以契约核到字段级：
+
+| 接口 | 语义（上游注释原文口径） |
+|---|---|
+| `GET /api/stats/requests/filters` | `{models:[…], providers:[{id,label}]}`，候选来自**明细里实际出现过的值**（已删除账号的 provider 也能筛到） |
+| `GET /api/stats/requests/clear-preview` | `all`=命中明细行数、`raw`=两侧报文按 ID 去重的请求数、`upstreamRaw`/`downstreamRaw`=各侧行数、`dbBytes`=**全库**占用（不按筛选）、`vacuumRunning`/`lastVacuum` |
+| `DELETE /api/stats/requests?mode=raw\|all` | `raw` 只清报文原文（保留明细与日报）；`all` 连明细一起删，**无筛选时连日报归零**；返回 `{deleted, raw, upstreamRaw, downstreamRaw}` |
+| `POST /api/stats/requests/compact` | 后台 VACUUM，只表示受理：`{success,started:true}` / 已在跑 409 / 库不可用 500 |
+
+**两条上游护栏原样照搬，没有绕开**：
+
+1. **无筛选时必须显式带 `all=1`**（上游：「未指定筛选条件：要清空全部请求数据请显式带 all=1」）。
+   桌面端做法是 `hasFilters ? 筛选 : all=1`，手机上同样。判定我写成**偏向保守**：
+   只要可能算筛选就不加 `all=1` —— 那样最多被上游 400（安全失败），而不会静默全删。
+   判据按上游 `FilterPlan` 的实际条件取：`model`/`provider`/`client`/`apiKey`/
+   `productionOnly`/`completedOnly`/`status`/`startDate`/`endDate`。
+2. **预览与执行共用同一份筛选**：`filter_from_params` 读的键与列表**同名**，
+   日期是 `date_bounds` 读的 `startDate`/`endDate`（与列表完全一致）——
+   所以手机上直接把列表当前的筛选对象传给两边，"预览说删 N 条"就是"删掉的那 N 条"。
+
+**安全设计**：危险确认沿用手机端既有先例（`reset-library-sheet` 的「输入两个字确认」
++ destructive 按钮）；确认按钮的措辞按模式给出**具体数字**（「永久删除 N 条请求记录」
+/「永久删除 N 条记录的报文原文」）；压缩是单独入口，明写"只回收磁盘、不删数据"。
+
+**新增/改动**：`api/request-maintenance.ts`（新）、`pages/requests-maintenance-sheet.tsx`（新）、
+`pages/RequestsPage.tsx`（加入口 + 传当前筛选）。
+
+**验证**：
+```
+pnpm exec tsc --noEmit          → exit 0
+pnpm run build                  → exit 0   mobile.js 1,303.35 → 1,309.78 kB
+check-mobile-ui.py --root <repo> → exit 0
+```

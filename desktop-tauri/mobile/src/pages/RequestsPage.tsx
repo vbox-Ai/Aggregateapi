@@ -14,6 +14,7 @@ import { t } from '../i18n'
 import { MetricGrid, MetricCard } from '@ui'
 import { DateRangeFilter } from '../components/DateRangeFilter'
 import { RequestRawPanel } from '../components/RequestRawPanel'
+import { RequestsMaintenanceSheet } from './requests-maintenance-sheet'
 import { DebugTrafficPanel } from '../components/DebugTrafficPanel'
 import { requestApiKeyLabel, requestClientLabel } from '../../../ui-shared/model-api-key'
 import { ClientIdentificationDetail } from '../../../ui-shared/client-identification-detail'
@@ -52,6 +53,7 @@ export function RequestsPage() {
   const [detail, setDetail] = useState<RequestRow | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [maintenance, setMaintenance] = useState(false)
   const routeParamsRef = useRef(route.params)
   const queryKeyRef = useRef('')
   const seqRef = useRef(0)
@@ -161,6 +163,7 @@ export function RequestsPage() {
         <PageIntro
           actions={<>
             <IconButton name='refresh' label={t('刷新')} onClick={() => void load()} />
+            <IconButton name='trash' label={t('清理请求记录')} onClick={() => setMaintenance(true)} />
             <Button variant='outline' size='sm' disabled={exporting || !rows.length} onClick={() => void exportRows()}>
               {exporting ? t('导出中…') : t('导出')}
             </Button>
@@ -215,6 +218,11 @@ export function RequestsPage() {
       </div>
 
       <RequestSheet row={detail} onClose={() => setDetail(null)} />
+      {maintenance ? <RequestsMaintenanceSheet
+        query={queryRef.current}
+        onClose={() => setMaintenance(false)}
+        onCleared={() => void load()}
+      /> : null}
     </div>
   )
 }

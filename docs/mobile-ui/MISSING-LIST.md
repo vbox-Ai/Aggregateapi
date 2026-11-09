@@ -63,7 +63,7 @@
 - 影响：看不到"各类日志条数/占用"这类概览
 - 量级：**S**
 
-### A4 请求记录维护三件套
+### A4 请求记录维护三件套 —— **✅ 已实现（2026-11-09）**
 - 端点：`GET /api/stats/requests/filters`、`GET /api/stats/requests/clear-preview`、`POST /api/stats/requests/compact`
 - 桌面入口：请求页「清理」弹窗（`request-clear-modal.tsx`）
 - 手机现状：有 `GET /api/stats/requests`、`/raw`、`POST /api/stats/requests/terminate`，**没有清理与压实**
