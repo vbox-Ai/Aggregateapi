@@ -412,7 +412,12 @@ export function AssistantPage() {
   }
 
   const clear = () => {
-    if (busy || checkingModelRef.current) return
+    // 按钮不再因为"空会话"禁用（那正是"点了没反应"的来源），所以这里必须把
+    // 不能执行的原因说出来，而不是静默返回。
+    if (busy || checkingModelRef.current) {
+      store.toast(t('正在生成回答，先点停止再开新会话'), 'warn')
+      return
+    }
     setBubbles([])
     setDraft('')
     setAttachments([])
@@ -422,8 +427,8 @@ export function AssistantPage() {
     setTitle('')
     sessionRef.current = crypto.randomUUID()
     setHistoryOpen(false)
-    // 清空是纯本地重置，原来没有任何反馈 —— 生效了也看不出来。
-    store.toast(t('已清空当前会话'))
+    // 这一步换的是会话本身（新会话），原来没有任何反馈 —— 生效了也看不出来。
+    store.toast(t('已开始新会话'))
   }
 
   const showSession = (detail: SessionDetail) => {
@@ -534,16 +539,19 @@ export function AssistantPage() {
         <Button size='icon-touch' variant='outline'
           type='button'
           className='m-icon-btn'
-          aria-label={t('清空')}
+          aria-label={t('新会话')}
+          title={t('新会话')}
           onClick={clear}
-          disabled={!bubbles.length || busy || checkingModel}
         >
-          {/* 原来这里用的是环形箭头（`refresh`）—— 那是"刷新"的造型，而它做的是
-              「清空当前会话」，图标与动作对不上，用户认不出来（真机反馈：右上角
-              那个圆按钮不知道干嘛的、点了也没反应）。换成垃圾桶。
-              另外空会话时它是禁用的，所以"点了没反应"其实是"当前无内容可清空"；
-              清空后现在会弹一条提示（见 clear()），成功也看得见。 */}
-          <Icon name='trash' />
+          {/*
+            这一枚的动作是 `clear()` —— 它会换一个新的会话 id 并清空当前上下文，
+            也就是「新会话」。之前用的是环形箭头（refresh）图标 + "清空"的叫法，
+            与桌面面板左侧那颗「新会话」按钮对不上，用户认不出来（真机反馈：
+            「左边侧边新会话的按键功能也没有」）。改成加号 +「新会话」。
+            注意这里**不再因为空会话而禁用**：新会话本来就允许在空会话上按，
+            按下没反应会让人以为是坏的；提示语会说明已开始新会话。
+          */}
+          <Icon name='plus' />
         </Button>
       </div>
 
@@ -830,6 +838,10 @@ export function AssistantPage() {
         }} />
       <AssistantSettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} config={config}
         busy={busy || checkingModel}
+        modelLabel={effectiveModel ? ellipsisMiddle(effectiveModel, 36) : ''}
+        keyLabel={selectedKey ? modelApiKeyLabel(selectedKey) : ''}
+        onOpenModel={() => { setSettingsOpen(false); setPickerOpen(true) }}
+        onOpenKey={() => { setSettingsOpen(false); setKeyPickerOpen(true); void keyState.refresh().catch(() => {}) }}
         onSave={async (next, message) => {
           try {
             // 与标题设置/Key 选择同一条保存路径：拿服务端回读的那份覆盖本地，

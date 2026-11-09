@@ -43,12 +43,18 @@ function kindLabel(kind: string): string {
   return t('改动 · 默认需要确认')
 }
 
-export function AssistantSettingsSheet({ open, onOpenChange, config, busy, onSave }: {
+export function AssistantSettingsSheet({ open, onOpenChange, config, busy, onSave, modelLabel, keyLabel, onOpenModel, onOpenKey }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   config: AssistantConfig | null
   busy?: boolean
   onSave: (next: AssistantConfig, message: string) => Promise<void>
+  /** 当前对话模型（只用于展示；点这一行会打开页面上已有的模型选择器） */
+  modelLabel?: string
+  /** 当前 API Key（同上，点这一行打开 Key 选择器） */
+  keyLabel?: string
+  onOpenModel?: () => void
+  onOpenKey?: () => void
 }) {
   const [promptOpen, setPromptOpen] = useState(false)
   const [promptDraft, setPromptDraft] = useState(config?.systemPrompt || '')
@@ -86,6 +92,42 @@ export function AssistantSettingsSheet({ open, onOpenChange, config, busy, onSav
         <SheetContent showCloseButton>
           <SheetHeader><SheetTitle>{t('助手设置')}</SheetTitle></SheetHeader>
           <SheetBody>
+            {/*
+              「默认行为」最上面两条（对接桌面抽屉的同一块）：模型与 API Key。
+              手机端这两件事本来就有各自的弹层（输入区的模型选择器 / Key 选择器），
+              所以这里**不再做第二套**，而是把入口收进来 —— 用户对照桌面端时不会
+              觉得"少了两项"，也不必先回到输入区才能改。
+            */}
+            <div className='m-sec'>{t('默认行为')}</div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Button size='default' variant='ghost' type='button'
+                className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left'
+                disabled={Boolean(busy)}
+                onClick={() => { onOpenKey?.() }}>
+                <span className='m-logo'><Icon name='key' /></span>
+                <div className='m-grow' style={{ minWidth: 0 }}>
+                  <div className='m-t1'>{t('API Key')}</div>
+                  <div className='m-t2' style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {keyLabel || t('选择 API Key…')}
+                  </div>
+                </div>
+                <span className='m-chev'><Icon name='chev' /></span>
+              </Button>
+              <Button size='default' variant='ghost' type='button'
+                className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left'
+                disabled={Boolean(busy)}
+                onClick={() => { onOpenModel?.() }}>
+                <span className='m-logo'><Icon name='model' /></span>
+                <div className='m-grow' style={{ minWidth: 0 }}>
+                  <div className='m-t1'>{t('模型')}</div>
+                  <div className='m-t2' style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {modelLabel || t('选择对话模型')}
+                  </div>
+                </div>
+                <span className='m-chev'><Icon name='chev' /></span>
+              </Button>
+            </div>
+
             {/* ── 思考等级 ── */}
             <div className='m-sec'>{t('思考等级')}</div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>

@@ -88,6 +88,8 @@ final class PanelViewController: UIViewController {
     }
 
     private var healthTimer: Timer?
+    /// 状态胶囊的自动收起定时器（见 scheduleStatusAutoHide）
+    private var statusHideTimer: Timer?
     private var startedEmbedded = false
 
     /// Supervisor 控制口（不占 3065；网关由 supervisor 按 App 前后台启停）
@@ -138,6 +140,7 @@ final class PanelViewController: UIViewController {
 
     deinit {
         healthTimer?.invalidate()
+        statusHideTimer?.invalidate()
         heartbeatTimer?.invalidate()
         for observer in appObservers {
             NotificationCenter.default.removeObserver(observer)
@@ -240,7 +243,10 @@ final class PanelViewController: UIViewController {
         statusLabel.numberOfLines = 1
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.textColor = .black
-        statusLabel.onText = { [weak self] text in self?.applyTone(for: text) }
+        statusLabel.onText = { [weak self] text in
+            self?.applyTone(for: text)
+            self?.scheduleStatusAutoHide()
+        }
         statusBar.addSubview(statusLabel)
 
         retryButton.translatesAutoresizingMaskIntoConstraints = false
@@ -294,6 +300,9 @@ final class PanelViewController: UIViewController {
 
     /// 点状态胶囊：把完整诊断串放进一个小窗（可重试、可关闭）
     @objc private func onStatusTap() {
+        // 用户点它就是因为还想看 —— 取消自动隐藏，别刚打开就消失
+        statusHideTimer?.invalidate()
+        statusHideTimer = nil
         let text = statusLabel.text ?? ""
         let alert = UIAlertController(
             title: "运行日志",
@@ -303,6 +312,22 @@ final class PanelViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "重试", style: .default) { [weak self] _ in self?.onRetry() })
         alert.addAction(UIAlertAction(title: "关闭", style: .cancel))
         present(alert, animated: true)
+    }
+
+    /// 状态胶囊几秒后自动收起。
+    ///
+    /// 真机反馈：胶囊一旦出现就**一直挂着**（网关正常时也在最上面占一条），
+    /// 希望它像提示条一样看几秒就消失。所以每次状态文本变化都重排一次定时器：
+    /// 新的状态会重新显示并重新计时（`statusLabel.text` 的赋值点本来就会
+    /// `isHidden = false`），到点就收起。
+    ///
+    /// 刻意不做"错误时永久保留"：那正好是用户要避免的"一直显示"。需要回看时
+    /// 对应的动作（切换面板、重试、下拉）都会重新触发状态，胶囊会再出现一次。
+    private func scheduleStatusAutoHide() {
+        statusHideTimer?.invalidate()
+        statusHideTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
+            self?.statusBar.isHidden = true
+        }
     }
 
     // MARK: - 面板自检（网关起来了但页面空白时，告诉我们是 404 还是空响应）
