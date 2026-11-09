@@ -2298,3 +2298,59 @@ Rust/Swift 未改动，所以不涉及 CI 第 9/16 步；手机端改动会在 C
 属于"读"，不是"配置界面" ⇒ **A11 仍是真缺口**。
 
 **真缺口总数因此从 13 修正为 12。**
+
+#### 记忆点 · 步骤 42（M2.1 短信登录落地：AutoClaw 国内版 / Loomy / Tabbit）
+
+**为什么这一项重要**：AutoClaw 国内版与 Loomy 的账号体系**没有网页授权码** ——
+官方客户端唯一的自助入口就是手机号 + 验证码。手机端此前只有「网页登录」与
+「粘贴凭证」，这两家就都加不进来（而它们恰好是国内用户最常用的）。
+
+**做成了什么**：账号页多一个入口「手机验证码登录」→ 选提供商 → 填号 → 发码 →
+填码（可带备注名）→「登录并添加」；成功后账号直接落库（响应与 `POST /api/accounts`
+同形，走「已添加」收尾：关面板 + 刷新列表）。
+
+**★ 契约先核对救了一次**：`provider` 必须传 **`autoclaw`**，**不是 `workbuddy`**。
+`workbuddy` 只是 `login_start` 的缺省值；通用发码端点按 `provider` 决定地区
+（`autoclaw` / `autoclaw-intl`），传别家 id 会被**明确拒绝**
+（上游 issue #93 的教训：以前「未知值也落国内版」，代价是把 Loomy 的号码静默
+发去 AutoClaw 站点、还回成功响应）。若照抄默认值，这条链路第一次点就会 400。
+
+**三家档案（逐条对齐桌面端 `ui/sms-login.js`，不自己发明）**
+
+| 家 | 发码 | 登录 | 中间态字段 | 手机号规则 |
+|---|---|---|---|---|
+| AutoClaw 国内版 | `POST /api/session/login/sms/send` | `POST /api/session/login/sms/verify` | `deviceId` | `1[2-9]` 11 位 |
+| Loomy | `.../login/loomy/sms/send` | `.../login/loomy/sms/verify` | `msgid` | `1[3-9]` 11 位 |
+| Tabbit 国内站 | `.../login/tabbit/sms/send` | `.../login/tabbit/sms/verify` | `uuid` | `1[2-9]` 11 位 |
+
+发码载荷固定带 `supportsCaptcha: true`（不带的话网关回 409 而不是 200+captcha 状态）；
+被风控拦下时上游回 `{status:'captcha', captcha:{verifyUrl, message}}`，**重发要沿用
+那一轮的 uuid**（否则上游当成另一次会话，刚过的验证对不上）。
+
+**手机端两处「有意不同」**
+
+1. **KukuAI 不做**：它的发码必须在官方页面里点（风控签名只有页面能生成），桌面端是
+   壳开隐藏窗口自动填号、再读 **HttpOnly** Cookie 交回（`login/kuku/complete`）。
+   手机 App 没有这套壳能力 ⇒ 归入平台不适用，硬做只会得到一条点不通的路。
+2. **Tabbit 滑块验证页不自动开**：App 的 WebView **不支持 `window.open`**
+   （`lib/community.ts` 里写明 Capacitor 会忽略它），同窗跳转又会把面板顶掉。
+   所以给「复制验证页地址」让人用浏览器打开，滑完回来点「已完成验证，继续发送」
+   —— 与桌面端打不开窗口时的兜底同一形态。**要在 App 内直接打开需要壳加一个
+   openURL 桥（Swift 改动）**，记为可选后续项。
+
+**保留的桌面端行为**：发码与登录共用一把锁（不能并点）；**冷却 60 秒且成功/失败
+都进冷却**（「过于频繁」那种失败正是最该冷却的，60 是官方桌面端写死在客户端的
+口径，不是猜的）；**改手机号 = 换一轮登录**（清掉中间态与风控会话）；验证码 6 位、
+手机号按家正则，先在界面挡一次。
+
+**新增/改动文件**：`api/sms-login.ts`（新）、`pages/sms-login-sheet.tsx`（新）、
+`pages/AccountsPage.tsx`（加入口）。
+
+**验证**：
+
+```
+pnpm exec tsc --noEmit          → exit 0
+pnpm run build                  → exit 0   mobile.js 1,296.80 → 1,303.35 kB
+check-mobile-ui.py --root <repo> → exit 0
+```
+未改 Rust/Swift ⇒ 不涉及 CI 第 9/16 步。

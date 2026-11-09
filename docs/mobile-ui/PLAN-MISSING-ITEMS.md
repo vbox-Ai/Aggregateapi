@@ -144,7 +144,7 @@
 
 ## M2 · 中项（逐项推送）
 
-### M2.1 短信验证码登录 ★本计划最大一项
+### M2.1 短信验证码登录 ★本计划最大一项—— **✅ 已实现（2026-11-09）**
 | 项 | 内容 |
 |---|---|
 | 契约核对（必读） | ① `api/session.rs::login_methods` — 登录方式清单与字段（界面据此渲染输入框）<br>② `session.rs::login_start` — `methodIndex` + `inputs` 的统一入口<br>③ `session.rs::{login_sms_send, login_sms_verify}` — 通用短信；body `{provider, phone}` / `{provider, phone, code, name, id, deviceId, accounts}`<br>④ Tabbit：`login_tabbit_sms_{send,verify}`；Loomy：`login_loomy_sms_{send,verify}`（`{phone}` / `{phone, code, msgid, id, name, accounts}`）<br>⑤ `login_kuku_complete`、`login_oauth_captcha_config`<br>⑥ 桌面参考实现：`ui-islands/src/islands/add-account-kit.tsx`、`add-provider-tabbit.ts`、`add-account-dynamic-fields.ts`、`add-account-bridge.ts` |

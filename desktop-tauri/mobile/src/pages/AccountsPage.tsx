@@ -6,6 +6,7 @@ import { HiddenAccountsNotice } from '../components/HiddenAccountsNotice'
 import { Icon } from '../components/Icon'
 import { AccountSheet } from './AccountSheet'
 import { DynamicProviderSheet } from './add-account-dynamic-sheet'
+import { SmsLoginSheet } from './sms-login-sheet'
 import { AccountImportSheet } from './account-import-sheet'
 import {
   AccountsFilterSheet,
@@ -61,6 +62,7 @@ export function AccountsPage() {
   const [query, setQuery] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [smsAdding, setSmsAdding] = useState(false)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
   /** 批量选择：开启后每行出现勾选框，底部出现批量操作条 */
@@ -316,6 +318,7 @@ export function AccountsPage() {
         actions={
           <>
             <Button variant='outline' size='sm' onClick={() => setAdding(true)}>{t('添加账号')}</Button>
+            <Button variant='outline' size='sm' onClick={() => setSmsAdding(true)}>{t('手机验证码登录')}</Button>
             <Button variant='outline' size='sm' onClick={() => setImporting(true)}>{t('导入凭证')}</Button>
             <Button variant='outline' size='sm'
               disabled={Boolean(batchBusy) || selectedIds.size === 0}
@@ -487,6 +490,14 @@ export function AccountsPage() {
         setAdding(false)
         void load()
       }} /> : null}
+      {smsAdding ? <SmsLoginSheet
+        providers={state.session?.accounts?.providers || []}
+        onClose={() => setSmsAdding(false)}
+        onAdded={() => {
+          setSmsAdding(false)
+          void load()
+        }}
+      /> : null}
       {importing ? <AccountImportSheet
         providers={state.session?.accounts?.providers || []}
         onClose={() => setImporting(false)}

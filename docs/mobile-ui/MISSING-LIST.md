@@ -30,7 +30,7 @@
 
 每条格式：**端点/参数 → 桌面入口 → 手机现状 → 证据 → 影响 → 量级**。
 
-### A1 短信验证码登录
+### A1 短信验证码登录—— **✅ 已实现（2026-11-09）**
 - 端点：
   - `POST /api/session/login/sms/send` — body `{ provider, phone }`
   - `POST /api/session/login/sms/verify` — body `{ provider, phone, code, name, id, deviceId, accounts }`
