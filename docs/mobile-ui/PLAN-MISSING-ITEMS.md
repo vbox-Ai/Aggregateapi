@@ -201,6 +201,8 @@
 | 量级 | **M** |
 
 ### M2.7 路由组的「结构性编辑」（由 E10 升格）
+
+> ⚠️ **动手前先读语义评估**：[`M2.7-ROUTING-EDIT-EVALUATION.md`](./M2.7-ROUTING-EDIT-EVALUATION.md)（2026-11-09 已写完并先推送，之后才改代码）。
 | 项 | 内容 |
 |---|---|
 | 契约核对（**先评估再动手**） | `PUT /api/routing/groups` 的完整载荷（`RoutingGroup` 是 `deny_unknown_fields`）；桌面 `routing-group-form.tsx`、`routing-member-card.tsx`、`routing-account-order.tsx` 的字段与校验；特别要看**改 `model` / `strategy` / `sticky` 会不会影响请求匹配与 sticky 状态** |
