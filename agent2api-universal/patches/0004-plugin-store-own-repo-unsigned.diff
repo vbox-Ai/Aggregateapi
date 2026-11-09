@@ -24,7 +24,7 @@ diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.r
 -    let require_signed = !response.official;
 +    // 本构建：索引与发布都指向我们自己的仓库（见 INDEX_REPO / FALLBACK_REPO）。
 +    // 该源在上游眼里是「非官方」，默认会强制要求 ed25519 验签；而我们的包由自己构建，
-+    // 没有官方私钥，所以在**我们自己的源**上不要求签名 —— 完整性仍由 sha256 与结构校验负责。
++    // 没有官方私钥，所以在我们自己的源上不要求签名 —— 完整性仍由 sha256 与结构校验负责。
 +    let require_signed = false;
      let document = response.value;
      let items = document
@@ -38,7 +38,7 @@ diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.r
      })
  }
  
-@@ -343,7 +343,7 @@
+@@ -343,8 +343,7 @@
          let Some(mut assets) = pick_release_assets(release, id, detail) else {
              continue;
          };
@@ -47,6 +47,7 @@ diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.r
 +        assets.require_signed = false;
          if !channels.accepts(assets.prerelease) {
              continue;
+         }
 @@ -467,12 +467,14 @@
          candidate.observe("ok", started.elapsed().as_millis() as u64, false);
          match read_download(response, asset, &mut progress).await {
