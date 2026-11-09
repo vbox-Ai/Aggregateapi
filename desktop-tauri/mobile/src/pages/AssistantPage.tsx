@@ -4,6 +4,7 @@ import { MarkdownLite } from '../components/MarkdownLite'
 import { Button, Textarea, Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody, confirmDialog } from '@ui'
 import { store } from '../state/store'
 import { AssistantModelPicker } from '../components/AssistantModelPicker'
+import { AssistantSettingsSheet } from '../components/AssistantSettingsSheet'
 import { useAssistantModels, unavailableModelMessage } from '../lib/assistant-models'
 import { selectedModel } from '../../../ui-shared/assistant-models'
 import {
@@ -79,6 +80,7 @@ export function AssistantPage() {
   const [historyBusy, setHistoryBusy] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [titleSettingsOpen, setTitleSettingsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [config, setConfig] = useState<AssistantConfig | null>(null)
   const keyState = useModelApiKeys(() => apiCall('/api/model-access/keys'))
   const selectedKey = keyState.keys.find(key => key.id === config?.apiKeyId)
@@ -521,6 +523,15 @@ export function AssistantPage() {
         <Button size='icon-touch' variant='outline'
           type='button'
           className='m-icon-btn'
+          aria-label={t('助手设置')}
+          title={t('助手设置')}
+          onClick={() => setSettingsOpen(true)}
+        >
+          <Icon name='settings' />
+        </Button>
+        <Button size='icon-touch' variant='outline'
+          type='button'
+          className='m-icon-btn'
           aria-label={t('清空')}
           onClick={clear}
           disabled={!bubbles.length || busy || checkingModel}
@@ -809,6 +820,18 @@ export function AssistantPage() {
         models={models.map(item => item.name)} disabled={!config} t={t} onSave={async (titleModel, titlePrompt) => {
           if (!config) return
           setConfig(await saveAssistantTitleConfig(config, titleModel, titlePrompt))
+        }} />
+      <AssistantSettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} config={config}
+        busy={busy || checkingModel}
+        onSave={async (next, message) => {
+          try {
+            // 与标题设置/Key 选择同一条保存路径：拿服务端回读的那份覆盖本地，
+            // 输入区胶囊（模型 / 档位）读的就是同一份配置，改完立刻反映。
+            setConfig(await saveAssistantConfig(next))
+            store.toast(message)
+          } catch (failure) {
+            store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+          }
         }} />
       <Sheet open={keyPickerOpen} onOpenChange={setKeyPickerOpen}>
         <SheetContent side='bottom'>
