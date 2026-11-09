@@ -87,7 +87,7 @@
 - 影响：面板里看不到"当前是谁"，改密码页也缺上下文
 - 量级：**S**（只读接口 + 一张卡）
 
-### A7 原始配置读写（`/api/config`）
+### A7 原始配置读写（`/api/config`）—— **✅ 调研完成 + 唯一需要的一项已实现（2026-11-09）**
 - 端点：`GET|POST|PUT /api/config`
 - 桌面入口：设置页若干高级项（`settings-model.ts`、`settings-state.ts`）
 - 手机现状：手机端把设置**拆成细粒度端点**已覆盖大部分（`/api/queue`、`/api/retry`、`/api/timeouts`、

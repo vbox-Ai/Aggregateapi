@@ -13,6 +13,7 @@ import { CommunitySheet } from '../components/CommunitySheet'
 import { SystemInfoSheet } from '../components/SystemInfoSheet'
 import { ChangePasswordSheet } from './change-password-sheet'
 import { fetchPanelAccount, type PanelAccount } from '../api/auth'
+import { fetchGatewayConfig, saveGatewayLocale } from '../api/config'
 import { BackupRestoreSheet } from './backup-restore-sheet'
 import { ResetLibrarySheet } from './reset-library-sheet'
 import { ConnectionSecuritySheet } from './connection-security-sheet'
@@ -86,6 +87,8 @@ export function SettingsPage() {
   const [supervisorBusy, setSupervisorBusy] = useState('')
   const [lanBusy, setLanBusy] = useState(false)
   const [panelAccount, setPanelAccount] = useState<PanelAccount | null>(null)
+  const [gatewayLocale, setGatewayLocale] = useState('')
+  const [localeBusy, setLocaleBusy] = useState(false)
   const currentLocale = locale()
   const options = localeOptions()
   const identity = serverIdentity()
@@ -111,6 +114,46 @@ export function SettingsPage() {
       cancelled = true
     }
   }, [identity])
+
+  /**
+   * 网关的「计费语言」（`GET /api/config` 的 `locale`）。
+   *
+   * 与界面语言**不是**一件事：界面语言只改这台手机上的文案，这个决定网关
+   * （插件侧）返回的积分/计费文案用哪种语言。读不到就不渲染可选状态
+   * （下拉显示"读取中…"并禁用），而不是拿界面语言冒充它。
+   */
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const next = await fetchGatewayConfig()
+        if (!cancelled && serverIdentity() === identity) setGatewayLocale(String(next?.locale || ''))
+      } catch {
+        if (!cancelled && serverIdentity() === identity) setGatewayLocale('')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [identity])
+
+  const changeGatewayLocale = async (value: string) => {
+    if (localeBusy || !value) return
+    setLocaleBusy(true)
+    try {
+      const next = await saveGatewayLocale(value)
+      if (serverIdentity() !== identity) return
+      // 以后端回读为准（它会把真正落盘的值回给我们）
+      setGatewayLocale(String(next?.locale || value))
+      store.toast(t('计费语言已更新'))
+    } catch (failure) {
+      if (serverIdentity() === identity) {
+        store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+      }
+    } finally {
+      if (serverIdentity() === identity) setLocaleBusy(false)
+    }
+  }
 
   /** supervisor 状态（网关是否在跑）—— 只读读数，失败不打扰 */
   const loadSupervisor = async () => {
@@ -329,6 +372,33 @@ export function SettingsPage() {
               </SelectTrigger>
               <SelectContent>
                 {options.map(item => <SelectItem key={item.code} value={item.code}>{item.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          {/* 网关自己的「计费语言」：与上面的界面语言是两件事 —— 那个只影响这台手机上的界面，
+              这个决定网关（插件侧）返回的积分/计费文案用哪种语言。见 api/config.ts 的说明。 */}
+          <div className='m-row'>
+            <span className='m-logo'>
+              <Icon name='globe' />
+            </span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('计费语言')}</div>
+              <div className='m-t2'>{t('网关返回的积分 / 计费文案用哪种语言')}</div>
+            </div>
+            <Select value={gatewayLocale || ''} disabled={!gatewayLocale || localeBusy}
+              onValueChange={value => void changeGatewayLocale(String(value))}>
+              <SelectTrigger aria-label={t('计费语言')} className='w-auto shrink-0'>
+                <SelectValue>
+                  {gatewayLocale
+                    ? options.find(item => item.code === gatewayLocale)?.label || gatewayLocale
+                    : t('读取中…')}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {options.map(item => <SelectItem key={item.code} value={item.code}>{item.label}</SelectItem>)}
+                {/* 网关上的值若不在界面语言清单里，原样列出，别让它显示成空白 */}
+                {gatewayLocale && !options.some(item => item.code === gatewayLocale)
+                  ? <SelectItem value={gatewayLocale}>{gatewayLocale}</SelectItem> : null}
               </SelectContent>
             </Select>
           </div>
