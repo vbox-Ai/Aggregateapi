@@ -190,7 +190,7 @@
   `` `/api/models/mappings${action === 'remove' ? '/remove' : ''}` `` ——
   **非 remove 时就是 POST `/api/models/mappings`（新增）**，新增与删除都已有 |
 
-### M2.6 账号限流器配置（由 E1 升格）
+### M2.6 账号限流器配置（由 E1 升格）—— **✅ 已实现（2026-11-09）**
 | 项 | 内容 |
 |---|---|
 | 契约核对 | 上游 `api/accounts.rs` 里 `limiters` 子路径的**载荷结构与语义**（整表替换？稀疏更新？按账号还是按"账号×模型"）；桌面 `accounts-limiter-types.ts`（`LimiterGroup` / `LimiterCondition` / `LimiterWindow` 等类型定义最权威） |

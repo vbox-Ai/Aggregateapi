@@ -18,6 +18,8 @@ import {
   type UsageRow,
 } from '../api/gateway'
 import { AccountImportSheet } from './account-import-sheet'
+import { AccountLimiterSheet } from './account-limiter-sheet'
+import { groupsOf, type LimiterAccountFields } from '../lib/limiter'
 import { downloadJson, dateStamp, safeFileName } from '../lib/download'
 import { accountName, activeLimits, formatExpiry, formatRelative, formatStamp, isRateLimited } from '../lib/format'
 import { expiryOf, hasExpiry, isLongLivedCredential, supportsUsage } from '../lib/providerFacts'
@@ -54,6 +56,7 @@ export function AccountSheet({
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [reimportOpen, setReimportOpen] = useState(false)
+  const [limiterOpen, setLimiterOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const open = Boolean(account)
   const accountId = account?.id || ''
@@ -163,6 +166,21 @@ export function AccountSheet({
     if (!account) return
     await run('promote', () => promoteAccount(account.id), t('已设为首选'))
   }
+
+  /**
+   * 限流规则的一句话摘要。
+   *
+   * 规则可能来自新格式 `limiterGroups`，也可能是旧记录的 `limiters` ——
+   * `groupsOf` 会把后者换算成同一形状（与桌面端同一套换算），所以这里不关心
+   * 它来自哪种。没有规则时说"未设置"，而不是显示 0 组（0 组和没读过是两回事）。
+   */
+  const limiterGroups = account ? groupsOf(account as Account & LimiterAccountFields, (account as Account & LimiterAccountFields).limiters || []) : []
+  const enabledGroups = limiterGroups.filter(group => group.enabled)
+  const limiterSummary = !account
+    ? ''
+    : enabledGroups.length === 0
+      ? t('未设置（点开可添加）')
+      : t('{n} 组生效中的规则', { n: enabledGroups.length })
 
   /** 导出这个账号的凭证文件（.json），可在原客户端或另一台网关上再导入 */
   const exportThis = async () => {
@@ -369,6 +387,19 @@ export function AccountSheet({
                 </span>
               </Button>
 
+              <Button size='touch' variant='outline'
+                type='button'
+                className='m-btn m-ghost w-full'
+                disabled={Boolean(busy)}
+                onClick={() => setLimiterOpen(true)}
+                style={{ flexDirection: 'column', gap: 2, height: 'auto', padding: '10px 16px' }}
+              >
+                <span>{t('限流规则')}</span>
+                <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--m-text-3)' }}>
+                  {limiterSummary}
+                </span>
+              </Button>
+
               <div className='m-rows'>
                 <div className='m-row'>
                   <span className='m-k'>{t('账号 ID')}</span>
@@ -548,6 +579,13 @@ export function AccountSheet({
             onChanged()
             onClose()
           }}
+        />
+      ) : null}
+      {limiterOpen && account ? (
+        <AccountLimiterSheet
+          account={account}
+          onClose={() => setLimiterOpen(false)}
+          onChanged={onChanged}
         />
       ) : null}
     </Sheet>

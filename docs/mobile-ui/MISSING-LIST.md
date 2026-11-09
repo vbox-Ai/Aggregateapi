@@ -126,7 +126,7 @@
 - 影响：zcode 领取流程里少一步校验（该流程是否在手机上完整，需一并核对）
 - 量级：**S**（但要看它和 A1 的短信/验证码链路是否耦合）
 
-### A11 账号限流器配置（原 E1 升格）
+### A11 账号限流器配置（原 E1 升格）—— **✅ 已实现（2026-11-09）**
 - 端点：`/api/accounts/limiters`（**是 `/api/accounts/{*rest}` 的子路径**；上游 `api/accounts.rs` 的
   分派键里有 `limiters` / `concurrency` / `usageQuery`）
 - 桌面入口：`accounts-limiter-{types,model,condition,status}.tsx` + `accounts-dialog-limiter.tsx`

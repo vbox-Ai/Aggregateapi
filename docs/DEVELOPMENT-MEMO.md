@@ -2468,3 +2468,46 @@ pnpm exec tsc --noEmit          → exit 0
 pnpm run build                  → exit 0   mobile.js 1,315.71 → 1,317.22 kB
 check-mobile-ui.py --root <repo> → exit 0
 ```
+
+#### 记忆点 · 步骤 46（M2.6 账号限流器配置）
+
+**做成了什么**：账号详情页多一个「限流规则」入口（副标题显示"几组生效中"）→
+编辑面板：规则组（启用 / 动作 跳过|停用 / 范围 整个账号|仅列出的模型）+
+每组多条条件（与前一条的关系 与|或 / 额度来源 / 模型范围 / 指标 / 比较 / 阈值 /
+统计窗口）+ 命中读数 + 增删；保存写回账号。
+
+**契约（上游 `store_crud.rs` / `store_view.rs` / `accounts_batch.rs`）**
+
+- **读**：规则就在账号记录里 —— `limiterGroups`（新，权威）/ `limiters`（旧）。
+  账号列表与快照都带着它，**不需要为读规则单独打接口**。
+  旧格式用桌面端同一套换算（`groupsOf`）转成新形状。
+- **写**：`PATCH /api/accounts/{id}` body `{limiterGroups:[…]}` —— 与改备注名同一条路
+  （`store_crud.rs`：`patch.get("limiterGroups")` → `record.set("limiterGroups", next)`）。
+  两个键同时出现时**新的胜出**；PATCH 只改传进去的键，账号其它字段不受影响。
+- **实时读数**在 `GET /api/accounts/usage/snapshot`：`limiterStates`（命中与读数）、
+  `quotaSources`（额度来源）、`limiterModels`（按 provider 的模型清单）。
+  只读记录表、不打上游；手机端**早就有**这个接口（`fetchUsageSnapshot`），
+  只是 `UsageSnapshot` 类型当初没写这三个键 —— 所以这里显式断言而不是乱改公共类型。
+
+**两条不破坏数据的做法**
+
+1. **改字段用展开**（`{...condition, threshold}`）：`condition.source` 是一整份额度来源
+   快照，界面不认识它的全部字段、也不需要认识 —— 展开能原样带回去（round-trip 安全）。
+2. **保存整组**：`limiterGroups` 是整块替换，所以面板始终持有完整草稿，不做增量提交。
+
+**范围界定（有意的，不是砍功能）**：手机端 `AccountSheet` 原本写着"账号的凭证、
+代理、限流规则都是多字段表单，编辑仍回桌面端"。这一项把**限流规则**单独做出来，
+因为它最常被临时改（账号被上游限了就让它先跳过）；**凭证/代理仍留桌面端**。
+条件字段与桌面端一一对应，标签/描述文案从 `accounts-limiter-model.ts` 移植
+（`lib/limiter.ts`，同一批中文作为 i18n key）；若将来那份上移到 `ui-shared`，
+手机端应改为 import。
+
+新增/改动：`lib/limiter.ts`（新，移植只读换算）、`api/limiter.ts`（新，写入口）、
+`pages/account-limiter-sheet.tsx`（新，编辑器）、`pages/AccountSheet.tsx`（入口 + 摘要）。
+
+**验证**：
+```
+pnpm exec tsc --noEmit          → exit 0
+pnpm run build                  → exit 0   mobile.js 1,317.22 → 1,329.46 kB
+check-mobile-ui.py --root <repo> → exit 0
+```
