@@ -3053,3 +3053,43 @@ build 1,350.61 → 1,397.78 kB（+47 KB 就是这份 27 家配置真被打进去
 
 **改动**：`lib/add-account-static.ts`（新）、`pages/add-account-static-sheet.tsx`（新）、
 `pages/add-account-dynamic-sheet.tsx`（501 回落）。
+
+#### 记忆点 · 步骤 61（U9：手机端实现「网页登录 / OAuth」+ 复查抓出的四处遗漏）
+
+**用户要求**：「网页登录」也要实现，否则有些平台根本没法用（不能缺）。
+
+**关键查证：手机端**能做**，不需要动 Swift。**
+桌面端把这步交给壳（`workbuddyDesktop.startLogin`），是因为它要开**内嵌窗口**并捕获 Cookie；
+但**网关侧是一条普通 HTTP 流程**：
+  1. `POST /api/session/login/oauth/start` → `{state, authUrl}`（路由表与处理器都核过）；
+  2. 官方页完成登录 → 回调到 `127.0.0.1:<端口>`；
+  3. `GET /api/session/login/wait?state=` → `{pending?, done?, error?, session:{accountId}}`。
+**第 2 步在手机上同样成立**：打开官方页的是**手机自己的浏览器**，回调打到的 `127.0.0.1` 就是
+**手机自己的本机网关** —— 与桌面端**网页面板**（无壳）走的是同一条路（配置注释写明网页端那一级
+「整季收起，用 webHint 说明唯一那条路（在新标签页中打开）」）。**OAuth 与网页登录共用同一套端点**，
+所以一段代码覆盖两者。
+
+**实现**：新增 `api/web-login.ts`（启动）+ `pages/add-account-static-sheet.tsx` 里的登录分段：
+尽力 `window.open`、**同时把地址显示出来并给「复制链接」**（Capacitor WebView 忽略 window.open，
+与 Tabbit 短信同一个坑）、「再打开一次」、「我已完成」（立即查）、**每 3 秒轮询**（上限 100 次 = 5 分钟）、
+「取消」（调 `cancelDynamicLogin`），以及**兜底**「粘贴回调地址」→ `/api/session/login/callback`。
+
+**★ 复查抓出的四处真遗漏（都改了）**
+1. **轮询竞态**：3 秒一跳的长循环里，关窗后仍会对已卸载组件 `setState` → 加 `mountedRef` 守卫；
+2. **`oauth` 分段没渲染**：若某家只声明 oauth，面板会空着 → 与网页登录合并成同一段（同端点）；
+3. **`sms` 没渲染**：改为指引到账号页已有的「手机验证码登录」（不重复做第二套）；
+4. **`guest` 没渲染**：智谱清言的访客模式手机端确实没接入 → **如实写明**并指向可用替代
+   （手填 / 导入凭证 / 网页登录）。
+
+**仍存在的真实空缺（如实记）**：`guest`（一键换发访客凭证）手机端未接入 —— 它需要一个我尚未
+核到契约的端点；界面上已说明，不静默缺失。
+
+**复查结果**：边界条件 **7/7**（轮询上限、取消判据、取消调网关、启动记录 state、空地址报错、
+回调兜底、卸载守卫）✅；分段覆盖 **7/7**（manual / file / web / oauth / sms / guest / blocked 都有落点）✅。
+三项检查：tsc 0 · build 1,401.19 → 1,402.26 kB · self-check 0。
+
+**推送范围核对**：仓库 HEAD 与本地比对的待推清单里，`docs/mobile-ui/DEPTH-GAP.md` 与
+`ROUTING-GAP.md` 是**旧源码树的残留**（早前合并文档时已从仓库删除）——**刻意不推**，
+避免把已删文档又带回去。
+
+**改动**：`api/web-login.ts`（新）、`pages/add-account-static-sheet.tsx`、`lib/add-account-static.ts`。

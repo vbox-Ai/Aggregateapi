@@ -96,7 +96,14 @@ export type SectionPlan = {
   sms: boolean
   oauth: boolean
   guest: boolean
-  /** 桌面壳专有、手机端不渲染的分段及其原因 */
+  /**
+   * 网页登录（官方页面登录）。**手机端能做** —— 见 `api/web-login.ts`：
+   * 网关侧是一条普通 HTTP 流程，且回调地址指向 `127.0.0.1`，打开官方页的是手机自己的
+   * 浏览器、回到的也是手机自己的本机网关。桌面端之所以交给壳，是因为它要开**内嵌窗口**
+   * 并捕获 Cookie；手机端不需要内嵌窗口，改用"打开/复制链接 + 轮询结果"。
+   */
+  web: boolean
+  /** 手机端**真做不到**的分段及其原因（界面会写出来，不静默隐藏） */
   blocked: { id: string; label: string; reason: string }[]
 }
 
@@ -110,18 +117,11 @@ export type SectionPlan = {
 export function planSections(config: ProviderConfig, region: string): SectionPlan {
   const methods = methodsOf(config, region)
   const blocked: SectionPlan['blocked'] = []
-  if (methods.includes('web')) {
-    blocked.push({
-      id: 'web',
-      label: config.webLogin?.button || '网页登录',
-      reason: '网页登录需要桌面壳的内嵌窗口，手机端没有这条桥。可以改用手填凭证或导入凭证文件。',
-    })
-  }
   if (methods.includes('desktop')) {
     blocked.push({
       id: 'desktop',
       label: '读取本机客户端登录态',
-      reason: '这一步要读电脑上客户端的登录态文件（部分家还要 Windows DPAPI 解密），手机上做不到。可以用手填凭证或导入凭证文件。',
+      reason: '这一步要读电脑上客户端的登录态文件（部分家还要 Windows DPAPI 解密），手机上做不到。可以用手填凭证、导入凭证文件，或下面的网页登录。',
     })
   }
   return {
@@ -130,6 +130,7 @@ export function planSections(config: ProviderConfig, region: string): SectionPla
     sms: methods.includes('sms'),
     oauth: methods.includes('oauth'),
     guest: methods.includes('guest'),
+    web: methods.includes('web'),
     blocked,
   }
 }
