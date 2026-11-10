@@ -4069,3 +4069,38 @@ i18n/图标/入口一致性检查、出包（`only=store`）、包内标记核�
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,658.86 kB）；`check-mobile-ui.py` 0。
 
 **仍待办**：F-3 剩余 4 项（`ToolsPage` 搜索 6 条 / `AccountSheet` 任务式余额查询 4 条 / `AssistantPage` 2 条 / 多次继续授权回调 2 条）。
+
+#### 记忆点 · 步骤 95（F-3⑤：账号余额改任务式查询 + **消除孤儿文件**）
+
+**为什么换**（先查证过才动手）：同步接口 `GET /api/accounts/usage?id=` 在新网关上**仍然存在**
+（`server/api/accounts_usage.rs:31`），所以我们的旧路径**不是坏掉**；问题是它**要等上游把整批查完才返回** ——
+上游慢的时候按钮一直转，用户既看不到进度也没法取消。任务式是 `/usage/start` 立刻拿任务号、
+`/usage/snapshot` 轮询进度 ⇒ 于是「启动中…／重新查询／取消查询」和进度文案都有落脚点。
+
+**接入（7 处）**：
+1. 导入并调用 `useAccountUsage(accountId, Boolean(account && supportsUsage(account)))`
+   —— **这一步把审计里唯一的孤儿文件 `hooks/useAccountUsage.ts` 接上了** ✓；
+2. **去掉我们自己那份快照拉取**（原本与钩子会各轮询一遍同一账号 ⇒ 重复请求）；
+3. 钩子的 `row` 直接用于展示；`refresh_token_expired` 结论**回灌给列表**（`onChanged()`，
+   只在结论真变时触发，避免轮询把它变成反复刷新）；
+4. 余额按钮三态：`启动中… / 重新查询 / 查询余额`；
+5. 进度文案 `usage.status`（空则不占位）；
+6. `usage.row?.stale` 时提示 **「历史余额，尚未按新配置验证」**（否则旧结论会被当成当前结论）；
+7. 查询中显示 **「取消查询」**（`usage.cancel()`）。
+
+**⚠️ 我这一项里犯了一个严重错误（已修复，教训值得记）**：
+我删旧 `queryUsage` 函数时用「从它的注释行到下一个 `const usageView =` 行」做区间，
+**但这中间夹着 `saveName` / `credentialRows` / `expiresAt` / `limits` / `promote` /
+`limiterSummary` / `suspendedReason` 等一大批声明** ⇒ **一次误删约 60 行**，`tsc` 立刻报
+7 个 `Cannot find name`。
+**修复方式**：本地没有 git，但**远端 main 上有完好版本** ⇒ 用 GitHub contents API 取回
+（27613 B，校验含 `saveName`/`credentialRows`/`queryUsage` 三个标识）恢复，
+再用**花括号配平**定位函数真正的结尾（这次删了 24 行，精确）重做。
+**教训：删除代码块绝不能用"下一个我认识的符号"当区间终点 —— 那中间可能有大量声明。
+要么按花括号配平，要么按行精确匹配。**
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,658.86 → **1,660.84 kB**）；
+`check-mobile-ui.py` 0；4 条目标文案 + 钩子**全部就位** ✓；**孤儿文件已消除** ✓。
+
+**F-3 剩余 3 项**：`ToolsPage` 搜索框（6 条）、`AssistantPage` JSON 附件 + 清空（2 条）、
+`add-account` 多次继续授权回调（2 条）。
