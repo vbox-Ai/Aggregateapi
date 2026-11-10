@@ -3710,3 +3710,39 @@ A1 的宿主闸门会对 iOS 直接拒绝下载（`当前运行形态不支持�
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,599.79 → **1,616.98 kB**）；
 `check-mobile-ui.py` 0。
+
+#### 记忆点 · 步骤 83（底栏悬浮：找到类名冲突根因 + 加固）
+
+**操作者反馈**：顶部（版本胶囊 + 切换面板按钮）已处理好成悬浮，**底栏仍不悬浮**。
+
+**根因（这次找到了，不是"样式没写"）**：底栏在 `Shell.tsx::TabBar` 里渲染为
+`<BottomNavigation className='m-tabbar'>` —— **`m-tabbar` 这个类名同时被 ui-kit 的
+`BottomNavigation` 组件使用**，而那个组件自带 Tailwind 工具类：
+`border-t border-border bg-surface …` ⇒ **一条通栏上边框 + 一个实心底**，正是真机上看到的"横条"。
+`ui/m/mobile.css` 里同时存在两套 `.m-tabbar` 规则（ui-kit 的：`border-top:1px solid var(--m-line)`、
+`background: var(--m-surface)`、`flex:none`；我们的 `.m-app .m-tabbar`：`position:fixed`、`border:0`、胶囊）。
+我们的权重更高（0,2,0 > 0,1,0），但"哪个样式表后加载 / 有没有被包进 @layer"都会翻盘 ⇒
+**底栏形态不该由加载顺序决定**。
+
+**改法（加固）**：`.m-app .m-tabbar` 的关键属性全部用 `!important` 钉住 ——
+`position:fixed`、`left/right:16px`、`bottom:calc(safe+10px)`、`height`、`padding:5px`、
+`border:0` + `border-top:0`（专门杀 ui-kit 的通栏上边框）、`border-radius:999px`、半透明底
+（`color-mix 72%`）、`background-clip:padding-box`、毛玻璃与投影。
+顺带把左右边距 12→16px、离底 8→10px，让"悬浮"更明显；`.m-tabbar-gap` 占位高度同步改成 +10px
+（否则内容底部会被盖住一截）。
+
+**两项已排除的可能（都做了实测）**：
+1. **不是"样式没生效"**：构建产物 `ui/m/mobile.css` 里规则完整存在且带 `!important`
+   （含 `position:fixed!important`）。产物里两段 `.m-app .m-tabbar` 是 **`color-mix` 的降级回退**
+   （先给不支持的浏览器一个实色 `background`，再用 `color-mix` 覆盖），不是竞争规则 ✓。
+2. **不是旧缓存**：`public/sw.js` 虽然存在（`CACHE = 'agent2api-mobile-__BUILD__'`），但
+   **构建产物里没有 sw.js**（`ui/m/` 只有 mobile.js / mobile.css / manifest.webmanifest）⇒
+   面板不注册 Service Worker ⇒ **真机不会吃缓存的旧 CSS** ✓。
+3. **原生层没有底栏**：`PanelViewController.swift` 里 `addSubview` 的只有 webView、statusBar（状态胶囊）、
+   version capsule、topPanelButton 四个，没有底部原生视图 ✓。
+
+**结论与下一步**：代码与产物层面底栏已是悬浮胶囊；真机仍显示通栏 ⇒ 需要**一张真机截图**才能定位
+（是"上边框还在"、"实心底还在"，还是"胶囊在但没有内容从其下经过"）。已请操作者提供截图与所用包版本。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,616.98 kB 不变，仅 CSS 变化）；
+`check-mobile-ui.py` 0。

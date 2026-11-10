@@ -339,28 +339,40 @@ body {
  */
 .m-tabbar-gap {
   flex: none;
-  height: calc(var(--m-tabbar-h) + var(--m-safe-b) + 8px);
+  height: calc(var(--m-tabbar-h) + var(--m-safe-b) + 10px);
 }
 
 /* 选择器带 `.m-app` 前缀：`.m-tabbar` 在共享 ui-kit 的样式表里也有同名规则，
    同权重时胜负取决于两个样式表的导入顺序。加一层前缀把权重抬上去，
    这样"悬浮形态"不依赖导入顺序（改顺序不该把底栏形态改回去）。 */
+/*
+ * 悬浮胶囊底栏（加固版）。
+ *
+ * ── 为什么这里用 `!important` ─────────────────────────────────
+ * `.m-tabbar` 这个类名同时被 **ui-kit 的 `BottomNavigation`** 使用，而那个组件自带
+ * Tailwind 工具类：`border-t border-border bg-surface` —— 也就是**一条通栏上边框加一个实心底**，
+ * 那正是真机上看到的"横条/不悬浮"。虽然 `.m-app .m-tabbar`（0,2,0）权重高于
+ * 单个工具类（0,1,0），但"哪个样式表后加载、有没有被包进 @layer"都会影响结果 ——
+ * 实测真机上仍会退回通栏。**底栏形态是产品决策，不该由加载顺序决定**，
+ * 所以这里把关键属性钉死；几何值（左右 16 / 离底 10）随后可以微调，不影响这层保护。
+ */
 .m-app .m-tabbar {
-  position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(var(--m-safe-b) + 8px);
-  z-index: 30;
-  display: flex;
-  align-items: stretch;
-  height: var(--m-tabbar-h);
-  padding: 5px;
-  border: 0;
-  border-radius: 999px;
-  /* 悬浮感的关键是「能看见内容从它下面经过」：底色更透 + 更强的毛玻璃。
-     真机反馈说"背景还有一个框架的底栏"—— 那是原来那圈 1px 描边
-     （`0 0 0 1px`）让整条看起来像个框住的底栏，所以这里把描边去掉，只留投影。 */
-  background: color-mix(in srgb, var(--m-surface) 68%, transparent);
+  position: fixed !important;
+  left: 16px !important;
+  right: 16px !important;
+  bottom: calc(var(--m-safe-b) + 10px) !important;
+  z-index: 30 !important;
+  display: flex !important;
+  align-items: stretch !important;
+  height: var(--m-tabbar-h) !important;
+  padding: 5px !important;
+  /* 通栏感的三件套：上边框、实心底、贴边圆角 —— 全部按悬浮胶囊口径清掉 */
+  border: 0 !important;
+  border-top: 0 !important;
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--m-surface) 72%, transparent) !important;
+  background-clip: padding-box !important;
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
   backdrop-filter: blur(24px) saturate(1.6);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
 }
