@@ -18,6 +18,9 @@ import {
   type CallbackInput, type MethodsState,
 } from '../../../ui-islands/src/islands/add-account-dynamic-fields'
 import { isAddAccountProviderHidden } from '../../../ui-shared/provider-availability'
+import {
+  ANTIGRAVITY_ACP_PROVIDER, antigravityLoginProviders, groupAntigravityCards, isAntigravityAccountProvider,
+} from '../../../ui-shared/antigravity-login'
 import { hasStaticConfig } from '../lib/add-account-static'
 import { AddAccountStaticSheet } from './add-account-static-sheet'
 import { t } from '../i18n'
@@ -26,6 +29,14 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
   const { session, sessionError } = useStore()
   const providers = sessionError ? [] : (session?.accounts?.providers || [])
     .filter(item => Boolean(item.id) && !isAddAccountProviderHidden(item.id || ''))
+  /**
+   * Antigravity 系有两家插件（网页登录的 `antigravity` 与 ACP 的 `agy-cli`），
+   * 上游把两者**并成一张卡**、账号数相加，选中之后再选「添加方式」。
+   * 列表与计数都用合并后的卡片，避免同一家出现两张卡、数量各算一半。
+   */
+  const cards = groupAntigravityCards(providers)
+  /** 选中的 Antigravity 添加方式（空 = 跟随卡片默认的那一家） */
+  const [agyPicker, setAgyPicker] = useState('')
   const [selected, setSelected] = useState('')
   /**
    * 动态登录回落到静态表单的提供商。
@@ -53,12 +64,23 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
     return item.category === 'web' ? 'web' : 'agent'
   }
   const counts = {
-    all: providers.length,
-    agent: providers.filter(item => kindOf(item) === 'agent').length,
-    web: providers.filter(item => kindOf(item) === 'web').length,
-    custom: providers.filter(item => kindOf(item) === 'custom').length,
+    all: cards.length,
+    agent: cards.filter(item => kindOf(item) === 'agent').length,
+    web: cards.filter(item => kindOf(item) === 'web').length,
+    custom: cards.filter(item => kindOf(item) === 'custom').length,
   }
   const selectedProvider = providers.find(item => item.id === selected)
+  /** 当前选中的是 Antigravity 系时，这一家的全部可登录插件（顺序：antigravity → agy-cli） */
+  const agyMembers = isAntigravityAccountProvider(selected) ? antigravityLoginProviders(providers) : []
+  /** 真正拿去渲染表单的那一家：选了添加方式就用它，否则用卡片默认的那一家 */
+  const effectiveProvider = agyMembers.some(item => item.id === agyPicker) ? agyPicker : selected
+  const effectiveMember = agyMembers.find(item => item.id === effectiveProvider)
+  /** Antigravity 的显示名：ACP 那家用自己的标签，网页登录那家说明是「网页登录 / 填写凭证」 */
+  const formLabel = agyMembers.length
+    ? (effectiveProvider === ANTIGRAVITY_ACP_PROVIDER
+      ? effectiveMember?.label || effectiveProvider
+      : t('网页登录 / 填写凭证'))
+    : (selectedProvider?.label || selected)
   const identity = serverIdentity()
 
   return <Sheet open onOpenChange={open => { if (!open) onClose() }}>
@@ -72,9 +94,19 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
           <AddAccountStaticSheet provider={staticProvider} onClose={onClose} onAdded={onAdded} />
         </> : selectedProvider ? <>
           <Button size='sm' variant='outline' className='self-start' onClick={() => setSelected('')}>{t('返回提供商列表')}</Button>
-          <DynamicForm key={`${identity}:${selected}`} provider={selected} label={selectedProvider.label || selected}
-            source={selectedProvider.source} onAdded={onAdded}
-            onStaticFallback={() => setStaticProvider(selected)} />
+          {agyMembers.length > 1 ? <>
+            <Label>{t('添加方式')}</Label>
+            <Select value={effectiveProvider} onValueChange={value => { if (value) setAgyPicker(value) }}>
+              <SelectTrigger className='w-full' aria-label={t('添加方式')}><SelectValue>{formLabel}</SelectValue></SelectTrigger>
+              <SelectContent>{agyMembers.map(item => <SelectItem key={item.id} value={item.id || ''}>
+                {item.id === ANTIGRAVITY_ACP_PROVIDER ? item.label || item.id : t('网页登录 / 填写凭证')}
+              </SelectItem>)}</SelectContent>
+            </Select>
+          </> : null}
+          <DynamicForm key={`${identity}:${effectiveProvider}`} provider={effectiveProvider} label={formLabel}
+            source={(effectiveMember || selectedProvider)?.source} onAdded={onAdded}
+            hideMethodPicker={effectiveProvider === ANTIGRAVITY_ACP_PROVIDER}
+            onStaticFallback={() => setStaticProvider(effectiveProvider)} />
         </> : <>
           <p className='text-xs text-subtle'>{t('提供商仅在已启用且加载后出现。登录与本机引用均作用在所连接网关，不是手机。')}</p>
           <Input type='search' value={search} placeholder={t('搜索提供商…')}
@@ -107,7 +139,7 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
             </div>
           ) : null}
           <div className='grid grid-cols-1 gap-2 min-[420px]:grid-cols-2'>
-            {kind === 'preset' ? null : providers
+            {kind === 'preset' ? null : cards
               .filter(item => kind === 'all' || kindOf(item) === kind)
               .filter(item => !keyword || `${item.id} ${providerLabel(item.id, item.label)}`.toLowerCase().includes(keyword))
               .map(item => <Button key={item.id} variant='outline' className='h-auto min-h-16 justify-start whitespace-normal text-left'
@@ -119,7 +151,7 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
                 </span>
               </Button>)}
           </div>
-          {!providers.length ? <p className='text-xs text-subtle'>{t('请安装并启用对应的提供商插件；列表为空时请刷新后重试。')}</p> : null}
+          {!cards.length ? <p className='text-xs text-subtle'>{t('请安装并启用对应的提供商插件；列表为空时请刷新后重试。')}</p> : null}
           <Button variant='outline' onClick={() => void store.refresh(true)}>{t('重新读取提供商')}</Button>
         </>}
       </SheetBody>
@@ -127,10 +159,17 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
   </Sheet>
 }
 
-function DynamicForm({ provider, label, source, onAdded, onStaticFallback }: {
+function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideMethodPicker = false }: {
   provider: string; label: string; source?: string; onAdded: () => void
   /** 501 且这家有静态表单时回调：由父组件把表单整块换成静态面板 */
   onStaticFallback?: () => void
+  /**
+   * 隐藏插件自带的「登录方式」下拉。
+   *
+   * Antigravity 的 ACP 那家只有一个方式，而外层已经给了「添加方式」下拉 ——
+   * 不去掉的话会出现两个上下叠着的下拉，用户不知道该动哪个。
+   */
+  hideMethodPicker?: boolean
 }) {
   const prefix = `mobile-add-${provider}`
   const [methods, setMethods] = useState<MethodsState>({ phase: 'loading', methods: [], instructions: '', reason: '' })
@@ -396,12 +435,12 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback }: {
     {methods.reason ? <Alert variant={methods.phase === 'error' ? 'destructive' : 'warning'}>
       <AlertDescription>{methods.reason}</AlertDescription></Alert> : null}
     {method ? <>
-      <Select value={method.id} disabled={locked} onValueChange={value => {
+      {hideMethodPicker ? null : <Select value={method.id} disabled={locked} onValueChange={value => {
         setSelected(value || ''); setValues({}); setPassword(''); clearCallback(); setError('')
       }}>
         <SelectTrigger className='w-full' aria-label={t('账号登录方式')}><SelectValue>{methodLabel(method)}</SelectValue></SelectTrigger>
         <SelectContent>{methods.methods.map(item => <SelectItem key={item.id} value={item.id}>{methodLabel(item)}</SelectItem>)}</SelectContent>
-      </Select>
+      </Select>}
       {method.reason ? <Alert variant='warning'><AlertDescription>{method.reason}</AlertDescription></Alert> : null}
       {[methods.instructions, method.instructions].filter(Boolean).length ? <Alert>
         <AlertTitle>{t('登录指引 / 设备码授权')}</AlertTitle>

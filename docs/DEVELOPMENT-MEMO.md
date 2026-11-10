@@ -3746,3 +3746,36 @@ A1 的宿主闸门会对 iOS 直接拒绝下载（`当前运行形态不支持�
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,616.98 kB 不变，仅 CSS 变化）；
 `check-mobile-ui.py` 0。
+
+#### 记忆点 · 步骤 84（批次 E-3：Antigravity 登录方式 —— 批次 E 完结）
+
+**上游的设计**：Antigravity 有**两家插件** —— `antigravity`（网页登录 / 填凭证）与
+`agy-cli`（ACP）。上游把两者**并成一张卡**（`groupAntigravityCards`：只保留主那家、账号数相加、
+标签统一叫 `Antigravity`），选中之后再给一个「添加方式」下拉在两者间切换；
+切到 `agy-cli` 时表单里**隐藏插件自带的「登录方式」下拉**（`hideMethodPicker`），
+否则会出现两个上下叠着的下拉。
+
+**我们的接入（6 处改动，全部锚点命中）**：
+1. `import` 三个助手与 `ANTIGRAVITY_ACP_PROVIDER`；
+2. `const cards = groupAntigravityCards(providers)` —— **列表与分类计数都改用 `cards`**
+   （计数若还按 `providers` 算，会出现"卡片一张、计数两个"的不一致）；
+3. 派生：`agyMembers`（当前选中是 Antigravity 系时的全部可登录插件）、
+   `effectiveProvider`（选了添加方式就用它，否则用卡片默认）、`effectiveMember`、`formLabel`；
+4. 渲染：`agyMembers.length > 1` 时加「添加方式」`Select`，`DynamicForm` 改用 `effectiveProvider`，
+   并传 `hideMethodPicker={effectiveProvider === ANTIGRAVITY_ACP_PROVIDER}`；
+5. 卡片列表与空列表提示都改用 `cards`；
+6. `DynamicForm` 加 `hideMethodPicker?: boolean`，把插件自带的登录方式下拉整块包成
+   `{hideMethodPicker ? null : <Select …>…</Select>}`（只隐藏那个下拉，`method.reason`
+   与登录指引仍然显示 —— 隐藏过头会让人不知道下一步做什么）。
+
+**注意**：我们的 `selectedProvider` 仍从 `providers`（未合并）里查 —— 那是**故意**的：
+用户切到 `agy-cli` 时 `selected` 仍是卡片主那家的 id，`effectiveMember` 负责取到真实成员
+（含它的 `label` 与 `source`），两者不要混用。
+
+**本批验收**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,616.98 → **1,617.90 kB**）；
+`check-mobile-ui.py` 0。
+
+**批次 E 完结状态**：E-1（品牌 / Turnstile / 杂项）`5dca392`、E-2（签到活动 / OfficeACE 订阅）`dd4dc52`、
+E-3（Antigravity 登录方式）本次提交。**A–E 五批全部完成**，只剩**批次 F**：
+全量对照（上游 25 个 mobile 页面 vs 我们 53 个）、i18n / 图标 / 入口一致性检查、
+出包（`only=store` + `publish=true`）、以及**包内标记核对**（U1–U16 与新功能同时在包里）。
