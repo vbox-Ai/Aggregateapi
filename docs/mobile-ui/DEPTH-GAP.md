@@ -1,0 +1,98 @@
+# 板块深度审计：哪些是「页面在、功能缺」
+
+> 起因：用户问「别的板块还有没有遗漏」。方法是**先列清单再比**，不靠印象。
+> 结论：**页面级没有缺口**（桌面 17 个页面手机端都有对应，还多出 7 个），
+> 缺口全在**页面内部**。下面是逐项核实过的结果。
+
+## 1. 方法与两个「反例」
+
+1. 枚举桌面端 `ui-islands/src/islands/*-page.tsx`（17 个）与手机端 `lib/routes.ts` 的
+   `SCREEN_IDS`（24 个）→ 页面级一一对应，**没有缺页面**；
+2. 把网关**全部 202 条路由**（`gw-src/http.rs`，括号配对提取）与手机端**实际调用的
+   151 个端点**做差集 → 88 条「网关有、手机从不调用」；
+3. 对这 88 条**逐条按功能关键词回查手机端源码**，剔除误报。
+
+**⚠️ 第 3 步不能省 —— 前两步会给出误报。我这次就抓到两个：**
+
+| 差点误报成缺口 | 实际情况 |
+|---|---|
+| 「工具服务缺提供商 Key 管理」 | `ToolsPage.tsx` **确实**调了 `/api/tools/providers/{p}/key` 与 `/test` |
+| 「插件页缺安装」 | 手机端走的是 `/api/plugins/install-from-release`（另一条更完整的路径） |
+
+教训同步骤 13：**关键词/差集只能产生候选，判定必须回查实现**。
+
+## 2. 确认的缺口（★ = 该功能在手机端源码里一处都没有）
+
+| # | 板块 | 缺什么 | 网关接口 | 证据 |
+|---|---|---|---|---|
+| ~~1~~ | ~~网络代理~~ | ~~代理订阅~~ | ~~`/api/subscriptions`~~ | **❌ 撤回：这条是网关主动下线的功能** —— `http.rs` 里 `/api/subscriptions` 与 `/api/subscriptions/{*rest}` 的处理函数都是 `retired_proxy_feature()`，返回 **410 Gone** + `proxy_pool::RETIRED_HINT`。不是遗漏，实现它没有意义。（记下来：我上一版把它列为缺口是错的，判据同样是「回查实现」不够——还要看**处理函数本身**是否已下线。） |
+| 2 | **模型管理** | **自定义模型的增删** | `POST /api/models/custom`、`/custom/remove` | 「自定义模型」「/api/models/custom」均零出现；手机端只有「自定义提供商」 |
+| 3 | **请求日志** | **请求/响应原始报文查看** | `GET /api/stats/requests/raw` | 零出现。手机端只有「保存上游原始报文」这个**开关**（转发设置里），看不到内容 |
+| 4 | **工具服务 / Agent** | **MCP / Skill 的安装** | `/api/tools/install-mcp`、`install-skill`、`install-targets`、`install-info` | `install-mcp` 零出现；`MCP` 只作为名词出现在标签/读数里 |
+| 5 | **诊断** | **调试报文查看** | `GET /api/debug/traffic` | `debug/traffic` 零出现（转发设置里只有「调试模式」开关） |
+| 6 | **运行日志** | **日志下载** | `GET /api/logs/download`（+ `/logs/stats`） | `logs/download` 零出现；手机端能看日志列表，导不出来 |
+| 7 | **Agent 配置** | **应用 / 导入**（`/api/agents/apply`、`/import`、`/profiles`、`/{id}/resources*`） | 同上 | `agents/apply` 零出现；手机端只用了 `/api/agents`、`/preview`、`/restore` ——**要按真机核对后再下结论** |
+| 8 | **模型映射** | **新增映射**（手机端能删不能加？） | `POST /api/models/mappings` | 手机端只调 `/api/models/mappings/remove`；新增那条零出现 —— 同样是「需先核实」项 |
+| 9 | **添加账号** | 部分登录方式（短信 / OAuth 专用完成端点） | `/api/session/login/sms/{send,verify}`、`/oauth/{start,captcha-config}`、`/kuku/complete` 等 13 条 | 手机端只用了通用的 `/login/start|cancel|callback`；**哪些家需要专用端点要对着 provider 清单看** |
+
+**顺带发现（不在原清单里，值得单独排期）**：`stats_api.rs` 里还有三条手机端没用、
+但对「人在外面出问题」很实用的端点 ——
+`POST /api/stats/requests/terminate?id=`（**终止一条在途请求**）、
+`GET /api/stats/requests/clear-preview`（清理预览）、
+`POST /api/stats/requests/compact`（压缩数据库，重复触发 409）。
+
+## 3. 明确不算缺口（记下来免得以后重复排查）
+
+| 端点 | 为什么不缺 |
+|---|---|
+| `/api/upgrade`、`/api/upgrade/run` | 桌面端**自身**升级用的；iOS 上更新由 supervisor + deb 负责，手机端插进去没有意义 |
+| `/api/backup/export|import|progress` | 手机端用的是新一代表备份接口 `/api/backup/download|upload|restore/progress` |
+| `/api/checkin`、`/claim-and-report` | 签到中心已用 `/checkin-center`、`/checkin-records`、`/checkin-schedules`、`/auto-checkin`、`/travel-schedule` 等覆盖，那两条是备选路径 |
+| `/api/tools/providers/{p}`（PUT）、`/key`、`/test` | 工具服务页已经在用 |
+| `/api/plugins/install`、`/progress` | 手机端走 `install-from-release`，是更完整的一条 |
+| `/api/assistant/sessions/{id}`、`/fork`、`/title` | `fork` 在 `api/assistant.ts` 与 `AssistantPage.tsx` 里都有实现 |
+| `/api/activity/ambassador`、`/banner` | 推广位，手机端不做 |
+| `{*rest}` 通配路由 | 提取产物，不是具体功能 |
+
+## 4. 建议的处理顺序（按「手机端价值 / 风险」）
+
+1. ~~**代理订阅（#1）**~~ —— **撤回，见上表**：该功能已下线（410）；
+2. **请求原始报文（#2）与调试报文（#3）** —— 排查问题最需要，且都是只读；
+3. **自定义模型增删（#4）** —— 中等风险（写模型配置），但功能明确；
+4. **日志下载（#6）** —— 低风险，纯导出；
+5. **MCP/Skill 安装（#5）、Agent 应用（#7）** —— 需要先核对着实现再动；
+6. **映射新增（#8）、短信/OAuth 登录（#9）** —— 先核实是否真缺。
+
+## 5. 曾经以为「要改 Rust」的两项 —— 结论都已更新
+
+### 5.1 局域网访问 —— 已实现（步骤 21–23）
+
+`supervisor` 硬编码 `AGENT2API_HOST=127.0.0.1` 这句是真的。已按 B 方案做完：
+supervisor 改读环境变量（默认值不变）、控制口 3066 仍钉回环、新增 `GET/POST /lan`、
+新增上游补丁 `0006-panel-bind-host.diff`（加 `AGENT2API_PANEL_HOST`，让面板能单独绑
+回环）、开启时网关 `0.0.0.0:3065` 而面板搬 `3067` 只绑本机、App 跟随 `/status` 报的
+面板端口、手机端设置页加了开关（默认关，开之前要求已注册面板管理员）。
+
+### 5.2 路由组写入 —— **这条判断是错的，而且不需要改 Rust**
+
+原文写的是「网关只有 `GET /api/routing/groups`，没有写路由」。**错的**：上游
+v3.4.2 的 `http.rs` 里本来就是
+
+```rust
+.route("/api/routing/groups", get(api::routing_groups::get_groups).put(api::routing_groups::put_group))
+```
+
+`put_group` 已经带齐了成员校验、revision 乐观锁（冲突 409）与保存后清粘性。
+所以 ② 只做了手机端（安全子集编辑 + 零副作用探测 + 409 自愈）。
+
+**错因（比结论更值得记）**：这个判断是从**已安装二进制**（`extract255`，
+`3.4.255`）里推的 —— 而
+
+1. **二进制里读不出 HTTP 方法**，只能看到路径字符串「存在」；
+2. 那份二进制**比 v3.4.2 旧**：它里面**没有** `put_group` 的任何特征串
+   （`路由配置已在其他位置修改` 0 次、`validate_members` 0 次）。
+
+⇒ **契约要以「CI 实际构建的那个 tag 的上游源码」为准**（CI 取
+`git tag -l 'v*' --sort=-v:refname | head -1` = v3.4.2）；二进制只适合看字符串常量。
+本仓库里 `gw-src/http.rs` 与 v3.4.2 的 `http.rs` 字节数完全相同（91706），且**含**
+PUT 路由 —— 这才是权威证据。

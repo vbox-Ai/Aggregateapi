@@ -4035,3 +4035,37 @@ i18n/图标/入口一致性检查、出包（`only=store`）、包内标记核�
 **F-3 剩余 3 项（14 条）**：`ToolsPage` 搜索框（6 条，需换用带搜索的选择器）、
 `AccountSheet` 任务式余额查询（4 条，要动 614 行账号抽屉）、
 `AssistantPage` JSON 附件说明 + 清空（2 条）、`add-account` 多次继续授权回调（2 条，涉及移动端续接多步 OAuth）。
+
+#### 记忆点 · 步骤 94（全面复查：遗漏 + 回归；**更正一条此前的错误结论**）
+
+**这次复查覆盖 6 项，结论如下**
+
+| 检查项 | 结论 |
+|---|---|
+| ① 端点在不在 | 本侧引用 **216 个** API 路径（前缀归一后）**全部有上游路由** ✓ **0 缺失** |
+| ② 孤儿文件 | 仅 **1 个**：`hooks/useAccountUsage.ts`（有意 staged —— 任务式余额查询待做） |
+| ③ 未用导入 | 交给 `tsc --noUnusedLocals`（权威）：**43 条**，其中**只有 1 条是本次引入**（`App.tsx` 的 `applyDocumentBranding`），其余 42 条是**既有遗留**（routing-*、TasksPage、SanitizePage、ServersPage、ui-kit 的 `React`、ui-shared `maintenance-*` 等） |
+| ④ 重复定义 | 我第一版的"180 处"是**假阳性**（正则把函数内局部变量当成了顶层重复）⇒ 该项无实际意义，改由 tsc 兜底 |
+| ⑤ 本地 vs 远端 | 逐文件 blob 比对：**一致**；差异仅 3 类 —— 刚修的 `App.tsx`（待本次推送）、本地 `docs/DEVELOPMENT-MEMO.md` 是**陈旧副本**（真正的备忘是 `repo-memo.md`，按该路径推送）、46 个远端有而本地无的文件（本工作树是**部分树**，不碍事：推送走 blob→tree→commit，逐文件覆盖，其余文件原样保留 ✓） |
+| ⑥ 未推送的本地文件 | **3 个**：`desktop-tauri/ui/sw.js`（构建产物，不入库 ✓）、`docs/mobile-ui/DEPTH-GAP.md`、`docs/mobile-ui/ROUTING-GAP.md`（**两份缺口记录一直没入库 ⇒ 本次补推** ✓） |
+
+**⚠️ 更正我此前的一条错误结论（重要）**：我说过"`public/sw.js` 未进入构建产物 ⇒ 面板不注册 SW ⇒ 真机不会吃旧缓存"。
+**这是错的** —— 我当时只查了 `ui/m/` **子目录**。实际产物在 **`ui/` 根**：`ui/sw.js`（5808 B，`__BUILD__` 占位符**已替换**为真实哈希 `agent2api-mobile-968eb9df7712`），
+且 `lib/pwa.ts` 以 `register('sw.js', { scope: '/', updateViaCache: 'none' })` 注册 ✓。**SW 确实会打包并接管 `/m` 与 `/m/*`。**
+
+**这直接关系到"底栏改了没效果"**（SW 的实际策略，读自 `ui/sw.js`）：
+- 入口页 `/m`、`/m.html`：**network-first**（离线回退缓存）；
+- **外壳 `mobile.js` / `mobile.css` / manifest：stale-while-revalidate** ⇒
+  **先返回缓存的旧 CSS，新版本留给"下一次加载"**；
+- 新 SW 装好后**不立刻 `skipWaiting()`**，要等页面发消息才切换。
+⇒ **顶部是原生的（Swift，不经 SW）所以立刻生效；底部是网页的、经 SW 缓存 ⇒ 换包后第一次打开很可能仍是旧 CSS。**
+这正是"顶部好了、底栏没变"的合理机制。**验法：装上包含加固的包后，把面板**连开两次**（或先杀掉 App 再开一次）再看底栏 —— 第二次才会用到新 CSS。**（若两次都还是通栏，那就不是缓存问题，需要截图继续查。）
+
+**我这次犯的错（已修，写进备忘）**：清理未用导入时，我用"整行以 import 开头且以引号结尾就整行删"的启发式，
+结果把 `import { applyDocumentBranding, useBrandingRefresh } from '../../ui-shared/branding'` **整行删掉**，
+连带删掉了仍在使用的 `useBrandingRefresh` ⇒ `tsc` 立刻报 `TS2304: Cannot find name 'useBrandingRefresh'`。
+**教训：绝不要用子串匹配整行删除 import —— 要改的是括号里的名字列表。**（同样是"推送前必跑三项检查"拦下来的。）
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,658.86 kB）；`check-mobile-ui.py` 0。
+
+**仍待办**：F-3 剩余 4 项（`ToolsPage` 搜索 6 条 / `AccountSheet` 任务式余额查询 4 条 / `AssistantPage` 2 条 / 多次继续授权回调 2 条）。
