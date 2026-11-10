@@ -1,0 +1,74 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/mod.rs
+@@ -55,7 +55,7 @@
+     crate::server::config::config_dir().join("script-plugins")
+ }
+ 
+-fn script_files() -> &'static [(&'static str, &'static str)] {
++pub(crate) fn script_files() -> &'static [(&'static str, &'static str)] {
+     &[
+         (
+             "bunfig.toml",
+--- a/desktop-tauri/src-tauri/server/src/server/api/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/mod.rs
+@@ -140,6 +140,7 @@
+ // 提供商插件包的管理面（列表 / 安装 / 卸载 / 启停）：插件是用户安装的，
+ // 这一组端点就是「装插件」的唯一入口，见该文件模块头
+ pub mod plugins;
++pub mod plugin_host;
+ pub mod plugin_tasks;
+ pub mod plugin_login;
+ pub mod plugin_helpers;
+--- a/desktop-tauri/src-tauri/server/src/server/http.rs
++++ b/desktop-tauri/src-tauri/server/src/server/http.rs
+@@ -707,6 +707,8 @@
+         .route("/api/plugins/scripts/prompts", post(api::plugins::script_prompts))
+         .route("/api/plugins/scripts/check", get(api::plugins::check_script_updates))
+         .route("/api/plugins/scripts/catalog/refresh", post(api::plugins::refresh_script_catalog))
++        // 宿主源码：手机本地运行脚本插件时取用（iOS 上没有 Bun，网关起不了宿主）
++        .route("/api/plugins/host/source", get(api::plugin_host::source))
+         .route(
+             "/api/plugins/install",
+             post(api::plugins::install).route_layer(axum::extract::DefaultBodyLimit::max(
+diff --git a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+new file mode 100644
+--- /dev/null
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -0,0 +1,37 @@
++//! 脚本插件宿主源码的 HTTP 面（阶段 0：iOS 上由手机本地运行宿主时取用）。
++//!
++//! ── 为什么由网关提供，而不是手机自带一份 ──────────────────────
++//! 宿主是「网关侧的一等公民」：它跟着网关版本走（`script_files()` 把这 29 个
++//! 模块 `include_str!` 进二进制）。手机若自带一份，两边迟早漂移，而宿主与网关
++//! 之间的 NDJSON 协议、帧形状、方法名都是**成对**的 —— 版本不一致会表现成
++//! 莫名其妙的运行期错误，而不是启动失败。所以这里把「网关当前用的那份」原样给出。
++//!
++//! ── 手机拿它做什么 ────────────────────────────────────────────
++//! iOS 上没有 Bun（`plugin_host/script/bun.rs` 的 `asset()` 没有 ios 分支），
++//! 网关侧起不了脚本宿主。手机改为在 Worker 里跑这些源码，插件的网络请求仍经
++//! 网关出网（`script.http.*`）。取源码走的就是本接口。
++//!
++//! ── 与 `api::plugins` 的关系 ──────────────────────────────────
++//! 同构：处理函数签名、`ok_json` 的用法照那一份写；路由挂在 `protected` 分组下，
++//! 鉴权由分组负责（见 `http.rs`）。
++
++use axum::extract::State;
++use axum::http::HeaderMap;
++use axum::response::Response;
++use serde_json::json;
++
++use crate::server::core::plugin_host::script;
++use crate::server::http::ok_json;
++use crate::server::ServerState;
++
++/// 返回宿主源码全量（含 `bunfig.toml` / `package.json` 两个小文件）。
++///
++/// 体积很小：29 个模块合计约 90 KB，一次给全比按文件取更省事，也免掉「手机记
++/// 不清哪些取过」这一类状态。协议与宿主版本用 `hostId` 标识。
++pub async fn source(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
++    let files: Vec<serde_json::Value> = script::script_files()
++        .iter()
++        .map(|(path, text)| json!({ "path": path, "text": text }))
++        .collect();
++    ok_json(json!({ "hostId": script::HOST_ID, "files": files }))
++}
