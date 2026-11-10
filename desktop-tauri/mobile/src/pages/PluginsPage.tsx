@@ -15,6 +15,7 @@ import { PluginSettingsSheet } from './plugins/PluginSettingsSheet'
 import { t } from '../i18n'
 import { apiCall } from '../api/client'
 import { ScriptPluginsPanel } from '../../../ui-shared/plugins-scripts'
+import { ScriptPluginLoginSheet } from '../components/ScriptPluginLoginSheet'
 import { PluginPackSettingsSheet } from './plugins/PluginPackSettingsSheet'
 import { PluginStartupDialog, subscribePluginDiagnostics, takePluginDiagnostics } from '../../../ui-shared/plugin-startup-view'
 import { refreshPluginStartup } from '../../../ui-shared/plugin-startup'
@@ -88,6 +89,8 @@ export function PluginsPage() {
   const [busy, setBusy] = useState('')
   const [settings, setSettings] = useState(false)
   const [remove, setRemove] = useState<PackSummary | null>(null)
+  /** 「在本机运行」的那支脚本插件：iOS 上网关装不起来（没有 iOS 版 Bun），改在手机本地跑 */
+  const [localScript, setLocalScript] = useState<{ id: string; name?: string } | null>(null)
   const [maxPackBytes, setMaxPackBytes] = useState(LEGACY_MAX_PACK_BYTES)
   const fileRef = useRef<HTMLInputElement>(null)
   const locked = useRef(false)
@@ -265,12 +268,27 @@ export function PluginsPage() {
           iOS 沙盒下调不起来，脚本面板的安装动作会被网关的宿主闸门拒绝，属预期行为。 */}
       {payload?.scripts ? <div className='m-section'>
         <SectionHead title={t('脚本插件')} />
+        {/* iOS 上脚本插件装不起来：网关侧没有 iOS 版运行时（bun.rs 的 asset() 没有 ios 分支）。
+            这里给一条本地运行的出口 —— 宿主与插件放进手机自己的 Worker，网络请求仍经网关出网。
+            只加在手机端：ScriptPluginsPanel 是共享组件，桌面端还在用，不动它以免牵连桌面行为。 */}
+        {payload.scripts.packages?.length ? <Card className='m-card m-card-pad'>
+          <div className='m-ck-note' style={{ paddingBottom: 8 }}>
+            {t('手机本地运行（实验）：iOS 上网关装不了脚本插件，可在本机执行并登录。')}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {payload.scripts.packages.map(item => <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name || item.id}</span>
+              <Button variant='ghost' onClick={() => setLocalScript({ id: item.id, name: item.name })}>{t('本机登录')}</Button>
+            </div>)}
+          </div>
+        </Card> : null}
         <Card className='m-card m-card-pad'>
           <ScriptPluginsPanel key={server?.base || payload.target} state={payload.scripts} t={t}
             disabled={Boolean(busy)} request={(path, body) => apiCall(path, { method: 'POST', body })}
             refresh={load} />
         </Card>
       </div> : null}
+      <ScriptPluginLoginSheet plugin={localScript} onClose={() => setLocalScript(null)} />
       {/* 插件启动诊断：点卡片上的「诊断」后弹出，可在里面重试启动 */}
       {startupId ? <PluginStartupDialog id={startupId}
         name={packs.find(pack => pack.id === startupId)?.name
