@@ -9,6 +9,8 @@ import { ellipsisMiddle, formatClock, formatDuration, formatInt } from '../lib/f
 import { downloadJson, dateStamp } from '../lib/download'
 import { providerLabel } from '../lib/providers'
 import { usePolling } from '../lib/usePolling'
+import { PageAutoRefresh, usePageAutoRefresh } from '../components/PageAutoRefresh'
+import { usePageRefreshTimer } from '../../../ui-shared/page-auto-refresh-timer'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
 import { MetricGrid, MetricCard } from '@ui'
@@ -108,7 +110,10 @@ export function RequestsPage() {
     void load()
     return () => { ++seqRef.current }
   }, [queryKey, load])
-  usePolling(load, 30_000)
+  const auto = usePageAutoRefresh('requestsAutoRefresh')
+  // 自动刷新改由页面级开关驱动（界面上可开关与改间隔）。
+  usePolling(load, 0)
+  usePageRefreshTimer(load, auto.enabled, auto.ms)
 
   const pull = usePullToRefresh({ onRefresh: load })
 
@@ -169,6 +174,10 @@ export function RequestsPage() {
             </Button>
           </>}
         />
+
+      <div className='m-section' style={{ marginTop: 8 }}>
+        <PageAutoRefresh settings={auto} onRefresh={load} disabled={loadingMore} />
+      </div>
 
       <div className='m-section' style={{ marginTop: 0 }}>
         <SegmentedControl value={filter} className='w-full' aria-label={t('请求筛选')}

@@ -3549,3 +3549,29 @@ wasm 插件不被拦；`script/settings.rs` 的 `bun::ensure()`（下载 bun 运
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,425.74 → **1,454.00 kB**，
 增量 28.26 kB ≈ 维护面板体量）；`check-mobile-ui.py` 0（图标 / i18n 参数 / 跳转 / 端点拼写全过）。
+
+#### 记忆点 · 步骤 78（批次 B2 页面自动刷新 + B3 第三方许可）
+
+**B2 页面自动刷新**：引入 `page-auto-refresh.ts` / `-timer.ts` / `-controls.tsx` / `.css` 与 mobile 薄封装
+`components/PageAutoRefresh.tsx`，接到**三个页面**（报表 / 请求日志 / 运行日志）。
+接入模式固定为三步：
+1. `const auto = usePageAutoRefresh('<id>')`，id 取自 `PageRefreshTaskId`
+   （`'requestsAutoRefresh' | 'logsAutoRefresh' | 'reportAutoRefresh'`，与网关的定时任务同名）；
+2. **既有轮询改为受开关驱动**：报表/请求页把 `usePolling(load, 60_000/30_000)` 改成
+   `usePolling(load, 0)` + `usePageRefreshTimer(load, auto.enabled, auto.ms)`；日志页保留它自己的
+   「阅读模式不跳」轮询逻辑，只把硬编码的 `30_000` 换成 `auto.ms`，并在 `useEffect` 开头加
+   `if (!auto.enabled) return`，依赖数组补 `auto.enabled, auto.ms`；
+3. 渲染 `<PageAutoRefresh settings={auto} onRefresh={…} disabled={…} />`。
+
+**B3 第三方许可**：`settings-third-party-licenses.tsx` 用 `mobile` 分支自带 `Sheet` + 触发按钮，
+无需改写即可嵌入；接在「版本信息」抽屉的「许可与源码」区块之后。
+`openExternal` 我们自己实现：先 `window.open(url, '_blank', 'noopener')`，被 WebView 拦截时
+**退化为 `copyWithToast` 复制链接** —— 比点了没反应好。
+
+**踩到的坑（以后必查）**：该模块 `import { licenseNotices, sources } from '../../licenses/ICONS_SOURCE.json'`，
+路径是**仓库根**的 `licenses/`（不是 `desktop-tauri/` 下），我们的树里原本没有这两个文件
+（`ICONS_SOURCE.json` 36.6 KB、`magpie-MIT` 1.1 KB）⇒ 类型检查直接报 `TS2307`。
+**引入上游模块时，除了 ts/tsx 依赖，还要检查它 import 的 JSON/文本资源。**
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,454.00 → **1,481.70 kB**，
+增量 27.70 kB ≈ 自动刷新控件 + 许可面板）；`check-mobile-ui.py` 0。

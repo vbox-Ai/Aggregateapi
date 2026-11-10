@@ -7,6 +7,7 @@ import { Badge, copyWithToast } from './ui'
 import { formatStamp } from '../lib/format'
 import { Icon } from './Icon'
 import { t } from '../i18n'
+import { ThirdPartyLicensesButton } from '../../../ui-shared/settings-third-party-licenses'
 
 /**
  * 「版本信息」抽屉（手机端设置页底部那一行点开）。
@@ -201,6 +202,13 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 }
 
 export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  // 打开第三方许可里的项目链接：先尝试新窗口；WebView 拦截时退化为复制链接，
+  // 至少让用户拿到地址（比点了没反应好）。
+  const openExternal = (url: string) => {
+    const opened = window.open(url, '_blank', 'noopener')
+    if (!opened) void copyWithToast(url, t('已复制链接'))
+  }
+
   const [info, setInfo] = useState<GatewayInfo | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -400,6 +408,11 @@ export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () 
               </Card>
             </>
           ) : null}
+
+          {/* 第三方开源许可：原文随包内置，离线可查；来源链接需要联网 */}
+          <div style={{ padding: '10px 2px 0' }}>
+            <ThirdPartyLicensesButton t={t} openExternal={openExternal} mobile />
+          </div>
 
           {/* 运行细节 */}
           {info?.runtime ? (

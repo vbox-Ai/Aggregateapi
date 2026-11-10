@@ -5,6 +5,7 @@ import { store } from '../state/store'
 import { fetchLogs, downloadLogsFile, fetchLogStats, type LogStats } from '../api/gateway'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
+import { PageAutoRefresh, usePageAutoRefresh } from '../components/PageAutoRefresh'
 import {
   formatLogTime, groupTime, logContext, logGroups, logLevel, logRawText, logSource, logSummary,
   type LogGroup, type LogPage, type LogView,
@@ -133,7 +134,11 @@ export function LogsPage() {
     return () => { ++seqRef.current }
   }, [view, level, search, aggregate, range, dates, load])
 
+  const auto = usePageAutoRefresh('logsAutoRefresh')
+
   useEffect(() => {
+    // 自动刷新交给页面级开关：关掉就彻底停表（「暂停刷新」按钮仍可手动暂停）。
+    if (!auto.enabled) return
     const timer = window.setInterval(async () => {
       if (document.hidden || pollingRef.current) return
       pollingRef.current = true
@@ -151,9 +156,9 @@ export function LogsPage() {
         } else await load(false, true)
       } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)) }
       finally { pollingRef.current = false }
-    }, 30_000)
+    }, auto.ms)
     return () => window.clearInterval(timer)
-  }, [load])
+  }, [load, auto.enabled, auto.ms])
 
   const pull = usePullToRefresh({ onRefresh: () => load(true), scrollRef: bodyRef })
   /** 导出本页日志：把当前渲染的分组（含原始记录）落成 JSON */
@@ -234,6 +239,9 @@ export function LogsPage() {
               {exporting ? t('导出中…') : t('导出')}
             </Button>
           </>} />
+        <div className='m-section' style={{ marginTop: 8 }}>
+          <PageAutoRefresh settings={auto} onRefresh={() => load(true)} disabled={loading} />
+        </div>
         <div className='m-section' style={{ marginTop: 0 }}>
           <SegmentedControl options={VIEWS} value={view} onValueChange={setView} aria-label={t('日志视图')} className='w-full' />
           <Input className='mt-2.5 w-full' type='search' value={keyword} onChange={event => setKeyword(event.currentTarget.value)}

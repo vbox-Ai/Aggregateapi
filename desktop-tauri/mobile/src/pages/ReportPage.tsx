@@ -8,6 +8,8 @@ import { fetchStatsSummary, type StatsRange, type StatsSummary } from '../api/ga
 import { formatCompact, formatInt, formatPercent, formatTokens } from '../lib/format'
 import { providerLabel } from '../lib/providers'
 import { usePolling } from '../lib/usePolling'
+import { PageAutoRefresh, usePageAutoRefresh } from '../components/PageAutoRefresh'
+import { usePageRefreshTimer } from '../../../ui-shared/page-auto-refresh-timer'
 import { t } from '../i18n'
 import { Button, Card } from '@ui'
 import { SourceUsageSection } from '../components/SourceUsageSection'
@@ -62,7 +64,10 @@ export function ReportPage() {
     void load()
     return () => { ++seqRef.current }
   }, [range, dates, load])
-  usePolling(load, 60_000)
+  const auto = usePageAutoRefresh('reportAutoRefresh')
+  // 自动刷新改由页面级开关驱动（可在界面上开关与改间隔），首次加载不受影响。
+  usePolling(load, 0)
+  usePageRefreshTimer(load, auto.enabled, auto.ms)
 
   const pull = usePullToRefresh({ onRefresh: load })
 
@@ -94,6 +99,8 @@ export function ReportPage() {
             : t('统计区间加载中')
         }
       />
+
+      <PageAutoRefresh settings={auto} onRefresh={load} disabled={firstLoad} />
 
       <DateRangeFilter range={range} dates={dates} onRangeChange={setRange} label={t('报表时间范围')}
         onDatesChange={next => { setDates(next); saveCustomRange(CUSTOM_RANGE_KEY, next) }} />
