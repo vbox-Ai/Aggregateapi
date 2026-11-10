@@ -23,6 +23,9 @@ import {
 } from '../../../ui-shared/antigravity-login'
 import { hasStaticConfig } from '../lib/add-account-static'
 import { AddAccountStaticSheet } from './add-account-static-sheet'
+import { apiCall } from '../api/client'
+import { readSystemProxy } from '../../../ui-shared/proxy-system'
+import { PluginLoginInteraction } from '../../../ui-shared/plugin-login-interaction'
 import { t } from '../i18n'
 
 export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
@@ -177,6 +180,9 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
   const [values, setValues] = useState<Record<string, Record<string, string>>>({})
   const [name, setName] = useState('')
   const [proxyMode, setProxyMode] = useState('direct')
+  /** 正在读取网关所在机器的系统代理（点了「填入系统代理」之后） */
+  const [readingSystemProxy, setReadingSystemProxy] = useState(false)
+  const [systemProxyError, setSystemProxyError] = useState('')
   const [protocol, setProtocol] = useState('http')
   const [host, setHost] = useState('')
   const [port, setPort] = useState('')
@@ -201,7 +207,7 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
   const method = methods.methods.find(item => item.id === selected) || methods.methods[0]
   const inputs = method ? values[method.id] || {} : {}
   const hasNamePrompt = Boolean(method?.prompts.some(prompt => prompt.key === 'name'))
-  const locked = busy || Boolean(flow)
+  const locked = busy || Boolean(flow) || readingSystemProxy
 
   function clearCallback(): void {
     if (callbackInputRef.current) callbackInputRef.current.value = ''
@@ -293,6 +299,32 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
     void poll()
     return () => { live = false; if (timer) clearTimeout(timer) }
   }, [flow, identity, provider])
+
+  /**
+   * 把网关所在机器的系统代理填进表单。读的是**网关机器**的代理（不是手机的），
+   * 因为出网请求由网关发出 —— 手机上的代理设置跟这条链路无关。
+   */
+  async function importSystemProxy() {
+    if (locked || submitting.current) return
+    submitting.current = true
+    setReadingSystemProxy(true)
+    setSystemProxyError('')
+    try {
+      const proxy = readSystemProxy(await apiCall('/api/proxies/system'), t)
+      if (!mounted.current || serverIdentity() !== identity) return
+      setProxyMode('custom')
+      setProtocol(proxy.protocol)
+      setHost(proxy.host)
+      setPort(String(proxy.port))
+      setUsername(proxy.username)
+      setPassword(proxy.password)
+    } catch (failure) {
+      if (mounted.current && serverIdentity() === identity) setSystemProxyError(dynamicLoginError(failure))
+    } finally {
+      submitting.current = false
+      if (mounted.current && serverIdentity() === identity) setReadingSystemProxy(false)
+    }
+  }
 
   function proxyPayload(): unknown {
     if (proxyMode === 'direct') return null
@@ -471,6 +503,11 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
         <SelectTrigger className='w-full'><SelectValue>{proxyMode === 'custom' ? t('自定义') : t('无代理（直连）')}</SelectValue></SelectTrigger>
         <SelectContent><SelectItem value='direct'>{t('无代理（直连）')}</SelectItem><SelectItem value='custom'>{t('自定义')}</SelectItem></SelectContent>
       </Select>
+      <Button size='sm' variant='outline' disabled={locked} className='self-start'
+        onClick={() => void importSystemProxy()}>
+        {readingSystemProxy ? <Spinner /> : null}{t('填入系统代理')}
+      </Button>
+      {systemProxyError ? <p className='text-xs text-destructive' role='alert'>{systemProxyError}</p> : null}
       {proxyMode === 'custom' ? <Card className='flex flex-col gap-2 p-3'>
         <Select value={protocol} disabled={locked} onValueChange={value => setProtocol(value || 'http')}>
           <SelectTrigger className='w-full' aria-label={t('协议')}><SelectValue>{protocol === 'socks5' ? 'SOCKS5' : 'HTTP'}</SelectValue></SelectTrigger>
@@ -484,6 +521,9 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
       <Button disabled={locked || Boolean(method.reason)} onClick={() => void submit()}>{busy ? <Spinner /> : null}{method.type === 'api' ? t('添加账号') : t('登录并添加')}</Button>
       {method.type === 'api' ? <p className='text-xs text-subtle'>{t('新网关确认代理同次保存后不再重复提交；旧网关使用兼容保存并提示核查，失败不会撤销已添加的账号。')}</p> : null}
     </> : null}
+    {/* 插件驱动的登录交互（验证码 / 二次确认等），由共享组件按 flow 状态渲染 */}
+    {flow?.state ? <PluginLoginInteraction key={flow.state} flow={flow.state} t={t}
+      request={(method, path, body) => apiCall(path, { method, body })} /> : null}
     {flow ? <Alert><AlertTitle>{t('等待账号登录完成…')}</AlertTitle>
       <AlertDescription className='flex flex-col gap-2 whitespace-pre-wrap break-words'>
         {progress}

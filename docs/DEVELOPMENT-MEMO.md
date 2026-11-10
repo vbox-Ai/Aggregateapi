@@ -3910,3 +3910,38 @@ proxy-import 与 proxy-batch-editor）。
 `proxy-system`（系统代理探测，上游在加号面板用）、`plugin-login-interaction`（同上）、
 `assistant-message-actions`（助手页）、`use-image-fallback`（**已决定不接**：
 我们的 `ProviderLogo` 已有等价失败回退）。
+
+#### 记忆点 · 步骤 90（批次 F-1f：收尾两个缺口 + 审计口径修正）
+
+**先修正审计口径（重要）**：可达性闭包此前只跟 `from '…'`，**漏掉类型位置的 `import('…')`**
+⇒ 只在类型里被引用的模块会被误报"不可达"。修正后重算：**真·未接线 10 → 7**。
+其中 `clash-proxy.ts`（265 B，纯类型）我们的 `api/gateway.ts` **早就在用**
+（`PoolPayload.clash?: import('…clash-proxy').ClashProxySnapshot`）⇒ **根本不用接**。
+
+**又一处假阳性**：审计说 `assistant-message-actions.tsx` 被 `components/MobileMessageActions.tsx`
+引用 —— 实际是**注释里提到了模块名**被字面命中。真实情况：我们的助手页
+（`AssistantPage.tsx` 的 L29/595/623）**确实在用我们自己那份 `MobileMessageActions`**，
+而那份**故意不引用**共享的 `assistant-message-actions` —— 它自己的注释写明了原因：
+共享组件是桌面取向（三个 15px 纯图标小按钮，只有 `title` 提示），手机没有 hover、
+`title` 不显示、点击区偏小 ⇒ 我们改成「一个 ⋯ 入口 + 底部动作面板」。
+**这不是缺口，是有意的设计决定** ✓
+
+**本批真正补上的两个缺口**：
+1. **填入系统代理**：`readSystemProxy(await apiCall('/api/proxies/system'), t)` 读回后
+   `setProxyMode('custom')` 并填入 protocol/host/port/username/password；
+   读取期间 `locked` 纳入 `readingSystemProxy`（**避免读到一半用户又去改表单**）。
+   关键语义写在代码注释里：读的是**网关机器**的系统代理，不是手机的 ——
+   出网请求由网关发出，手机上的代理设置跟这条链路无关。
+2. **插件登录交互**：`{flow?.state ? <PluginLoginInteraction key={flow.state} flow={flow.state} t={t}
+   request={(method, path, body) => apiCall(path, { method, body })} /> : null}`，
+   放在「等待账号登录完成」提示之前。
+
+**F-1 完成**：`assistant-message-actions` 与 `use-image-fallback` 两项**明确不接**并记录理由
+（前者我们有更适配触屏的同语义实现，后者我们的 `ProviderLogo` 已有等价失败回退）；
+其余 3 个（`file-read`、`plugin-provider-settings`、`usage-query-settings`）确认仅桌面端使用。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,647.40 → **1,652.74 kB**）；
+`check-mobile-ui.py` 0。
+
+**下一步**：批次 F-2 —— 全量功能对照（上游 25 个 mobile 页 vs 我们 53 个）、
+i18n/图标/入口一致性检查、出包（`only=store`）、包内标记核对（U1–U16 与新功能同在包内）。
