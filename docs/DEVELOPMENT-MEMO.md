@@ -3883,3 +3883,30 @@ E-3（Antigravity 登录方式）本次提交。**A–E 五批全部完成**，�
 
 **F-1 剩余**：`proxy-system`/`proxy-import`（系统代理探测与批量导入）、
 `github-failure`、`assistant-message-actions`、`clash-proxy`；账号用量是否切任务式。
+
+#### 记忆点 · 步骤 89（批次 F-1e：代理页与更新面板整取 + 代理导入接口）
+
+**判定依据（延续"与 v3.4.2 逐字节相同就整取"这条规则）**：
+`pages/ProxiesPage.tsx`、`components/AppUpdatePanel.tsx`、`pages/proxy-editor-sheet.tsx`
+三个文件我们与 v3.4.2 **逐字节相同** ⇒ 无本地增量 ⇒ **全部整取上游新版**，零冲突。
+其中 `proxy-editor-sheet.tsx`（8177 → 11405 B）一步把 **`proxy-import.ts` 与
+`proxy-batch-editor.tsx` 两个模块接通**（批量导入与批量编辑）。
+
+**api 层随之要补三处**（我们的 `api/gateway.ts` 是自建版，缺上游新增的字段/函数）：
+1. `PoolItem` 补 `nonDirect?: boolean`（把「直连」与真实代理区分开）；
+2. `ProxyDraft` 的 `Pick<…>` 列表补 `'nonDirect'`（它是从 `PoolItem` 里挑字段的联合，
+   不补就会报 `'nonDirect' does not exist in type 'ProxyDraft'`）；
+3. 补 `importProxyItems(items)` → `POST /api/proxies/pool`，并给 `PoolPayload` 补
+   `imported?: ProxyImportReport`（导入结果报告）。
+   **解析订阅文本/链接的活由共享的 `proxy-import` 做，api 层只负责把成形草稿交给网关。**
+
+**可达性进展**：真·未接线由 **16 → 10**（github-failure、brand-logo 已通；本批再通
+proxy-import 与 proxy-batch-editor）。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,633.82 → **1,647.40 kB**）；
+`check-mobile-ui.py` 0。
+
+**F-1 剩余 5 项**（下一步收尾）：`clash-proxy`（上游被 `api/gateway.ts` 使用）、
+`proxy-system`（系统代理探测，上游在加号面板用）、`plugin-login-interaction`（同上）、
+`assistant-message-actions`（助手页）、`use-image-fallback`（**已决定不接**：
+我们的 `ProviderLogo` 已有等价失败回退）。

@@ -575,13 +575,15 @@ export type PoolItem = ProxyUsage & {
   port: number | null
   username: string
   password: string
+  /** 非直连节点（用于把「直连」与真实代理区分开）。 */
+  nonDirect?: boolean
   resolved?: { protocol?: string; host?: string; port?: number | null; label?: string } | null
   resolveError?: string | null
   lastTest?: { at?: number; success?: boolean; ip?: string; error?: string; durationMs?: number } | null
 }
 
-export type PoolPayload = { items?: PoolItem[]; clash?: import('../../../ui-shared/clash-proxy').ClashProxySnapshot; changes?: number; syncError?: string | null }
-export type ProxyDraft = Pick<PoolItem, 'name' | 'protocol' | 'host' | 'port' | 'username' | 'password' | 'enabled'>
+export type PoolPayload = { items?: PoolItem[]; clash?: import('../../../ui-shared/clash-proxy').ClashProxySnapshot; changes?: number; syncError?: string | null; imported?: import('../../../ui-shared/proxy-import').ProxyImportReport }
+export type ProxyDraft = Pick<PoolItem, 'name' | 'protocol' | 'host' | 'port' | 'username' | 'password' | 'enabled' | 'nonDirect'>
 export type ProxyTestResult = PoolPayload & {
   success?: boolean
   error?: string
@@ -590,6 +592,14 @@ export type ProxyTestResult = PoolPayload & {
   saveError?: string
 }
 export type ProxySettings = { testUrl?: string; defaults?: { testUrl?: string } }
+
+/**
+ * 批量导入代理节点。草稿的形状由共享模块定义 —— 解析（订阅文本 / 链接）在那边做，
+ * 这里只负责把已经成形的草稿交给网关。
+ */
+export function importProxyItems(items: import('../../../ui-shared/proxy-import').ProxyImportDraft[]): Promise<PoolPayload> {
+  return apiCall<PoolPayload>('/api/proxies/pool', { method: 'POST', body: { items } })
+}
 
 export function fetchProxyPool(signal?: AbortSignal): Promise<PoolPayload> {
   return apiCall<PoolPayload>('/api/proxies/pool', { signal })
