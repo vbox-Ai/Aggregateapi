@@ -3945,3 +3945,40 @@ proxy-import 与 proxy-batch-editor）。
 
 **下一步**：批次 F-2 —— 全量功能对照（上游 25 个 mobile 页 vs 我们 53 个）、
 i18n/图标/入口一致性检查、出包（`only=store`）、包内标记核对（U1–U16 与新功能同在包内）。
+
+#### 记忆点 · 步骤 91（F-3①：日志阅读模式 + 详情双视图）
+
+**缺口来源**：F-2 全量对照里 65 条缺失文案中，`LogsPage` 一家占 **15 条**（最大一项）。
+
+**这是双向合并，不是换文件**：我们与上游都改了 `LogsPage.tsx`，而且**各有对方没有的东西**：
+- **我们有**（上游没有）：分类筛选（`CATEGORY_OPTIONS`：插件/账号/模型/网关/请求）、
+  库内日志总量（`fetchLogStats` → 副标题「库内共 N 条」）、下载日志文件（`downloadLogsFile`）、导出 JSON（`downloadJson`/`saveBlob`）；
+- **上游有**（我们没有）：阅读模式、详情双视图、处理建议、启动结果、各阶段耗时、详细信息、视图说明。
+所以**保留我们的增补，把上游的新功能移植进来**（不是整取，否则会丢掉我们那几项）。
+
+**移植的 10 处**：
+1. 导入补 5 个共享助手（`logAdvice`/`logDetailText`/`logPlugins`/`logSteps`/`logViewNote`）——
+   它们本来就在我们已同步的 `ui-shared/logs.ts` 里（10205 B），**只差被用**；
+2. 新状态 `reading` + `detailTab`；
+3. `held = paused || reading || page > 1 || detail !== null`（"列表要停住"的四种情形）；
+4. 状态文案三态：`阅读模式，列表保持不动` / `自动刷新` / `自动刷新已关闭`；
+5. 搜索框补「插件」（上游文案：搜索插件、消息、提供商或账号）；
+6. 级别筛选改中文词（`警告及以上` / `仅错误`，原来是 `warn 及以上` / `仅 error`）；
+7. **滚动即进阅读模式**（`onScroll` → `setReading(scrollTop > 20)`）；
+8. 视图说明 `logViewNote(view, t)`；
+9. 阅读模式下也显示「查看最新」按钮（`pending || held`）；
+10. **详情双视图**：`SegmentedControl`（事件详情 / 原始记录）+ 事件详情里新增
+    `来源`、`处理建议`（`logAdvice`）、`启动结果`（`logPlugins`）、`各阶段耗时`（`logSteps`）、
+    `详细信息`（`logDetailText`）；原始记录保留我们自己的 `JSON.stringify(entry, null, 2)` 展示。
+
+**踩到的坑（值得记）**：脚本是**原子**的 —— 最后一处锚点失败时**整份都没落盘**，
+前 9 处"成功"的消息具有误导性。原因是锚点里我补写了一条**被截断显示的行**
+（原文 `lineHeight: 1.6, padding: 10, margin: 0, …`，我按截断版本补成了别的）。
+**教训：锚点一律以"不截断的原文"为准，不要凭截断输出重写。**
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,652.74 → **1,657.03 kB**）；
+`check-mobile-ui.py` 0；15 条目标文案**全部补齐**（开关措辞也统一为「阅读模式 / 结束阅读」）。
+
+**F-3 剩余 5 项**：加号面板「已保存的代理」选择 + 多次继续授权回调（12 条）、
+`PluginCards` 社区插件/接口不兼容/由其他插件接管/加载诊断（6 条）、
+`ToolsPage` 搜索框（6 条）、`AccountSheet` 任务式余额查询（4 条）、`AssistantPage` JSON 附件 + 清空（2 条）。
