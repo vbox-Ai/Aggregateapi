@@ -7,6 +7,8 @@ import { storeApiKey, url, type PanelStatus } from '../api/client'
 import { baseLabel, serverIdentity } from '../lib/servers'
 import { t } from '../i18n'
 import { TurnstileWidget } from '../../../ui-shared/turnstile-widget'
+import { mobileBranding } from '../lib/branding'
+import { BrandLogo } from '../../../ui-shared/brand-logo'
 import { Alert, AlertDescription, AppFrame, Button, Field as UiField, FieldLabel, Input, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@ui'
 import { supervisorFactoryReset } from '../api/supervisor'
 
@@ -55,6 +57,8 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
   const [captcha, setCaptcha] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
   /** 网关的验证码形态：ALTCHA（本地解）与 Turnstile（挂组件）走两条不同路径。 */
+  // 网关可自定义名称与图标：登录页顶上那块图标与标题都跟随它（没配置时用内置名）。
+  const branding = mobileBranding.useValue()
   const [captchaConfig, setCaptchaConfig] = useState<PanelStatus | null>(null)
   const [turnstileReset, setTurnstileReset] = useState(0)
   /** 「忘记密码」二次确认面板 */
@@ -206,14 +210,14 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
             boxShadow: '0 10px 24px -12px var(--m-primary)',
           }}
         >
-          <Icon name='shield' style={{ width: 24, height: 24 }} />
+          <BrandLogo branding={branding} size={26} />
         </div>
         <h1 style={{ margin: '16px 0 0', fontSize: 23, letterSpacing: '-0.02em' }}>
           {mode === 'key'
             ? t('需要网关 API Key')
             : setup
               ? t('创建管理员账号')
-              : t('登录 Agent2API')}
+              : t('登录 {name}', { name: branding.displayName })}
         </h1>
         <p style={{ margin: '6px 0 0', fontSize: 12.5, lineHeight: 1.6, color: 'var(--m-text-3)' }}>
           {mode === 'key'

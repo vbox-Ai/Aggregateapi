@@ -3838,3 +3838,26 @@ E-3（Antigravity 登录方式）本次提交。**A–E 五批全部完成**，�
 **F-1 剩余**：`brand-logo`（首页/登录页图标）、`plugin-hidden`（隐藏账号过滤器）、
 `proxy-system`/`proxy-import`（系统代理探测与批量导入）、`github-failure`、
 `assistant-message-actions`、`clash-proxy`；账号用量是否切任务式（需单独一轮验证）。
+
+#### 记忆点 · 步骤 87（批次 F-1c：品牌图标接登录页 + 首页标题用品牌名）
+
+**背景**：App 标题在批次 E-1 已跟随网关品牌，但**图标没接** —— `brand-logo.tsx`
+一直不可达（审计里列为缺口）。
+
+**接入**：
+1. **登录页**：顶部原来是个盾牌 `Icon name='shield'`，换成
+   `<BrandLogo branding={branding} size={26} />`（网关配置了图标就显示它，没配就显示内置图）；
+   标题从写死的「登录 Agent2API」改为 `t('登录 {name}', { name: branding.displayName })`。
+2. **首页**：标题改为 `branding.displayName`，原来的「网关运行中」并入副标题
+   （`网关运行中 · {n} 个账号启用 · {m} 个限流中`）。
+
+**类型限制（值得记住）**：`components/ui.tsx` 的 `PageHead.title` 是 **`string`**，
+不接受 ReactNode ⇒ **首页没法把图标塞进标题**。所以首页只换名称、图标留在登录页
+（那里是普通元素，可自由放组件）。若以后要在首页标题里放图标，得先放宽 `PageHead` 的
+`title` 类型 —— 那会牵动所有调用方，故本轮不做。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,629.44 → **1,630.27 kB**）；
+`check-mobile-ui.py` 0。
+
+**F-1 剩余**：`plugin-hidden`（隐藏账号过滤器）、`proxy-system`/`proxy-import`、
+`github-failure`、`assistant-message-actions`、`clash-proxy`；账号用量是否切任务式。

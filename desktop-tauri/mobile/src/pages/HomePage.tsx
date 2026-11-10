@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { PageHead, SectionHead, Empty, ErrorNote, copyWithToast } from '../components/ui'
 import { ProviderLogo, GlyphLogo } from '../components/ProviderLogo'
 import { HiddenAccountsNotice } from '../components/HiddenAccountsNotice'
+import { mobileBranding } from '../lib/branding'
 import { Icon } from '../components/Icon'
 import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
 import { useStore, store } from '../state/store'
@@ -28,6 +29,8 @@ import { Card, Button } from '@ui'
  * 其余细节点进去看。
  */
 export function HomePage() {
+  // 网关可自定义品牌名：首页标题跟随它（没配置时用内置名）。
+  const branding = mobileBranding.useValue()
   const state = useStore()
   const session = state.session
   const accounts = session?.accounts?.accounts || []
@@ -102,8 +105,8 @@ export function HomePage() {
     <div className='m-page' ref={pull.bindRef}>
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <PageHead
-        title={t('网关运行中')}
-        subtitle={t('{n} 个账号启用 · {m} 个限流中', { n: enabled, m: limited })}
+        title={branding.displayName}
+        subtitle={`${t('网关运行中')} · ${t('{n} 个账号启用 · {m} 个限流中', { n: enabled, m: limited })}`}
         actions={canRefresh ? (
           <Button size='icon-touch' variant='outline' type='button' className='m-icon-btn'
             aria-label={state.loading ? t('刷新中…') : t('刷新')}
