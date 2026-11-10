@@ -475,19 +475,52 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
       if (callbackInputRef.current) callbackInputRef.current.value = ''
       setHasCallback(false)
       if (next.nextUrl) {
-        await cancelDynamicLogin(state)
-        if (!isCurrent()) return
-        clearCallback()
-        flowRef.current = ''
-        setFlow(null)
-        setProgress('')
-        setError(t('该登录需要继续跳转，请在网关桌面面板重新发起。'))
+        /*
+         * 多步授权：这一步只是「还要再去一个授权页」，不是失败。
+         *
+         * 以前这里直接取消本次等待、让用户改用桌面面板 —— 但移动端本来就打得开
+         * 网页，白白把一条能走完的路堵掉了。现在按上游做法**就地换掉授权页地址**
+         * 继续等；回填仍然是「完整回调地址」，用户只需再复制一次。
+         *
+         * 校验不能省：nextUrl 由网关/插件给出，要**当外部输入对待** ——
+         * 只允许 https、不许带用户名密码、不许含控制字符或空白，
+         * 否则一个 `javascript:` 或带凭证的地址会被我们原样交给 `window.open`。
+         */
+        let url: URL
+        try {
+          if (/[\u0000-\u0020\u007f]/.test(next.nextUrl)) throw new Error()
+          url = new URL(next.nextUrl)
+        } catch {
+          await cancelDynamicLogin(state)
+          if (!isCurrent()) return
+          clearCallback()
+          flowRef.current = ''
+          setFlow(null)
+          setProgress('')
+          setError(t('登录授权地址无效，已取消本次等待。'))
+          return
+        }
+        if (url.protocol !== 'https:' || url.username || url.password) {
+          await cancelDynamicLogin(state)
+          if (!isCurrent()) return
+          clearCallback()
+          flowRef.current = ''
+          setFlow(null)
+          setProgress('')
+          setError(t('登录授权地址无效，已取消本次等待。'))
+          return
+        }
+        setFlow(current => current?.state === state ? { ...current, url: next.nextUrl! } : current)
+        setCallbackNotice(t('还需继续授权，请打开下一步授权页，完成后回填新的完整回调地址。'))
         return
       }
       setCallbackNotice(t('回调已提交，仍需等待网关确认账号登录完成。'))
       // 回调收到不等于完成；账号添加只认 wait 的 done+session。
-    } catch {
-      if (isCurrent()) setCallbackError(t('授权回调提交失败；请检查输入并重试，登录仍在等待。'))
+    } catch (failure) {
+      // 网关可能给了具体原因（hint）；有就照它说，没有才用通用提示。
+      const hint = (failure as { hint?: unknown })?.hint
+      if (isCurrent()) setCallbackError(loginText(hint)
+        || t('回调未被接受，请重新复制本次登录的完整回调地址'))
     } finally {
       if (isCurrent()) {
         callbackRequest.current = false
