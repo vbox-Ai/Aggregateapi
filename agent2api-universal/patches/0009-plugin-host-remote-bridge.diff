@@ -1,0 +1,322 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/callbacks.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/callbacks.rs
+@@ -179,6 +179,29 @@
+             return;
+         }
+         let _lease = lease;
++        let id = frame.id;
++        // 无方法名的帧今天就是**不应答**的；抽取时不顺手改语义
++        let Some(outcome) = self.serve_request(frame).await else { return };
++        let reply = match outcome {
++            Ok(result) => proto::Frame { id, result: Some(result), ..Default::default() },
++            Err(error) => proto::Frame { id, error: Some(error), ..Default::default() },
++        };
++        let _ = self.write_for_run(reply, run).await;
++    }
++
++    /// 处理宿主发来的**一个请求帧**，返回应答（`None` = 这一帧不需要应答）。
++    ///
++    /// ── 为什么从 `serve_callback` 里抽出来 ────────────────────────
++    /// iOS 上没有 Bun（`script/bun.rs` 的 `asset()` 没有 ios 分支），宿主改在手机
++    /// 里跑，那条路径**没有子进程**、也就没有 `ProcessRun`。但回调处理本身不该分叉：
++    /// 授权规则、方法归一、`store.*` 的读写都是插件行为的一部分，复制一份迟早不一致。
++    /// 所以守卫与写回留在 `serve_callback`（那里才有 run），中间这段只依赖 `&self`
++    /// 的逻辑放这里，两条路径共用同一份实现。
++    pub(super) async fn serve_request(
++        &self,
++        frame: proto::Frame,
++    ) -> Option<Result<serde_json::Value, proto::WireError>> {
++        frame.method.clone()?;
+         let Some(mut method) = frame.method.clone() else { return };
+         if self.options.script {
+             method = match method.as_str() {
+@@ -318,11 +341,6 @@
+             )),
+         };
+ 
+-        // 插件重启后会复用回调 ID，应答只能写回发起它的那一代进程。
+-        let frame = match outcome {
+-            Ok(result) => proto::Frame { id, result: Some(result), ..Default::default() },
+-            Err(error) => proto::Frame { id, error: Some(error), ..Default::default() },
+-        };
+-        let _ = self.write_for_run(frame, run).await;
++        Some(outcome)
+     }
+ }
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
+@@ -307,6 +307,14 @@
+     provider_settings: StdMutex<std::collections::BTreeMap<String, provider_settings::Schema>>,
+     /// 回调处理器（网关侧实现，见 [`GatewayCallbacks`]）。
+     callbacks: Arc<dyn GatewayCallbacks>,
++    /// 远端宿主的出站口。
++    ///
++    /// ── 为什么需要它 ──────────────────────────────────────────────
++    /// 正常情况下这个宿主是**子进程**：出站帧写它的 stdin。iOS 上没有 Bun，
++    /// 宿主改在手机里跑，于是这里多一个出口 —— `write()` 有条远端就投远端。
++    /// 只挂在 `write()`（网关主动发起）与远端帧的应答上，**不动 `write_for_run`**：
++    /// 后者带 run 身份，是子进程路径的帧边界保证，不能兼作两条路。
++    remote: StdMutex<Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>>>,
+ }
+ 
+ /// 子进程与它的管道。
+@@ -391,6 +399,7 @@
+             providers: StdMutex::new(Vec::new()),
+             provider_settings: StdMutex::new(std::collections::BTreeMap::new()),
+             callbacks,
++            remote: StdMutex::new(None),
+         }
+     }
+ 
+@@ -623,10 +632,62 @@
+         }
+     }
+ 
+-    /// 写一帧给插件。
++    /// 写一帧给插件（或远端宿主）。
+     async fn write(&self, frame: proto::Frame) -> std::io::Result<()> {
++        // 远端会话优先：它没有子进程，current_run() 必然是空的。
++        // 通道关闭（手机断开）时如实报断开，不静默丢弃 —— 上层据此收尾。
++        let remote = self.remote.lock().ok().and_then(|slot| slot.as_ref().cloned());
++        if let Some(sender) = remote {
++            return sender.send(frame).map_err(|_| process::disconnected());
++        }
+         let run = self.current_run().ok_or_else(process::disconnected)?;
+         self.write_for_run(frame, run).await
++    }
++
++    /// 挂上远端出站口（手机端宿主接入时调用），交出本会话的出站接收端。
++    ///
++    /// 重复挂载会替换旧会话：旧通道被丢弃后它的写入会失败（见 `write`），
++    /// 不会与新会话串帧。
++    pub(crate) fn attach_remote(
++        &self,
++    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>> {
++        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
++        let mut slot = self.remote.lock().ok()?;
++        *slot = Some(sender);
++        Some(receiver)
++    }
++
++    /// 拆掉远端出站口；之后 `write()` 回到子进程路径。
++    pub(crate) fn detach_remote(&self) {
++        if let Ok(mut slot) = self.remote.lock() {
++            *slot = None;
++        }
++    }
++
++    pub(crate) fn has_remote(&self) -> bool {
++        self.remote.lock().map(|slot| slot.is_some()).unwrap_or(false)
++    }
++
++    /// 处理远端宿主发来的**一个帧**。
++    ///
++    /// 与子进程读循环的差别只有一处：这里没有 `ProcessRun`，也就没有「是不是
++    /// 当代进程」要判断 —— 远端会话的身份就是那条通道本身。
++    pub(crate) async fn serve_remote_frame(&self, frame: proto::Frame) {
++        match frame.kind() {
++            proto::FrameKind::Reply | proto::FrameKind::Error => self.settle(frame),
++            proto::FrameKind::Event => self.handle_event(frame),
++            proto::FrameKind::Request => {
++                let id = frame.id;
++                let reply = match self.serve_request(frame).await {
++                    // 与原行为一致：无方法名的帧不应答
++                    None => return,
++                    Some(Ok(result)) => proto::Frame { id, result: Some(result), ..Default::default() },
++                    Some(Err(error)) => proto::Frame { id, error: Some(error), ..Default::default() },
++                };
++                let _ = self.write(reply).await;
++            }
++            proto::FrameKind::Unknown => {}
++        }
+     }
+ 
+     async fn write_for_run(&self, frame: proto::Frame, run: Arc<process::ProcessRun>) -> std::io::Result<()> {
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/mod.rs
+@@ -31,6 +31,9 @@
+ pub use operations::{change, install, operation};
+ pub(super) use protocol::{close as close_stream, open as open_stream, push as push_stream};
+ pub(super) use runtime::{host, observe_concurrency, package_for_provider, registered_label};
++// 远端宿主（手机本地运行）需要脚本宿主句柄，而上面那行是 pub(super)（api/ 看不到）。
++// 只**新增**一个 pub(crate) 别名，不改原可见性，避免动到既有引用面。
++pub(crate) use runtime::host as script_host;
+ pub use runtime::{concurrency_default, known_provider, provider_icons, provider_state, snapshot, start};
+ pub use updates::check as check_updates;
+ pub fn refresh_catalog() -> serde_json::Value {
+--- a/desktop-tauri/src-tauri/server/src/server/http.rs
++++ b/desktop-tauri/src-tauri/server/src/server/http.rs
+@@ -709,6 +709,11 @@
+         .route("/api/plugins/scripts/catalog/refresh", post(api::plugins::refresh_script_catalog))
+         // 宿主源码：手机本地运行脚本插件时取用（iOS 上没有 Bun，网关起不了宿主）
+         .route("/api/plugins/host/source", get(api::plugin_host::source))
++        // 远端宿主桥：手机本地跑宿主时的上行/下行（见 api::plugin_host 顶部说明）
++        .route("/api/plugins/host/open", post(api::plugin_host::open_remote))
++        .route("/api/plugins/host/frames", post(api::plugin_host::frames))
++        .route("/api/plugins/host/stream", get(api::plugin_host::stream))
++        .route("/api/plugins/host/close", post(api::plugin_host::close_remote))
+         .route(
+             "/api/plugins/install",
+             post(api::plugins::install).route_layer(axum::extract::DefaultBodyLimit::max(
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -15,14 +15,23 @@
+ //! 同构：处理函数签名、`ok_json` 的用法照那一份写；路由挂在 `protected` 分组下，
+ //! 鉴权由分组负责（见 `http.rs`）。
+ 
++use agent2api_provider_protocol as proto;
++use axum::body::{Body, Bytes};
+ use axum::extract::State;
+-use axum::http::HeaderMap;
+-use axum::response::Response;
++use axum::http::{header, HeaderMap, StatusCode};
++use axum::response::{IntoResponse, Response};
++use axum::Json;
++use serde::Deserialize;
+ use serde_json::json;
+ 
+ use crate::server::core::plugin_host::script;
+ use crate::server::http::ok_json;
+ use crate::server::ServerState;
++
++/// 桥上的失败要能一眼看出是哪一层（缺宿主 / 会话没开 / 内部错）
++fn error_response(message: &str, status: StatusCode) -> Response {
++    (status, Json(json!({ "error": message }))).into_response()
++}
+ 
+ /// 返回宿主源码全量（含 `bunfig.toml` / `package.json` 两个小文件）。
+ ///
+@@ -35,3 +44,133 @@
+         .collect();
+     ok_json(json!({ "hostId": script::HOST_ID, "files": files }))
+ }
++
++
++// ── 远端宿主桥（iOS：宿主跑在手机里）────────────────────────────────
++//
++// 宿主与网关之间是「一行一个 JSON 帧」的 NDJSON，正常走子进程的 stdin/stdout。
++// iOS 上没有 Bun（`script/bun.rs` 的 `asset()` 没有 ios 分支），宿主改在手机的
++// Worker 里跑，于是同一份协议改走 HTTP：
++//   · 上行：手机把宿主发出的帧 POST 到 /api/plugins/host/frames
++//   · 下行：手机 GET /api/plugins/host/stream，长连接收网关（与插件）发出的帧
++//
++// ── 为什么不用 WebSocket ────────────────────────────────────────
++// 网关的 axum 只开了 multipart（Cargo.toml:80），没有 ws 特性；开特性等于改依赖面。
++// 这两个端点用现成的 `Body::from_stream` 就够（写法照 api/backup_api.rs:158-173）。
++//
++// ── 会话是单例 ──────────────────────────────────────────────────
++// 一台网关同一时刻只服务一个面板（宿主本身也是单实例），所以用一个全局槽持有
++// 出站接收端，由 `GET /stream` 取走。重复 open 会替换旧会话。
++
++static REMOTE_INBOX: std::sync::OnceLock<
++    std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>>>,
++> = std::sync::OnceLock::new();
++
++fn inbox() -> &'static std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>>> {
++    REMOTE_INBOX.get_or_init(|| std::sync::Mutex::new(None))
++}
++
++fn host_or_error() -> Result<std::sync::Arc<crate::server::core::plugin_host::Host>, Response> {
++    script::script_host().ok_or_else(|| {
++        error_response(
++            "这台网关没有脚本宿主（脚本插件可能未启用）",
++            StatusCode::SERVICE_UNAVAILABLE,
++        )
++    })
++}
++
++/// 打开远端宿主会话：挂上出站口，交由手机发 `init` 完成握手。
++pub async fn open_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
++    let host = match host_or_error() {
++        Ok(host) => host,
++        Err(response) => return response,
++    };
++    match host.attach_remote() {
++        Some(receiver) => {
++            if let Ok(mut slot) = inbox().lock() {
++                *slot = Some(receiver);
++            }
++            ok_json(json!({ "hostId": script::HOST_ID }))
++        }
++        None => error_response("插件宿主状态不可用", StatusCode::INTERNAL_SERVER_ERROR),
++    }
++}
++
++#[derive(Deserialize)]
++pub struct FramesBody {
++    /// 宿主发出的帧（与子进程 stdout 上的完全一致，一行一个）
++    lines: Vec<String>,
++}
++
++/// 上行：把手机端宿主发出的帧交给同一套回调处理。
++pub async fn frames(
++    State(_state): State<ServerState>,
++    _headers: HeaderMap,
++    Json(body): Json<FramesBody>,
++) -> Response {
++    let host = match host_or_error() {
++        Ok(host) => host,
++        Err(response) => return response,
++    };
++    // 拼成一个流再按帧读：proto 的读取接口吃的是 AsyncRead（lifecycle.rs:238 就是这么用的），
++    // 逐行自己解析等于重写一遍协议。
++    let payload = body.lines.join("\n");
++    let bytes = payload.as_bytes();
++    let mut reader = tokio::io::BufReader::new(bytes);
++    let mut accepted = 0usize;
++    loop {
++        match proto::read_frame(&mut reader).await {
++            Ok(Some(frame)) => {
++                host.serve_remote_frame(frame).await;
++                accepted += 1;
++            }
++            Ok(None) => break,
++            Err(error) => {
++                return error_response(
++                    &format!("宿主帧读取失败：{error}"),
++                    StatusCode::BAD_REQUEST,
++                )
++            }
++        }
++    }
++    ok_json(json!({ "accepted": accepted }))
++}
++
++/// 下行：把网关（与插件）发出的帧流给手机。
++pub async fn stream(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
++    let taken = inbox().lock().ok().and_then(|mut slot| slot.take());
++    let Some(mut receiver) = taken else {
++        return error_response("远端宿主会话还没打开", StatusCode::CONFLICT);
++    };
++    let body = Body::from_stream(futures::stream::unfold(receiver, |mut receiver| async move {
++        match receiver.recv().await {
++            Some(frame) => {
++                // 用同一套写入器编码，保证与子进程路径逐字节一致
++                let mut out: Vec<u8> = Vec::new();
++                match proto::write_frame(&mut out, &frame).await {
++                    Ok(()) => Some((Ok::<_, std::io::Error>(Bytes::from(out)), receiver)),
++                    // 编码失败：不静默丢帧，把原因作为流错误交给客户端
++                    Err(error) => Some((Err(std::io::Error::other(error.to_string())), receiver)),
++                }
++            }
++            None => None,
++        }
++    }));
++    Response::builder()
++        .status(StatusCode::OK)
++        .header(header::CONTENT_TYPE, "application/x-ndjson")
++        .header(header::CACHE_CONTROL, "no-store")
++        .body(body)
++        .unwrap_or_else(|_| error_response("下行流构造失败", StatusCode::INTERNAL_SERVER_ERROR))
++}
++
++/// 关闭远端宿主会话（面板退出或手机断开）。
++pub async fn close_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
++    if let Some(host) = script::script_host() {
++        host.detach_remote();
++    }
++    if let Ok(mut slot) = inbox().lock() {
++        *slot = None;
++    }
++    ok_json(json!({ "ok": true }))
++}
