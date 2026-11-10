@@ -9,7 +9,17 @@ import type { CheckinAction } from '../CheckinPage'
 import { CheckinGrowth } from './CheckinGrowth'
 import { CheckinPlansSheet } from './CheckinPlansSheet'
 import { store } from '../../state/store'
-import { t } from '../../i18n'
+import { CampaignRewards } from '../../../../ui-shared/checkin-campaign-rewards'
+import { OfficeaceSubscription } from '../../../../ui-shared/checkin-officeace-subscription'
+import {
+  activateOfficeaceSubscription, claimCampaignReward, getCampaignRewards,
+  getOfficeaceSubscription, redeemCampaignBenefit,
+} from '../../api/checkin'
+import { t, locale } from '../../i18n'
+
+// 上游把活动与订阅的接口收成两个小适配器交给共享组件，组件本身不认识我们的 apiCall。
+const campaignApi = { query: getCampaignRewards, claim: claimCampaignReward, redeem: redeemCampaignBenefit }
+const subscriptionApi = { query: getOfficeaceSubscription, activate: activateOfficeaceSubscription }
 
 export function CheckinBenefits({ center, section, busy, action, onChange }: {
   center: CheckinCenter; section: CheckinSection; busy: string; action: CheckinAction; onChange: () => void
@@ -28,9 +38,19 @@ export function CheckinBenefits({ center, section, busy, action, onChange }: {
       </div>
       <div hidden={section !== 'plans'}>
         <CreditsCard />
-        {center.extras?.plans?.length ? <div className='m-section'>
+        {(center.extras?.plans?.length ?? 0) + (center.extras?.campaigns?.length ?? 0) > 0
+          ? <div className='m-section'>
           <SectionHead title={t('活动福利')} />
           <Card className='m-card'>
+            {/* 限时活动：与「套餐」并列，逐项查询后领取；不改动每日签到 */}
+            {center.extras?.campaigns?.map(row => <div className='m-card-pad m-ck-account' key={row.id}>
+              <div className='m-ck-toolbar mb-3'>
+                <ProviderLogo id={row.provider} />
+                <div className='m-ck-title m-ck-grow'>{row.name || row.id}</div>
+              </div>
+              <CampaignRewards entry={row} api={campaignApi} t={t} locale={locale()}
+                formatTime={formatStamp} onChange={onChange} />
+            </div>)}
             {center.extras.plans.map(row => {
               const claimed = claimedPlansToday(row.claimPlans)
               return <div className='m-card-pad m-ck-account' key={row.id}>
@@ -197,6 +217,10 @@ function OnboardingRow({ row, busy, action }: { row: OnboardingEntry; busy: stri
         <Badge tone={task.done ? 'ok' : task.blocked ? 'mute' : 'warn'}>{task.done ? t('已领取') : task.blocked ? t('未解锁') : t('待领取')}</Badge>
       </div>)}
       {!data && !settled ? <p className='m-ck-note'>{t('点击查询后查看任务，领取操作由网关执行')}</p> : null}
+      {/* OfficeACE 的订阅状态挂在这一行下面（上游同款），只对该家显示 */}
+      {row.provider === 'officeace' ? <div className='mt-3 border-t border-border pt-3'>
+        <OfficeaceSubscription accountId={row.id} api={subscriptionApi} t={t} active />
+      </div> : null}
     </div>
   )
 }

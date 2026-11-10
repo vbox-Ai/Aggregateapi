@@ -3676,3 +3676,37 @@ A1 的宿主闸门会对 iOS 直接拒绝下载（`当前运行形态不支持�
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,592.22 → **1,599.79 kB**）；
 `check-mobile-ui.py` 0。
+
+#### 记忆点 · 步骤 82（批次 E-2：签到活动 + OfficeACE 订阅接入）
+
+**缺口定位**：活动与订阅的**接口层在我们改过的文件里**（`mobile/src/api/checkin.ts` 7068 B，
+只有 23 个导出函数，没有活动/订阅那 5 个），而 A2 同步的是 `ui-shared/checkin.ts`
+（**同名不同层**）⇒ 只同步 ui-shared 不够，**手机端 API 层要单独补**。
+
+**补进 `api/checkin.ts` 的 5 个接口**（路径都打在 `${accountPath(id)}` 下）：
+- `getCampaignRewards(id)` → `GET  /campaigns`
+- `claimCampaignReward(id, campaignId)` → `POST /campaigns/claim`
+- `redeemCampaignBenefit(id, code)` → `POST /campaigns/redeem`
+- `getOfficeaceSubscription(id)` → `GET  /officeace-subscription`
+- `activateOfficeaceSubscription(id, confirmAgreements)` → `POST /officeace-subscription/activate`
+
+**踩到的坑**：我判断"文件里没有 accountPath"用的匹配模式是 `function accountPath`，
+而实际写法是 `const accountPath = (id: string) => \`…\`` ⇒ **误判为缺失**，于是追加了一份重复定义 ⇒
+`tsc` 报 `TS2300 Duplicate identifier`。删掉我加的那份即可（两份实现逐字等价）。
+**教训：判断"有没有某个符号"不能用单一写法模式，TS 自己会在 tsc 里告诉你（这也说明先跑 tsc 是对的）。**
+
+**CheckinBenefits 接入两处**：
+1. 「活动福利」节：显示条件从 `plans?.length` 放宽为 `(plans ?? 0) + (campaigns ?? 0) > 0`，
+   并在套餐列表**之前**渲染 `center.extras.campaigns`，每行用共享组件
+   `<CampaignRewards entry={row} api={campaignApi} t={t} locale={locale()} formatTime={formatStamp} onChange={onChange} />`；
+2. 账号行（`OnboardingRow`）末尾：`row.provider === 'officeace'` 时加 `<OfficeaceSubscription accountId={row.id} api={subscriptionApi} t={t} active />`。
+   两个共享组件都**不认识我们的 apiCall**，所以按上游做法收成两个小适配器
+   （`campaignApi = {query, claim, redeem}`、`subscriptionApi = {query, activate}`）传进去。
+
+**批次 E 仍剩最后一项（明确记下）**：`pages/add-account-dynamic-sheet.tsx`（我们自建的加号面板，28 KB）
+需要并入上游的 **Antigravity 登录方式**：`AntigravityMethods` 组件 +
+`antigravity-login.ts` 的三个助手（`isAntigravityAccountProvider` / `groupAntigravityCards` / `antigravityLoginProviders`），
+在选中 Antigravity 系提供商时替换登录方式列表。模块已于 E-1 引入，只差接入。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,599.79 → **1,616.98 kB**）；
+`check-mobile-ui.py` 0。
