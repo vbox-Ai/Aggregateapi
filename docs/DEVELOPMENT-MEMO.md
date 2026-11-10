@@ -3861,3 +3861,25 @@ E-3（Antigravity 登录方式）本次提交。**A–E 五批全部完成**，�
 
 **F-1 剩余**：`plugin-hidden`（隐藏账号过滤器）、`proxy-system`/`proxy-import`、
 `github-failure`、`assistant-message-actions`、`clash-proxy`；账号用量是否切任务式。
+
+#### 记忆点 · 步骤 88（批次 F-1d：隐藏账号的筛选与详情）
+
+**判定依据**：我们的 `HiddenAccountsNotice.tsx` 与 **v3.4.2 逐字节相同**（1749 B）⇒
+无本地增量 ⇒ **整取上游新版**（4991 B），零冲突。这也是本轮最快的一项：
+上游把它从「一张静态提示卡」升级成了**入口按钮 + 抽屉**：
+- 入口只显示「未显示账号 N」，加载异常时带一个 `加载异常` 徽标；
+- 抽屉里可按原因筛选（全部 / 待就绪 / 未安装 / 已停用 / 加载异常，各带计数）、
+  每行给 `hiddenLabel`（徽标）+ `hiddenDetail`（保留 N 个账号 + 原因细节）+ `hiddenAction`（按钮文案），
+  以及「去插件页」——并且**知道 packId 时才带 id 深链**去插件页看诊断；
+- 状态用 `useSyncExternalStore(subscribePluginStartup, getPluginStartup)` 订阅，
+  抽屉打开时 `refreshPluginStartup()`；拿不到状态时显示上次结果并给「刷新状态」，
+  文案明确写「**这不代表插件启动失败**」（避免用户误判）。
+
+**这一步把 `plugin-hidden.ts` 接通**（6 个助手全部被用上）✓，也让「账号为什么不见」
+从一句笼统提示变成了可逐项查看、可一键跳去修。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,630.27 → **1,633.82 kB**）；
+`check-mobile-ui.py` 0。
+
+**F-1 剩余**：`proxy-system`/`proxy-import`（系统代理探测与批量导入）、
+`github-failure`、`assistant-message-actions`、`clash-proxy`；账号用量是否切任务式。
