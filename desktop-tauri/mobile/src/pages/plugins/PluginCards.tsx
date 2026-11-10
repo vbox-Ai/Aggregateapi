@@ -75,19 +75,19 @@ export function PluginCard({ pack, target, busy, update, operation, onEnabled, o
   return <Card render={<article />} className='m-card m-card-pad'>
     <Head name={pack.name || pack.id} version={pack.version} icon={pack.icon} />
     <div className='m-ck-actions'>
+      <Badge tone='mute'>{t('社区插件')}</Badge>
       <Badge tone={pack.enabled ? 'ok' : 'mute'}>{pack.enabled ? t('已启用') : t('已停用')}</Badge>
       <Badge tone={pack.signed ? 'ok' : 'warn'}>{pack.signed ? t('已签名') : t('未签名')}</Badge>
-      {required ? <Badge tone='warn'>{t('需要补齐插件')}</Badge> : null}
+      {required ? <Badge tone='warn'>{t('接口不兼容')}</Badge> : null}
       <Badge tone={pluginFailed(startup) ? 'warn' : startup?.phase === 'ready' ? 'ok' : 'mute'}>{pluginPhaseLabel(startup, t)}</Badge>
-      <Button size='sm' variant='ghost' disabled={locked} onClick={() => requestPluginDiagnostics(pack.id)}>{t('诊断')}</Button>
+      <Button size='sm' variant='ghost' disabled={locked} onClick={() => requestPluginDiagnostics(pack.id)}>{t('加载诊断')}</Button>
       <Badge tone={pack.providers?.some(provider => provider.loaded) ? 'ok' : 'warn'}>{t('已加载 {n} 家', { n: pack.providers?.filter(provider => provider.loaded).length || 0 })}</Badge>
     </div>
     {pack.description ? <p className='m-ck-note'>{t(pack.description)}</p> : null}
     {required ? <div className='mt-3 rounded-md border border-destructive/30 px-3 py-2' aria-live='polite'>
-      <p className='m-ck-error'>{t('当前网关要求插件版本不低于 v{version}，补齐前暂不加载。', { version: pack.requiredVersion || '' })}</p>
-      <p className='m-ck-note'>{pack.signed
-        ? t('正在自动补齐官方插件，不受日常更新开关和通道限制。')
-        : t('未签名包不会自动覆盖；点击「补齐插件」将安装官方签名包。')}</p>
+      {/* 优先显示网关给的不兼容原因；没有才用通用说明 */}
+      <p className='m-ck-error'>{pack.compatibilityError || t('插件与当前网关的公共接口不兼容，暂未加载。')}</p>
+      <p className='m-ck-note'>{t('请根据不兼容原因更新插件或网关；不会要求两者版本号一致。')}</p>
       {update?.reason ? <p className={update.error ? 'm-ck-error' : 'm-ck-note'}>{pluginErrorMessage(update.reason)}</p> : null}
       {update?.retryAt && update.retryAt > Date.now() ? <p className='m-ck-note'>
         {t('下次自动重试：{time}', { time: new Date(update.retryAt).toLocaleString() })}
@@ -113,10 +113,16 @@ export function PluginCard({ pack, target, busy, update, operation, onEnabled, o
     <Collapsible className='mt-3 border-t border-hairline pt-3'>
       <CollapsibleTrigger className='m-ck-title'>{t('提供商启停')}</CollapsibleTrigger><CollapsibleContent keepMounted>
       {pack.providers?.map(provider => <Label className='m-ck-toolbar py-2' key={provider.id}>
-        <Switch checked={provider.enabled} disabled={locked || !pack.enabled} aria-label={t(provider.label)}
-          onCheckedChange={enabled => onProvider(provider.id, enabled)} />
+        {/* 被其他插件接管的提供商：开关置灰并显示原因 —— 这里改了也不会生效，
+            不说明的话用户会以为是自己没打开 */}
+        <Switch checked={provider.enabled && !provider.overriddenBy}
+          disabled={locked || !pack.enabled || Boolean(provider.overriddenBy)}
+          aria-label={t(provider.label)} onCheckedChange={enabled => onProvider(provider.id, enabled)} />
         <span className='m-ck-note m-ck-grow'>{t(provider.label)}</span>
-        {provider.enabled && !provider.loaded ? <Badge tone='warn'>{t('未加载')}</Badge> : null}
+        {provider.overriddenBy ? <Badge tone='mute'>{t('由其他插件接管')}</Badge>
+          : provider.enabled && !provider.loaded
+            ? <Badge tone={pluginFailed(startup) ? 'warn' : 'mute'}>{pluginPhaseLabel(startup, t)}</Badge>
+            : null}
       </Label>)}
     </CollapsibleContent></Collapsible>
   </Card>

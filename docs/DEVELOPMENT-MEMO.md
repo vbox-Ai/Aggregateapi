@@ -4011,3 +4011,27 @@ i18n/图标/入口一致性检查、出包（`only=store`）、包内标记核�
 **F-3 剩余 4 项**：`add-account` 的**多次继续授权回调**（2 条，涉及移动端续接多步 OAuth，需单独评估）、
 `PluginCards` 社区插件/接口不兼容/由其他插件接管/加载诊断（6 条）、`ToolsPage` 搜索框（6 条）、
 `AccountSheet` 任务式余额查询（4 条）、`AssistantPage` JSON 附件 + 清空（2 条）。
+
+#### 记忆点 · 步骤 93（F-3③：插件卡片对齐上游）
+
+**五处改动**：
+1. 加 **「社区插件」** 徽标（商店里的包都来自社区，一眼区分官方与社区）；
+2. 徽标措辞 **「需要补齐插件」→「接口不兼容」** —— 上游把这件事的口径从"版本低于要求"
+   改成了"公共接口不兼容"（**不要求两边版本号一致**）；
+3. 诊断按钮 **「诊断」→「加载诊断」**；
+4. 不兼容说明改上游措辞，且**优先显示网关给的原因**：
+   `pack.compatibilityError || t('插件与当前网关的公共接口不兼容，暂未加载。')`
+   + `请根据不兼容原因更新插件或网关；不会要求两者版本号一致。`
+   （替代我们原来按 `pack.signed` 分支的两句"自动补齐/不会覆盖"说明）；
+5. 提供商行支持 **「由其他插件接管」**：`provider.overriddenBy` 时开关置灰
+   （`checked={provider.enabled && !provider.overriddenBy}`、`disabled={… || Boolean(provider.overriddenBy)}`）
+   并显示接管徽标；未接管且未加载时显示加载阶段徽标。
+   **注释写明理由**：这里改了也不会生效，不说明的话用户会以为是自己没打开。
+
+**验证**：`tsc --noEmit` 0（也确认我们的类型里已有 `overriddenBy` 与 `compatibilityError`）；
+`pnpm run build` 0（`ui/m/mobile.js` 1,658.81 → **1,658.86 kB**）；`check-mobile-ui.py` 0；
+目标文案全部补齐 ✓
+
+**F-3 剩余 3 项（14 条）**：`ToolsPage` 搜索框（6 条，需换用带搜索的选择器）、
+`AccountSheet` 任务式余额查询（4 条，要动 614 行账号抽屉）、
+`AssistantPage` JSON 附件说明 + 清空（2 条）、`add-account` 多次继续授权回调（2 条，涉及移动端续接多步 OAuth）。
