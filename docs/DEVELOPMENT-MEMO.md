@@ -3430,3 +3430,34 @@ operations.rs、catalog.rs），双重自检 10/10 通过。
 CI 的工作目录 `Agent2API/desktop-tauri/src-tauri` 与面板构建入口均仍存在。
 
 **改动**：`agent2api-universal/patches/0004-plugin-store-own-repo-unsigned.diff`。
+
+#### 记忆点 · 步骤 74（上游功能补齐计划：66 个 ui-shared 新模块 + 25 个改动模块）
+
+**三方核实的硬事实**：我们 `ui-shared` 的文件集与上游 **v3.4.2 完全相同**（65 个，逐字节一致，
+仅 `plugins.ts` 我们自己改过 3886 B vs 3287 B）⇒ **我们的 fork 精确停在 v3.4.2**。
+上游 v3.5.0-beta.1 有 **131 个**，即 **v3.4.2 → v3.5.0-beta.1 新增 66 个**（约 300 KB），我们一个都没有。
+
+**66 个新增的功能分组**（决定分批）：
+- 维护 maintenance 10 个（约 65 KB，含 css）；脚本插件 plugins-script-* 12 个（约 63 KB）；
+  视觉/图片 10 个（约 48 KB）；插件基础设施 8 个（约 35 KB）；签到活动 4 个（约 30 KB）；
+  提供商设置 4 个（约 19 KB）；代理 4 个（约 19 KB）；品牌/验证码 4 个（约 11 KB）；杂项 10 个（约 30 KB）。
+- **29 个无内部依赖，36 个的依赖按功能域成闭环**（maintenance / checkin / plugins-script / vision / proxy
+  各自成套）⇒ 可按域分批引入，每批独立可编译、可验证、可出包。
+
+**25 个被上游改动的既有模块里，24 个我们与 v3.4.2 逐字节相同** ⇒ 可直接用上游新版整文件替换、
+**零冲突**；仅 `plugins.ts` 需三方合并（v3.4.2 3287 → 我们 3886 → 上游 6606，上游新增
+`ScriptPluginsState`/`ScriptCatalogInfo`/`ScriptOperation` 等脚本插件类型）。
+
+**移动端接入机制（写进计划，避免下次重新摸索）**：
+页面清单在 `lib/routes.ts` 的 `SCREEN_IDS` 数组（当前 24 项），屏幕→组件映射在 `App.tsx` 的对象表，
+导航入口在 `MorePage`/`NavBar`/对应功能页；路由跳转用 `store.go('<screen>')`。
+
+**计划文档**：`docs/UPSTREAM-SYNC-PLAN.md`（六批：A 闸门+老模块同步 → B 维护 → C 脚本插件 →
+D 提供商/代理/视觉 → E 品牌/验证码/签到 → F 收尾出包），每批验收含四项检查与 CI（判据是
+**iOS 作业** conclusion，不是 run 级）。
+
+**同时发现的 0001 闸门覆盖缺口**（计划批次 A1）：`start()` 里
+`if self.options.wasm.is_some() { return self.start_wasm().await; }` 在闸门**之前**返回 ⇒ iOS 上
+wasm 插件不被拦；`script/settings.rs` 的 `bun::ensure()`（下载 bun 运行时）也不受闸门约束。
+
+**改动**：`docs/UPSTREAM-SYNC-PLAN.md`（新增）。
