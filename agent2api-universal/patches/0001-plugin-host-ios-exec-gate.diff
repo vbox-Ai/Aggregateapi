@@ -1,54 +1,61 @@
 diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
-index 3a469d6..7349c1f 100644
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
-@@ -66,6 +66,37 @@ impl Host {
-         }
-     }
+@@ -9,7 +9,42 @@
+ use super::process::{self, ExitReport, ProcessRun};
+ use super::{Host, Inner, StreamEvent};
  
-+    /// 当前运行形态能否启动插件子进程。
-+    ///
-+    /// ── 为什么需要这个闸门 ────────────────────────────────────
-+    /// provider 实现已经外置到插件包，插件起不来就等于「所有厂商都不可用」。
-+    /// 直接让 spawn 失败会让用户看到 `Operation not permitted`，而
-+    /// `providers/missing_plugin.rs` 已经约定好可行动文案；两者必须一致。
-+    ///
-+    /// ── 开关口径 ──────────────────────────────────────────────
-+    /// · `AGENT2API_NO_EXEC=1`    强制拒绝（容器 / CI 里做「无插件」演示用）
-+    /// · `AGENT2API_ALLOW_EXEC=1` 强制允许（iOS 越狱 daemon 必须显式声明：
-+    ///   launchd 拉起的 Mach-O 可以 posix_spawn，但只有部署者自己知道它是
-+    ///   不是这种形态，所以不给默认值）
-+    /// · iOS 未声明 → 拒绝（App 沙盒里内嵌的网关走这条）
-+    /// · 其它平台 → 允许，行为与打补丁前完全一致
-+    fn exec_blocked() -> Option<&'static str> {
-+        let flag = |key: &str| std::env::var(key).map(|v| v.trim() == "1").unwrap_or(false);
-+        if flag("AGENT2API_NO_EXEC") {
-+            return Some("AGENT2API_NO_EXEC=1");
-+        }
-+        if flag("AGENT2API_ALLOW_EXEC") {
-+            return None;
-+        }
-+        #[cfg(target_os = "ios")]
-+        {
-+            return Some("iOS 形态未声明 AGENT2API_ALLOW_EXEC=1");
-+        }
-+        #[cfg(not(target_os = "ios"))]
-+        {
-+            None
-+        }
++/// 当前运行形态能否启动插件子进程、或为脚本插件准备运行时。
++///
++/// ── 为什么需要这道闸门 ────────────────────────────────────
++/// provider 实现已经外置到插件包，插件起不来就等于「所有厂商都不可用」。
++/// 让 spawn 或下载直接失败，用户会看到 `Operation not permitted` 一类的系统错误，
++/// 而 `providers/missing_plugin.rs` 已经约定好可行动文案；两者必须一致。
++///
++/// ── 三种插件形态都要过这关 ────────────────────────────────
++/// 进程插件（`--serve-pack`）、脚本插件（Bun）、wasm 插件；以及脚本插件安装时的
++/// Bun 运行时下载。任一路径绕过它，就会出现「装得上但用不了」。
++///
++/// ── 开关口径 ──────────────────────────────────────────────
++/// · `AGENT2API_NO_EXEC=1`    强制拒绝（容器 / CI 里做「无插件」演示用）
++/// · `AGENT2API_ALLOW_EXEC=1` 强制允许（iOS 越狱 daemon 必须显式声明：
++///   launchd 拉起的 Mach-O 可以 posix_spawn，但只有部署者自己知道它是不是这种形态，
++///   所以不给默认值）
++/// · iOS 未声明 → 拒绝（App 沙盒里内嵌的网关走这条）
++/// · 其它平台 → 允许，行为与打补丁前完全一致
++pub(super) fn exec_blocked() -> Option<&'static str> {
++    let flag = |key: &str| std::env::var(key).map(|v| v.trim() == "1").unwrap_or(false);
++    if flag("AGENT2API_NO_EXEC") {
++        return Some("AGENT2API_NO_EXEC=1");
 +    }
-     async fn start(self: &Arc<Self>) -> Result<Vec<proto::ProviderInfo>, String> {
-         let _serial = self.starting.lock().await;
-         if self.closing.load(Ordering::Acquire) { return Err("插件宿主正在关闭".to_string()); }
-@@ -103,6 +134,18 @@ impl Host {
-         if self.options.script { super::script::clear_transport(); }
-         *self.inner.lock().await = None;
++    if flag("AGENT2API_ALLOW_EXEC") {
++        return None;
++    }
++    #[cfg(target_os = "ios")]
++    {
++        return Some("iOS 形态未声明 AGENT2API_ALLOW_EXEC=1");
++    }
++    #[cfg(not(target_os = "ios"))]
++    {
++        None
++    }
++}
+ impl Host {
+     fn scoped_runtime_package(&self) -> bool {
+         self.providers.lock().ok().is_some_and(|providers| providers.iter()
+             .any(|provider| crate::server::core::providers::is_scoped_runtime_provider(provider.id.as_str())))
+@@ -83,7 +83,22 @@
+         }
  
-+        // ── 宿主能力闸门：在 spawn 之前，而不是在 spawn 失败之后 ──────
-+        // 语义与 `providers/missing_plugin.rs` 对齐：文案可行动、状态可恢复
-+        // （插件装好或形态换掉之后能自愈），并把宿主标记为 disabled，
-+        // 避免每次请求都重试一次注定失败的 spawn。
-+        if let Some(reason) = Self::exec_blocked() {
+         if let Some(attempt) = &self.options.startup { attempt.phase(super::startup::Phase::Starting); }
++        if let Some(attempt) = &self.options.startup { attempt.phase(super::startup::Phase::Starting); }
++
++        // ── 宿主闸门：必须排在 wasm 分支之前 ─────────────────────────
++        // 进程插件、脚本插件、wasm 插件都要过这一关。原来只拦 spawn 路径，
++        // 而 wasm 在下面一行就 return 走了，等于漏拦（iOS 禁 JIT，wasm 起了也必然失败，
++        // 属于「装得上但用不了」）。文案与 `providers/missing_plugin.rs` 一致，并且把
++        // 宿主标记为 disabled，避免每次请求都重试一次注定失败的启动。
++        if let Some(reason) = exec_blocked() {
 +            let message = format!(
 +                "该提供商需要安装插件，但当前运行形态不支持启动插件进程（{reason}）"
 +            );
@@ -56,6 +63,27 @@ index 3a469d6..7349c1f 100644
 +            self.disabled.store(true, Ordering::Release);
 +            return Err(message);
 +        }
-         let mut command = tokio::process::Command::new(&self.options.exe);
-         command.args(&self.options.args)
-             .stdin(std::process::Stdio::piped())
+         if self.options.wasm.is_some() { return self.start_wasm().await; }
+         if let Some(old) = self.current_run() {
+             {
+                 let _state = self.lifecycle.lock().unwrap_or_else(|error| error.into_inner());
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs
+@@ -89,8 +89,16 @@
+     }
+ }
+ 
+ pub async fn ensure() -> Result<PathBuf, String> {
++    // ── 同一道宿主闸门：iOS / 容器里不该为了装脚本插件去下载 200 MB 的 Bun ──
++    // 判定与 `plugin_host::lifecycle::exec_blocked()` 完全一致（那边拦进程与 wasm，
++    // 这边拦运行时下载）。脚本插件的多个调用点都经过本函数，所以一处即覆盖。
++    if let Some(reason) = super::super::lifecycle::exec_blocked() {
++        return Err(format!(
++            "当前运行形态不支持安装脚本插件（需要下载 Bun 运行时）：{reason}"
++        ));
++    }
+     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+     let _guard = LOCK
+         .get_or_init(|| tokio::sync::Mutex::new(()))
+         .lock()

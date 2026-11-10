@@ -3461,3 +3461,31 @@ D 提供商/代理/视觉 → E 品牌/验证码/签到 → F 收尾出包），
 wasm 插件不被拦；`script/settings.rs` 的 `bun::ensure()`（下载 bun 运行时）也不受闸门约束。
 
 **改动**：`docs/UPSTREAM-SYNC-PLAN.md`（新增）。
+
+#### 记忆点 · 步骤 75（批次 A1：执行闸门扩展到 wasm 与 Bun 下载路径）
+
+**问题**：上游 v3.5.0-beta.1 有**三种插件形态**，而我们的闸门只拦住两种。
+`lifecycle.rs::start()` 里 `if self.options.wasm.is_some() { return self.start_wasm().await; }`
+排在闸门插入点**之前** ⇒ wasm 插件在 iOS 上不被拦（iOS 禁 JIT，起了也必然失败，属「装得上但用不了」）；
+另外 `script/bun.rs::ensure()` 会**下载 200 MB Bun 运行时**，它有 5 个调用点
+（`operations.rs`×2、`runtime.rs`、`settings.rs`、`bun.rs` 自身），全部不受闸门约束。
+
+**改法（补丁从 2 hunk 扩到 3 hunk）**：
+1. 把 `exec_blocked()` 从 `impl Host` 的关联函数**提升为模块级 `pub(super) fn`**，
+   这样 `plugin_host::script::bun` 也能复用（`pub(super)` 对父模块及其后代可见）；
+2. 闸门调用**前移到 wasm 分支之前**（`if let Some(attempt) = &self.options.startup { … }` 之后），
+   一次覆盖进程 / 脚本 / wasm 三条启动路径；
+3. 在 `bun::ensure()` 开头插入同一道判定，**一处即覆盖 5 个调用点** —— 比逐个改调用点更稳，
+   避免上游以后新增调用点又漏掉。文案：`当前运行形态不支持安装脚本插件（需要下载 Bun 运行时）：{reason}`。
+
+**本地验证**：严格校验 20/20 hunk 上下文匹配；模拟应用后结构正确 —— `exec_blocked` 定义 L30 在
+`impl Host` L47 **之前**、闸门调用 L128 在 wasm 分支 L136 **之前**、`bun.rs` 引用
+`super::super::lifecycle::exec_blocked()` 存在。
+
+**工具教训（重要，已修）**：我原来的补丁校验器在解析 hunk 体时，把**hunk 之后的空行**也当成
+上下文行（因为 `raw == ""` 被归入上下文档），导致行数校验可能失真、模拟应用出现"8/9 行相同"的假失败。
+正确做法是**按 hunk 头声明的 `old_n`/`new_n` 精确读取体行数**，读满即止
+（新工具 `validate_strict.py`，已用它取代旧校验器）。这类"生成器与校验器共用同一套错误假设"
+的情况最危险 —— 两边一起错就会自证通过。
+
+**改动**：`agent2api-universal/patches/0001-plugin-host-ios-exec-gate.diff`（5222 B，3 hunk / 2 文件）。
