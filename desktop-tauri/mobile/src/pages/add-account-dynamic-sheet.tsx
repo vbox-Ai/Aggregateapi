@@ -24,6 +24,7 @@ import {
 import { hasStaticConfig } from '../lib/add-account-static'
 import { AddAccountStaticSheet } from './add-account-static-sheet'
 import { apiCall } from '../api/client'
+import { fetchProxyPool, type PoolItem } from '../api/gateway'
 import { readSystemProxy } from '../../../ui-shared/proxy-system'
 import { PluginLoginInteraction } from '../../../ui-shared/plugin-login-interaction'
 import { t } from '../i18n'
@@ -183,6 +184,13 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
   /** 正在读取网关所在机器的系统代理（点了「填入系统代理」之后） */
   const [readingSystemProxy, setReadingSystemProxy] = useState(false)
   const [systemProxyError, setSystemProxyError] = useState('')
+  /** 选中的「已保存的代理」id（网关代理池里的那一条） */
+  const [proxyId, setProxyId] = useState('')
+  /** 代理池快照；null = 还没读到 */
+  const [proxyPool, setProxyPool] = useState<PoolItem[] | null>(null)
+  const [proxyPoolError, setProxyPoolError] = useState('')
+  /** 手动「重新读取」计数：加一就重新拉一次代理池 */
+  const [poolReload, setPoolReload] = useState(0)
   const [protocol, setProtocol] = useState('http')
   const [host, setHost] = useState('')
   const [port, setPort] = useState('')
@@ -326,8 +334,34 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
     }
   }
 
+  // 只有真的选了「已保存的代理」才去读代理池 —— 默认直连的用户不该为此多打一次请求。
+  useEffect(() => {
+    if (proxyMode !== 'pool') return
+    const controller = new AbortController()
+    setProxyPoolError('')
+    void fetchProxyPool(controller.signal).then(result => {
+      if (!controller.signal.aborted && serverIdentity() === identity) setProxyPool(result.items || [])
+    }).catch(failure => {
+      if (!controller.signal.aborted && serverIdentity() === identity) {
+        setProxyPool([])
+        setProxyPoolError(dynamicLoginError(failure))
+      }
+    })
+    return () => controller.abort()
+  }, [proxyMode, identity, poolReload])
+
   function proxyPayload(): unknown {
     if (proxyMode === 'direct') return null
+    if (proxyMode === 'pool') {
+      // 池里那一条自己带着是否启用、解析是否失败 —— 不可用的**当场拦下**，
+      // 否则会把一个已知坏的代理存进账号，之后每次请求都失败还查不出原因。
+      if (!proxyId) throw new Error(t('请先选择已保存的代理'))
+      const selected = proxyPool?.find(item => item.id === proxyId)
+      if (!selected || selected.enabled === false || selected.resolveError) {
+        throw new Error(t('当前代理不可用，请重新选择'))
+      }
+      return { source: 'pool', proxyId }
+    }
     const number = Number(port)
     if (!host.trim()) throw new Error(t('请填写代理主机地址'))
     if (!Number.isInteger(number) || number < 1 || number > 65535) throw new Error(t('代理端口必须是 1-65535 的整数'))
@@ -500,14 +534,27 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
       </Label> : method.type === 'oauth' && !hasNamePrompt ? <p className='text-xs text-subtle'>{t('账号名由插件自动获取，添加后可修改。')}</p> : null}
       <Label>{t('账号 / 登录出网代理')}</Label>
       <Select value={proxyMode} disabled={locked} onValueChange={value => setProxyMode(value || 'direct')}>
-        <SelectTrigger className='w-full'><SelectValue>{proxyMode === 'custom' ? t('自定义') : t('无代理（直连）')}</SelectValue></SelectTrigger>
-        <SelectContent><SelectItem value='direct'>{t('无代理（直连）')}</SelectItem><SelectItem value='custom'>{t('自定义')}</SelectItem></SelectContent>
+        <SelectTrigger className='w-full'><SelectValue>{proxyMode === 'pool' ? t('已保存的代理') : proxyMode === 'custom' ? t('自定义') : t('无代理（直连）')}</SelectValue></SelectTrigger>
+        <SelectContent><SelectItem value='direct'>{t('无代理（直连）')}</SelectItem><SelectItem value='pool'>{t('已保存的代理')}</SelectItem><SelectItem value='custom'>{t('自定义')}</SelectItem></SelectContent>
       </Select>
       <Button size='sm' variant='outline' disabled={locked} className='self-start'
         onClick={() => void importSystemProxy()}>
         {readingSystemProxy ? <Spinner /> : null}{t('填入系统代理')}
       </Button>
+      <p className='text-xs text-subtle'>{t('读取网关电脑当前的 HTTPS 系统代理，填入自定义地址；后续系统设置变化不会自动同步。')}</p>
       {systemProxyError ? <p className='text-xs text-destructive' role='alert'>{systemProxyError}</p> : null}
+      {proxyMode === 'pool' ? <div className='flex flex-col gap-2'>
+        <Select value={proxyId} disabled={locked || !proxyPool?.length} onValueChange={value => setProxyId(value || '')}>
+          <SelectTrigger className='w-full' aria-label={t('代理')}><SelectValue>{proxyPool?.find(item => item.id === proxyId)?.name
+            || (proxyId ? t('当前代理不可用，请重新选择') : proxyPool === null ? t('正在读取…') : t('请选择代理'))}</SelectValue></SelectTrigger>
+          <SelectContent>{(proxyPool || []).map(item => <SelectItem key={item.id} value={item.id}
+            disabled={item.enabled === false || Boolean(item.resolveError)}>{item.name}</SelectItem>)}</SelectContent>
+        </Select>
+        {proxyPoolError ? <p className='text-xs text-destructive'>{proxyPoolError}</p>
+          : proxyPool?.length === 0 ? <p className='text-xs text-subtle'>{t('还没有保存的代理')}</p> : null}
+        <Button size='sm' variant='outline' disabled={locked} className='self-start'
+          onClick={() => setPoolReload(value => value + 1)}>{t('重新读取')}</Button>
+      </div> : null}
       {proxyMode === 'custom' ? <Card className='flex flex-col gap-2 p-3'>
         <Select value={protocol} disabled={locked} onValueChange={value => setProtocol(value || 'http')}>
           <SelectTrigger className='w-full' aria-label={t('协议')}><SelectValue>{protocol === 'socks5' ? 'SOCKS5' : 'HTTP'}</SelectValue></SelectTrigger>
@@ -520,6 +567,7 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
       </Card> : null}
       <Button disabled={locked || Boolean(method.reason)} onClick={() => void submit()}>{busy ? <Spinner /> : null}{method.type === 'api' ? t('添加账号') : t('登录并添加')}</Button>
       {method.type === 'api' ? <p className='text-xs text-subtle'>{t('新网关确认代理同次保存后不再重复提交；旧网关使用兼容保存并提示核查，失败不会撤销已添加的账号。')}</p> : null}
+      <p className='text-xs text-subtle'>{t('所选代理会保存到账号设置，后续请求继续使用。')}</p>
     </> : null}
     {/* 插件驱动的登录交互（验证码 / 二次确认等），由共享组件按 flow 状态渲染 */}
     {flow?.state ? <PluginLoginInteraction key={flow.state} flow={flow.state} t={t}
