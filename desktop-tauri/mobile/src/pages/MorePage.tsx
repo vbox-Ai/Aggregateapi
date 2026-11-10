@@ -84,6 +84,7 @@ export function MorePage() {
         { id: 'requests', label: t('请求日志'), icon: 'request', badge: limited ? String(limited) : undefined },
         { id: 'logs', label: t('运行日志'), icon: 'log' },
         { id: 'tasks', label: t('定时任务'), icon: 'task' },
+        { id: 'maintenance', label: t('维护'), icon: 'trash' },
       ],
     },
     {

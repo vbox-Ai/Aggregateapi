@@ -13,6 +13,7 @@ import { ModelsPage } from './pages/ModelsPage'
 import { KeysPage } from './pages/KeysPage'
 import { ProxiesPage } from './pages/ProxiesPage'
 import { TasksPage } from './pages/TasksPage'
+import { MaintenancePage } from './pages/MaintenancePage'
 import { RequestsPage } from './pages/RequestsPage'
 import { LogsPage } from './pages/LogsPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -57,6 +58,7 @@ const SCREENS: Record<ScreenId, ScreenDef> = {
   keys: { title: t('网关 Key'), component: KeysPage },
   proxies: { title: t('网络代理'), component: ProxiesPage },
   tasks: { title: t('定时任务'), component: TasksPage },
+  maintenance: { title: t('维护'), component: MaintenancePage },
   requests: { title: t('请求日志'), component: RequestsPage },
   logs: { title: t('运行日志'), component: LogsPage },
   settings: { title: t('设置'), component: SettingsPage },

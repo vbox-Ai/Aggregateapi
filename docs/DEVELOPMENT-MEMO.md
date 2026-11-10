@@ -3522,3 +3522,30 @@ wasm 插件不被拦；`script/settings.rs` 的 `bun::ensure()`（下载 bun 运
 
 **验证**：`tsc --noEmit` **0**；`pnpm run build` **0**（`ui/m/mobile.js` 1,409.80 → **1,425.74 kB**，
 增量与同步进来的代码量相符）；`check-mobile-ui.py` **0**。
+
+#### 记忆点 · 步骤 77（批次 B1：维护面板接入）
+
+**上游的做法**：v3.5.0-beta.1 把「定时任务」页**整页换成了维护面板** —— 上游 `TasksPage.tsx`
+只剩 9 行，内容就是 `<MaintenancePanel api={maintenanceApi} notify onChanged onAccount />`。
+
+**我们的做法**（不照搬，避免丢掉自建能力）：我们自建的定时任务页有 10366 B（含任务开关、
+间隔编辑、立即执行、下拉刷新），不能替换。于是把维护做成**独立二级页**
+`pages/MaintenancePage.tsx`，从「更多 → 诊断」进入，既保留定时任务、又拿到维护功能，
+也符合「新功能优先收二级页、不占底部主 Tab」的约定。
+
+**引入内容**：`maintenance-{types,format,shared,details,records,settings,summary,panel}.tsx/ts`
++ `maintenance.css`（9 个文件，约 65 KB），以及 mobile 薄封装 `api/maintenance.ts`。
+接入三件套：`lib/routes.ts` 的 `SCREEN_IDS` 加 `'maintenance'`、`App.tsx` 的 `SCREENS` 加
+`maintenance: { title: t('维护'), component: MaintenancePage }`、`MorePage` 诊断组加入口
+（`icon: 'trash'`，已核对 `Icon.tsx` 的 51 个白名单名，`trash` 在册）。
+
+**MaintenancePanel 的契约**（以后接入别的页面会再用到）：
+```ts
+{ api: MaintenanceApi, active?: boolean, revision?: number,
+  onAccount?(id: string): void, onChanged?(): void | Promise<unknown>,
+  notify?(message: string, kind?: 'ok' | 'err'): void }
+```
+对应我们 store 上的 `toast`、`refresh`、`push` 三个方法（都已核实存在）。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,425.74 → **1,454.00 kB**，
+增量 28.26 kB ≈ 维护面板体量）；`check-mobile-ui.py` 0（图标 / i18n 参数 / 跳转 / 端点拼写全过）。
