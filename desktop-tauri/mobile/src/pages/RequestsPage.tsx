@@ -13,6 +13,7 @@ import { PageAutoRefresh, usePageAutoRefresh } from '../components/PageAutoRefre
 import { usePageRefreshTimer } from '../../../ui-shared/page-auto-refresh-timer'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
+import { VisionRequestDetail, visionDetail } from '../../../ui-shared/request-vision-detail'
 import { MetricGrid, MetricCard } from '@ui'
 import { DateRangeFilter } from '../components/DateRangeFilter'
 import { RequestRawPanel } from '../components/RequestRawPanel'
@@ -368,6 +369,9 @@ function buildNote(row: RequestRow): { text: string; tone: 'mute' | 'warn' | 'ba
 
 function RequestSheet({ row, onClose }: { row: RequestRow | null; onClose: () => void }) {
   const details = Array.isArray(row?.attemptDetails) ? row?.attemptDetails || [] : []
+  // 视觉分析详情：新版网关把该次请求的视觉判定挂在 `route` 上。
+  // 旧网关没有这个字段，read 出来是 undefined —— 下面按需渲染，不摆空面板。
+  const visionRoute = (row as { route?: unknown } | null)?.route
   return (
     <Sheet open={Boolean(row)} onOpenChange={next => { if (!next) onClose() }}>
       <SheetContent>
@@ -482,6 +486,12 @@ function RequestSheet({ row, onClose }: { row: RequestRow | null; onClose: () =>
               ) : null}
 
               {row.error ? <Alert variant='destructive'>{row.error}</Alert> : null}
+
+              {visionDetail(visionRoute) ? (
+                <div style={{ marginTop: 10 }}>
+                  <VisionRequestDetail route={visionRoute} t={t} />
+                </div>
+              ) : null}
 
               {/* 两个正文面板都按需加载：请求与响应正文（stats/raw）+ 调试报文（debug/traffic） */}
               {row.id ? (

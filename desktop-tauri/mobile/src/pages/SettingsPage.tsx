@@ -51,6 +51,8 @@ import { panelStatus } from '../api/client'
 import { apiBase, baseLabel, serverIdentity } from '../lib/servers'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
+import { VisionCompatibilityPanel } from '../../../ui-shared/settings-vision-panel'
+import { visionCompatApi } from '../api/vision-compat'
 import { Card, Button, Badge, BadgeDot, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle, Switch } from '@ui'
 import { ClientIdentificationPanel } from '../../../ui-shared/client-identification-panel'
 import { clientIdentificationApi } from '../api/client-identification'
@@ -605,7 +607,27 @@ export function SettingsPage() {
               </span>
             </Button>
           )}
-        </Card>
+          </Card>
+          {/* 提供商设置：上游 v3.5.0 新增的供应商级配置面板（端点 / 模型 / 首选项），
+              按提供商 id 进入；不带 id 时面板自己列可选的提供商。 */}
+          <Button size='default' variant='ghost' type='button' className='m-row h-auto min-h-[52px] w-full justify-start rounded-none border-0 px-3.5 py-3 text-left'
+            onClick={() => store.push('provider-settings')}>
+            <span className='m-logo'>
+              <Icon name='settings' />
+            </span>
+            <div className='m-grow'>
+              <div className='m-t1'>{t('提供商设置')}</div>
+              <div className='m-t2'>{t('按提供商配置端点、模型与首选项')}</div>
+            </div>
+            <span className='m-chev'>
+              <Icon name='chev' />
+            </span>
+          </Button>
+      </div>
+
+      <div className='m-section'>
+        <SectionHead title={t('视觉兼容')} />
+        <VisionCompatibilityPanel api={visionCompatApi} t={t} />
       </div>
 
       <div className='m-section'>

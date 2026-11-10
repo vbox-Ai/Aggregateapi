@@ -10,6 +10,7 @@ import { apiCall } from '../api/client'
 import { store } from '../state/store'
 import { usePolling } from '../lib/usePolling'
 import { t } from '../i18n'
+import { ImageGenerationSection } from './ToolsImageGeneration'
 
 /**
  * 工具服务（手机端）。
@@ -256,6 +257,8 @@ export function ToolsPage() {
         </Card>
       </div>
     </> : null}
+
+      <ImageGenerationSection onChanged={() => void load()} />
 
     {editing ? <ProviderDialog provider={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void load() }} /> : null}
     {selectionOpen ? <SelectionDialog

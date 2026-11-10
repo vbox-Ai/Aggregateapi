@@ -3605,3 +3605,36 @@ A1 的宿主闸门会对 iOS 直接拒绝下载（`当前运行形态不支持�
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,481.70 → **1,526.99 kB**，
 增量 45.29 kB ≈ 脚本面板 + 运行态）；`check-mobile-ui.py` 0。
+
+#### 记忆点 · 步骤 80（批次 D：视觉 / 图片工具 + 提供商设置 + 视觉详情）
+
+**引入 13 个模块**：视觉兼容 5 个（`settings-vision-{types,editors,rows,way,panel}`）、
+图片工具 3 个（`tools-image-{types,config,history}`）、`request-vision-detail.tsx`、
+`use-image-fallback.ts`，以及代理 3 个（`proxy-batch-editor` / `proxy-import` / `proxy-system`，
+**保留共享模块但手机端不接入** —— 见下）。mobile 侧新增 3 个薄封装/页面：`api/vision-compat.ts`、
+`pages/ToolsImageGeneration.tsx`、`pages/provider-settings-page.tsx`。
+
+**四处接入**：
+1. **图片生成** → `ToolsPage` 底部 `<ImageGenerationSection onChanged={() => void load()} />`
+   （它内部用 `/api/tools/image-generation/{config,jobs,files}`）；
+2. **视觉兼容** → `SettingsPage` 新增「视觉兼容」节，`<VisionCompatibilityPanel api={visionCompatApi} t={t} />`
+   （端点 `/api/vision-compatibility`，`load`/`save` 两个方法）；
+3. **提供商设置** → 新页 `provider-settings-page`（上游的薄封装，按 `route.params.id` 进入，
+   不带 id 时面板自己列可选项）+ 路由 `'provider-settings'` + `App.tsx` 映射 +
+   设置页「账号」节末尾入口；
+4. **视觉详情** → `RequestsPage` 详情抽屉，在「请求/响应正文」面板之前按需渲染
+   `visionDetail(visionRoute) ? <VisionRequestDetail route={visionRoute} t={t} /> : null`。
+   注意：上游读 `row.route`，而**我们的 `RequestRow` 类型还没声明该字段**（旧网关也不返回）⇒
+   与批次 C 同一手法，用**窄类型读取** `(row as { route?: unknown } | null)?.route`，无字段时不渲染。
+
+**两个「不做」的判断（记下来免得以后重复排查）**：
+- `proxy-batch-editor` / `proxy-import` / `proxy-system`：上游**手机端并不直接使用**它们 ——
+  它们被上游自己的 `pages/proxy-editor-sheet.tsx`、`api/gateway.ts`、`add-account-dynamic-sheet.tsx`
+  引用，而我们这三个文件是**自建版**（功能已覆盖代理编辑、导入、系统代理探测）。
+  因此这三个模块**保留在 ui-shared（桌面端用）但不接进手机端**，避免把上游的整套代理编辑流程
+  硬塞进我们自建的功能里造成双份入口。
+- `use-image-fallback`：上游 `ProviderLogo` 用它；我们的 `ProviderLogo` 已有等价的
+  `failedIcon` 失败回退（`onError` 换默认图）⇒ **功能等价，不引入**。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,526.99 → **1,592.22 kB**，
+增量 65.23 kB ≈ 视觉面板 + 图片工具 + 提供商设置页）；`check-mobile-ui.py` 0。
