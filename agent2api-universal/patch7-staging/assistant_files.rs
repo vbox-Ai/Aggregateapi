@@ -134,13 +134,13 @@ pub fn store_unpacked(
 /// 列出某个会话导入的全部文件（**不含字节**：列表接口不该把 100 MB 拉出来）。
 pub fn list(session: &str) -> Result<Vec<FileMeta>, GatewayError> {
     database()?
-        .with(|conn| {
+        .with(|conn| -> Result<Vec<FileMeta>, GatewayError> {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, name, mime, length(bytes), created_at FROM assistant_files \
                      WHERE session_id = ?1 ORDER BY created_at, id",
                 )
-                .map_err(|_| ())?;
+                .map_err(|_| GatewayError::with_status(500, "助手文件列表读取失败"))?;
             let rows = stmt
                 .query_map(params![session], |row| {
                     Ok(FileMeta {
@@ -151,13 +151,12 @@ pub fn list(session: &str) -> Result<Vec<FileMeta>, GatewayError> {
                         created_at: row.get(4)?,
                     })
                 })
-                .map_err(|_| ())?
+                .map_err(|_| GatewayError::with_status(500, "助手文件列表读取失败"))?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| ())?;
+                .map_err(|_| GatewayError::with_status(500, "助手文件列表读取失败"))?;
             Ok(rows)
         })
         .ok_or_else(|| GatewayError::with_status(503, "助手文件库数据库不可用"))?
-        .map_err(|_| GatewayError::with_status(500, "助手文件列表读取失败"))
 }
 
 /// 分页读取一个文件的一段。返回 `(名字, MIME, 总字节数, 这一段字节)`。
