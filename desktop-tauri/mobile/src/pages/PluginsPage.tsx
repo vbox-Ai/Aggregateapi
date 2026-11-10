@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle , Card, Collapsible, CollapsibleTrigger, CollapsibleContent } from '@ui'
 import { PageIntro, ErrorNote, Empty, SectionHead } from '../components/ui'
 import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
@@ -16,6 +16,9 @@ import { t } from '../i18n'
 import { apiCall } from '../api/client'
 import { ScriptPluginsPanel } from '../../../ui-shared/plugins-scripts'
 import { PluginPackSettingsSheet } from './plugins/PluginPackSettingsSheet'
+import { PluginStartupDialog, subscribePluginDiagnostics, takePluginDiagnostics } from '../../../ui-shared/plugin-startup-view'
+import { refreshPluginStartup } from '../../../ui-shared/plugin-startup'
+import { PluginTasks } from '../../../ui-shared/plugin-tasks'
 import '../styles/checkin.css'
 
 const MIB = 1024 * 1024
@@ -65,6 +68,16 @@ async function readPackBase64(file: File, maxPackBytes: number): Promise<string>
 
 export function PluginsPage() {
   const { server } = useStore()
+  /**
+   * 插件启动诊断对话框。卡片上的「诊断」按钮只是往这个通道投一个 id，
+   * 由本页订阅后打开 —— 这样卡片不必各自持有对话框状态。
+   */
+  const [startupId, setStartupId] = useState<string | null>(null)
+  useEffect(() => {
+    const open = () => { const id = takePluginDiagnostics(); if (id) setStartupId(id) }
+    open()
+    return subscribePluginDiagnostics(open)
+  }, [])
   const [payload, setPayload] = useState<PluginsPayload | null>(null)
   /**
    * 插件包设置抽屉。带上 `server` 是为了切换服务器后不误用上一台的包 ——
@@ -258,6 +271,22 @@ export function PluginsPage() {
             refresh={load} />
         </Card>
       </div> : null}
+      {/* 插件启动诊断：点卡片上的「诊断」后弹出，可在里面重试启动 */}
+      {startupId ? <PluginStartupDialog id={startupId}
+        name={packs.find(pack => pack.id === startupId)?.name
+          || payload?.scripts?.packages.find(pack => pack.id === startupId)?.name || startupId}
+        status={packs.find(pack => pack.id === startupId)?.startup
+          || payload?.scripts?.packages.find(pack => pack.id === startupId)?.startup || null}
+        script={startupId.startsWith('script-')} t={t} onClose={() => setStartupId(null)}
+        retry={async () => {
+          if (startupId.startsWith('script-')) await apiCall('/api/plugins/scripts/change', { method: 'POST', body: { id: startupId } })
+          else await apiCall('/api/plugins/reload', { method: 'POST', body: { id: startupId } })
+          refreshPluginStartup()
+          await load()
+        }} /> : null}
+      {/* 插件任务：网关侧的插件后台任务（与脚本插件同一套请求约定） */}
+      <div className='m-section'><PluginTasks t={t}
+        request={(path, body) => apiCall(path, { method: 'POST', body })} /></div>
       {payload?.catalog?.reason ? <div className='m-section'><p className='m-ck-note'>{pluginErrorMessage(payload.catalog.reason)}</p></div> : null}
       {failedOperations.length ? <div className='m-section'><Collapsible className='m-card m-card-pad'>
         <CollapsibleTrigger className='m-ck-title'>{t('最近失败')}</CollapsibleTrigger>

@@ -3809,3 +3809,32 @@ E-3（Antigravity 登录方式）本次提交。**A–E 五批全部完成**，�
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,617.90 → **1,624.58 kB**）；
 `check-mobile-ui.py` 0。
+
+#### 记忆点 · 步骤 86（批次 F-1b：插件运行态接线）
+
+**接入三件（上游做法照搬，参数不猜）**：
+1. **卡片上的加载阶段徽标**：`PluginCards` 里 `const startup = usePluginLoadStatus(pack.id, pack.startup)`
+   —— 有实时状态用实时值、拿不到退回 payload 快照（**断线时卡片不该整块空白**）；
+   徽标用 `pluginFailed(startup) ? 'warn' : startup?.phase === 'ready' ? 'ok' : 'mute'`
+   + `pluginPhaseLabel(startup, t)`。
+2. **诊断入口**：卡片加「诊断」按钮，点击只调 `requestPluginDiagnostics(pack.id)`
+   —— **不各自持有对话框状态**；由插件页订阅该通道后弹 `PluginStartupDialog`
+   （`takePluginDiagnostics()` 取 id + `subscribePluginDiagnostics`）。
+   对话框的 `retry` 按 id 前缀分流：`script-` 前缀走 `/api/plugins/scripts/change`，
+   其余走 `/api/plugins/reload`，之后 `refreshPluginStartup()` + 重新 `load()`。
+3. **插件任务**：`<PluginTasks t={t} request={(path, body) => apiCall(path, { method: 'POST', body })} />`
+   —— 与脚本插件面板同一套请求约定。
+
+**这一步同时把 4 个此前不可达的模块接通**：`plugin-startup-view`、`plugin-startup`（`pluginFailed`
+/`pluginPhaseLabel`）、`plugin-tasks`、以及（F-1a 已接的）`plugins-store`。
+
+**踩到的小坑**：挂载用的锚点我第一次写窄了（只截了半行）⇒ 未命中；同时 `PluginsPage` 里
+**没有导入 `useEffect`**（我新增的订阅需要它）⇒ 两者一起修掉。**教训：新增 hook 时先确认该文件
+是否已导入对应 React API**。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,624.58 → **1,629.44 kB**）；
+`check-mobile-ui.py` 0。
+
+**F-1 剩余**：`brand-logo`（首页/登录页图标）、`plugin-hidden`（隐藏账号过滤器）、
+`proxy-system`/`proxy-import`（系统代理探测与批量导入）、`github-failure`、
+`assistant-message-actions`、`clash-proxy`；账号用量是否切任务式（需单独一轮验证）。

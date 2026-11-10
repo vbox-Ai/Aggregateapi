@@ -4,6 +4,8 @@ import type { PackSummary, PluginOperation, PluginUpdate, StorePlugin } from '..
 import { pluginErrorMessage } from '../../api/plugins'
 import { t } from '../../i18n'
 import { PluginSettingsButton } from '../../../../ui-shared/plugins-store'
+import { usePluginLoadStatus, requestPluginDiagnostics } from '../../../../ui-shared/plugin-startup-view'
+import { pluginFailed, pluginPhaseLabel } from '../../../../ui-shared/plugin-startup'
 
 function PluginProgress({ operation }: { operation?: PluginOperation }) {
   if (!operation) return null
@@ -67,12 +69,17 @@ export function PluginCard({ pack, target, busy, update, operation, onEnabled, o
 }) {
   const required = pack.updateRequired === true
   const locked = busy || operation?.active === true
+  // 插件的加载阶段（启动中 / 就绪 / 失败）。有实时状态就用实时值，
+  // 拿不到时退回 payload 里带的快照 —— 断线时卡片不该整块空白。
+  const startup = usePluginLoadStatus(pack.id, pack.startup)
   return <Card render={<article />} className='m-card m-card-pad'>
     <Head name={pack.name || pack.id} version={pack.version} icon={pack.icon} />
     <div className='m-ck-actions'>
       <Badge tone={pack.enabled ? 'ok' : 'mute'}>{pack.enabled ? t('已启用') : t('已停用')}</Badge>
       <Badge tone={pack.signed ? 'ok' : 'warn'}>{pack.signed ? t('已签名') : t('未签名')}</Badge>
       {required ? <Badge tone='warn'>{t('需要补齐插件')}</Badge> : null}
+      <Badge tone={pluginFailed(startup) ? 'warn' : startup?.phase === 'ready' ? 'ok' : 'mute'}>{pluginPhaseLabel(startup, t)}</Badge>
+      <Button size='sm' variant='ghost' disabled={locked} onClick={() => requestPluginDiagnostics(pack.id)}>{t('诊断')}</Button>
       <Badge tone={pack.providers?.some(provider => provider.loaded) ? 'ok' : 'warn'}>{t('已加载 {n} 家', { n: pack.providers?.filter(provider => provider.loaded).length || 0 })}</Badge>
     </div>
     {pack.description ? <p className='m-ck-note'>{t(pack.description)}</p> : null}
