@@ -3400,3 +3400,33 @@ build 1,402.59 → 1,402.66 kB · self-check 0 ✓。
 ⇒ 判断"能不能发包"**必须看 iOS 作业的 conclusion，不能看 run 的 conclusion**。
 
 **改动**：`agent2api-ios/app/Agent2API/PanelViewController.swift`（一行）。
+
+#### 记忆点 · 步骤 73（上游审计：补丁签名遗漏 5 处 + mobile/ui-shared 落后 66 模块）
+
+**A. 补丁遗漏（已修）** —— 审计 v3.5.0-beta.1 里所有决定 `require_signed` 的位置，发现在
+我们把 `update.rs` 三处钉成 false 之后，**还有 5 处会重新要求官方签名**：
+- `update/required.rs` L18、L47：`asset.require_signed = true;`（必备插件自动补齐路径）
+- `operations.rs` L161：`require_signed: automatic || platform["requireSigned"] == true`（手动/自动安装）
+- `catalog.rs` L195、L212–213：商店元数据把 `requireSigned` 透传给前端，前端又回传给安装接口
+⇒ 后果：即使主路径放行，**必备插件补齐与商店安装仍会因缺官方签名而失败**。
+已把 0004 从 5 个 hunk 扩到 **10 个 hunk / 5 个文件**（policy.rs、update.rs、required.rs、
+operations.rs、catalog.rs），双重自检 10/10 通过。
+
+**B. mobile 面板与 ui-shared 落后（未修，需排期）** —— 上游 tree 自带 `desktop-tauri/mobile`，
+我们的 fork 是在它上面改的；对比后：
+- `ui-shared`：我们 **65 个 = 上游 v3.4.2 的 65 个**，而上游新版有 **131 个**
+  ⇒ 新增 66 个模块全缺（maintenance、branding、图片生成、插件设置、签到活动、
+  页面自动刷新、验证码等），另有 **25 个同名文件被上游改过**（如 logs.ts 4939→11260 B、
+  client-identification-panel.tsx 10791→18806 B、plugins.ts 3886→6606 B、updates.ts 7612→9534 B）；
+- `mobile/src`：上游新增 7 个文件（ToolsImageGeneration、provider-settings-page、
+  api/maintenance、api/vision-compat、components/PageAutoRefresh、lib/branding、
+  lib/usePluginStartup）我们全缺 —— 它们都是薄封装，真正逻辑在 ui-shared。
+⇒ **不阻塞构建**（我们编译的是自己的 mobile + 自己的 ui-shared，配套自洽，CI 已证明能过），
+  但手机面板**拿不到上游新版这 66 个模块的功能**，且旧版共享解析器面对新版 gateway 响应
+  存在运行时错配风险（如日志接口结构扩展）。
+
+**C. 已核实无问题的项**：上游 v3.4.2→v3.5.0-beta.1 **未删除任何 API 路由**（旧 244 条全在，
+新增 37 条）；手机面板引用的 161 个端点逐个字面验证均存在；`plugin_host` 无新增编译期 feature；
+CI 的工作目录 `Agent2API/desktop-tauri/src-tauri` 与面板构建入口均仍存在。
+
+**改动**：`agent2api-universal/patches/0004-plugin-store-own-repo-unsigned.diff`。

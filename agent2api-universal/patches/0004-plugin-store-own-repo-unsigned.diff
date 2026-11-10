@@ -65,3 +65,61 @@ diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.r
                      })
                      .await
                      .map_err(|error| error.to_string())
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update/required.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update/required.rs
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update/required.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update/required.rs
+@@ -15,7 +15,8 @@
+             if let Some(release) = pick_release_assets(&response.value, id, Some(detail)) {
+                 if compare_versions(&release.version, minimum) == Some(0) {
+                     if let Some(mut asset) = release.asset(id, target) {
+-                        asset.require_signed = true;
++                        // 本构建：自建源不要求官方签名（与 update.rs 口径一致）。
++                        asset.require_signed = false;
+                         return Ok(asset);
+                     }
+                 }
+@@ -44,7 +44,7 @@
+         let Some(mut asset) = release.asset(id, target) else {
+             continue;
+         };
+-        asset.require_signed = true;
++        asset.require_signed = false;
+         if best.as_ref().is_none_or(|previous| {
+             compare_versions(&asset.version, &previous.version) == Some(-1)
+         }) {
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs
+@@ -158,7 +158,8 @@
+         url: platform["url"].as_str().unwrap_or("").to_string(),
+         size: platform["size"].as_u64().unwrap_or(0),
+         page: String::new(),
+-        require_signed: automatic || platform["requireSigned"] == true,
++        // 本构建：一律不要求官方签名 —— 手动与自动（含必备插件补齐）同口径。
++        require_signed: false,
+     };
+     let policy = if automatic {
+         InstallPolicy::Automatic(super::settings::current().channels())
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
+@@ -192,7 +192,8 @@
+             "repository": repo,
+             "homepage": detail.as_ref().map(|detail| &detail.homepage),
+             "protocol": detail.as_ref().map(|detail| detail.protocol), "icon": icon,
+-            "requireSigned": entry.require_signed || detail.as_ref().is_some_and(|detail| detail.require_signed),
++            // 本构建：商店元数据不对外声明"需签名"，避免前端把它回传给安装接口。
++            "requireSigned": false,
+             "version": Value::Null, "page": Value::Null, "notes": "", "prerelease": false,
+             "platforms": [], "error": false, "reason": Value::Null,
+         });
+@@ -209,8 +209,7 @@
+                 let compatibility_error = detail.as_ref().filter(|detail|
+                     detail.protocol != agent2api_provider_protocol::PROTOCOL_VERSION)
+                     .map(|detail| format!("插件要求协议 {}，当前网关支持 {}", detail.protocol, agent2api_provider_protocol::PROTOCOL_VERSION));
+-                let require_signed = value["requireSigned"] == true || release.require_signed;
+-                value["requireSigned"] = json!(require_signed);
++                let require_signed = false;
+                 value["version"] = json!(release.version);
+                 value["page"] = json!(release.page);
+                 value["notes"] = json!(release.notes);
