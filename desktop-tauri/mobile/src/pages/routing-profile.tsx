@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Card, Label, SegmentedControl, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle, Switch, confirmDialog } from '@ui'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Button, Card, Input, Label, SegmentedControl, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle, Switch, confirmDialog } from '@ui'
 import { Badge, Empty, ErrorNote, SectionHead } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { serverIdentity } from '../lib/servers'
 import { providerLabel } from '../lib/providers'
+import { batchAccounts } from '../api/gateway'
+import { store } from '../state/store'
 import { t } from '../i18n'
 import { apiCall } from '../api/client'
 import { fetchRouting, stickyLabel, strategyLabel } from '../api/routing'
@@ -69,6 +71,8 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [loading, setLoading] = useState(true)
+  /** 搜索：按家名 / 账号名过滤下面的两个列表（**只影响显示，不改配置**） */
+  const [keyword, setKeyword] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -108,6 +112,20 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
 
   const accounts = workspace?.accounts || []
   const providers = workspace?.providers || []
+  /**
+   * 搜索只筛「显示」：参与开关、顺序、排除状态都按原样提交。
+   * 桌面端这条也写着同样一句（`仅筛选右侧账号列表，不改变路由配置`），
+   * 两边口径必须一致 —— 否则用户会以为筛掉的家被自动移出了。
+   */
+  const needle = keyword.trim().toLowerCase()
+  const shownProviders = needle
+    ? providers.filter(provider => {
+      const label = providerLabel(provider.id, provider.label)
+      const rows = accountsOf.get(provider.id) || []
+      return `${provider.id} ${label}`.toLowerCase().includes(needle)
+        || rows.some(row => `${row.name || ''}`.toLowerCase().includes(needle))
+    })
+    : providers
   const independent = scope ? workspace?.customized === true : workspace?.globalCustomized === true
 
   const accountsOf = useMemo(() => {
@@ -148,6 +166,64 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
     next.splice(index, 1)
     next.splice(target, 0, id)
     setOrder(providerId, next)
+  }
+
+  /**
+   * 拖到指定位置（绝对下标）。与 `moveAccount` 共用同一套「取出再插入」的落盘方式，
+   * 所以拖拽与上下箭头的结果**必然一致** —— 两套实现迟早会分叉。
+   */
+  const moveAccountTo = (providerId: string, id: string, target: number) => {
+    const ids = orderOf(providerId).map(row => row.id)
+    const from = ids.indexOf(id)
+    if (from < 0 || target < 0 || target >= ids.length || target === from) return
+    const next = [...ids]
+    next.splice(from, 1)
+    next.splice(target, 0, id)
+    setOrder(providerId, next)
+  }
+
+  /**
+   * 长按拖拽排序。操作者点名要"像桌面那样拖"，所以除了上下箭头之外补上拖拽；
+   * 但**箭头保留**：拖拽对手指不灵活或误触更敏感的用户不友好，箭头是可靠兜底。
+   *
+   * 实现刻意不做逐像素跟手与元素测量：按住 320ms 后进入拖拽，之后按
+   * 「移动了多少个行高」算目标位（行高取 46px，与卡片里的实际行高一致），
+   * 松手时一次落盘。少一层测量就少一类真机上才暴露的错位问题。
+   */
+  const ROW_H = 46
+  const [drag, setDrag] = useState<{ provider: string; id: string; from: number; delta: number } | null>(null)
+  const pressRef = useRef<{ y: number; provider: string; id: string; index: number } | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearPress = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+    pressRef.current = null
+  }
+
+  const onRowDown = (providerId: string, id: string, index: number) => (event: React.PointerEvent) => {
+    pressRef.current = { y: event.clientY, provider: providerId, id, index }
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      const held = pressRef.current
+      if (held) setDrag({ provider: held.provider, id: held.id, from: held.index, delta: 0 })
+    }, 320)
+  }
+
+  const onRowMove = (event: React.PointerEvent) => {
+    const held = pressRef.current
+    if (!held || !drag) return
+    const delta = Math.round((event.clientY - held.y) / ROW_H)
+    if (delta !== drag.delta) setDrag({ ...drag, delta })
+  }
+
+  const onRowUp = () => {
+    const held = pressRef.current
+    if (held && drag) {
+      const target = Math.max(0, Math.min(orderOf(drag.provider).length - 1, drag.from + drag.delta))
+      moveAccountTo(drag.provider, drag.id, target)
+    }
+    setDrag(null)
+    clearPress()
   }
 
   const toggleProvider = (providerId: string) => {
@@ -203,6 +279,33 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
   }, [baseline, draft])
 
   const dirty = Object.keys(changed).length > 0
+
+
+  /**
+   * 批量启停"当前列表里的账号"。
+   *
+   * 语义与桌面端 `routing-config-panel.tsx` 的「启用/禁用当前列表账号」一致，
+   * 走账号页同一条通道（`POST /api/accounts/batch`），并明确告诉用户：
+   * **账号启停属于账号本身、立即影响所有路由**，与上面的参与范围是两件事。
+   */
+  const toggleVisibleAccounts = async (enable: boolean) => {
+    const ids = shownProviders.flatMap(provider => (accountsOf.get(provider.id) || []).map(row => row.id))
+    if (!ids.length) return
+    const okToGo = await confirmDialog(
+      enable
+        ? t('将当前列表里的 {n} 个账号设为「启用」？启停属于账号本身，立即影响所有路由。', { n: ids.length })
+        : t('将当前列表里的 {n} 个账号设为「禁用」？禁用后所有路由都不会再选用它们。', { n: ids.length }),
+      { title: enable ? t('启用当前列表账号') : t('禁用当前列表账号'), confirmText: enable ? t('启用') : t('禁用'), destructive: !enable },
+    )
+    if (!okToGo) return
+    try {
+      await batchAccounts(enable ? 'enable' : 'disable', ids)
+      store.toast(enable ? t('已启用 {n} 个账号', { n: ids.length }) : t('已禁用 {n} 个账号', { n: ids.length }), 'ok')
+      await load()
+    } catch (cause) {
+      store.toast(cause instanceof Error ? cause.message : String(cause), 'err')
+    }
+  }
 
   const save = async () => {
     if (busy || !dirty) return
@@ -289,7 +392,34 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
               </Card>
 
               <div className='m-section' style={{ marginTop: 14 }}>
-                <SectionHead title={t('参与的家')} />
+                <Input className='w-full' type='search' value={keyword}
+        onChange={event => setKeyword(event.currentTarget.value)}
+        placeholder={t('搜索提供商或账号…')} aria-label={t('搜索提供商或账号')} />
+      {/*
+        批量参与开关。**只改本地草稿** —— 要点下面的「保存参与范围」才会提交，
+        所以它不会像桌面端某些即时操作那样"点一下就已经生效"。这一点是刻意的：
+        手机上误触的概率比桌面高，批量改动更该留一步确认。
+      */}
+      <div className='m-ck-toolbar' style={{ marginTop: 8 }}>
+        <span className='m-ck-note m-ck-grow'>{t('当前参与 {n} 家', { n: (draft.providers || []).length })}</span>
+        <Button size='sm' variant='outline' onClick={() => setDraft(current => ({
+          ...current,
+          providerScope: 'selected',
+          providers: providers.map(provider => provider.id),
+          disabledProviders: [],
+        }))}>{t('全部加入')}</Button>
+        <Button size='sm' variant='outline' onClick={() => setDraft(current => ({
+          ...current,
+          providerScope: 'selected',
+          providers: [],
+        }))}>{t('全部移出本路由')}</Button>
+        <Button size='sm' variant='outline' onClick={() => void toggleVisibleAccounts(true)}>{t('启用')}</Button>
+        <Button size='sm' variant='outline' onClick={() => void toggleVisibleAccounts(false)}>{t('禁用')}</Button>
+
+      </div>
+      {needle && !shownProviders.length
+        ? <Card className='m-card'><Empty text={t('没有匹配的提供商或账号')} /></Card> : null}
+      <SectionHead title={t('参与的家')} />
                 <Card className='m-card m-card-pad'>
                   <SegmentedControl
                     options={[
@@ -305,7 +435,7 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
                       ? t('只有下面打开的家参与这个范围；关掉的家整体不参与。')
                       : t('所有家都参与，除非在下面把它关掉。')}
                   </p>
-                  {providers.map(provider => {
+                  {shownProviders.map(provider => {
                     const inList = (draft.providers || []).includes(provider.id)
                     const outList = (draft.disabledProviders || []).includes(provider.id)
                     const on = scopeMode === 'selected' ? inList : !outList
@@ -332,8 +462,9 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
 
               <div className='m-section' style={{ marginTop: 14 }}>
                 <SectionHead title={t('账号与顺序')} />
-                <p className='m-ck-note'>{t('关掉的账号不参与这个范围；上下箭头调顺序，顺序决定同一家内部的优先次序。')}</p>
-                {providers.map(provider => {
+                <p className='m-ck-note'>{t('关掉的账号不参与这个范围；顺序决定同一家内部的优先次序 —— 长按某行可拖动排序，也可以用右侧上下箭头。')}</p>
+                {drag ? <p className='m-ck-note'>{t('拖拽中：松手后落在第 {n} 位', { n: Math.max(1, drag.from + drag.delta + 1) })}</p> : null}
+                {shownProviders.map(provider => {
                   const rows = orderOf(provider.id)
                   if (!rows.length) return null
                   return (
@@ -344,7 +475,20 @@ export function RoutingProfileSheet({ scope, onClose }: { scope: string; onClose
                       {rows.map((account, index) => {
                         const excluded = (draft.excludedAccounts || []).includes(account.id)
                         return (
-                          <div key={account.id} style={{ padding: '9px 14px', borderTop: '1px solid var(--m-line)' }}>
+                          <div key={account.id}
+                            onPointerDown={onRowDown(provider.id, account.id, index)}
+                            onPointerMove={onRowMove}
+                            onPointerUp={onRowUp}
+                            onPointerCancel={onRowUp}
+                            style={{
+                              padding: '9px 14px', borderTop: '1px solid var(--m-line)',
+                              /* 拖拽中禁掉浏览器自身的滚动接管，否则长按一移动就变成翻页 */
+                              touchAction: drag && drag.id === account.id ? 'none' : undefined,
+                              opacity: drag && drag.id === account.id ? 0.7 : 1,
+                              outline: drag && drag.id === account.id
+                                ? '2px solid var(--m-primary)' : undefined,
+                              outlineOffset: -2,
+                            }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <span className='m-mono' style={{ width: 20, flex: 'none', fontSize: 11, color: 'var(--m-text-3)' }}>{index + 1}</span>
                               <div style={{ flex: 1, minWidth: 0 }}>

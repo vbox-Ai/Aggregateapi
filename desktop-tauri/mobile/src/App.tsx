@@ -171,7 +171,8 @@ export function App() {
 
   useEffect(() => {
     // 页面标题跟着当前页走（PWA 里影响任务切换器的显示）
-    document.title = `${needsServer ? t('服务器') : def.title} · ${branding.displayName || 'Agent2API'}`
+    // 名称固定为 Agent2API：网关自定义名只用于品牌图标，不再改软件名
+document.title = `${needsServer ? t('服务器') : def.title} · Agent2API`
   }, [def.title, needsServer])
 
   if (needsServer) {

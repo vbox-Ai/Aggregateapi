@@ -277,7 +277,10 @@ jobs:
             ./agent2api-ios/scripts/build-ipa.sh
 
           if command -v dpkg-deb >/dev/null 2>&1; then
-            VER=$(python3 -c "import json;v=json.load(open('plugins/agent2api-providers.json'))['version'];print('.'.join(v.split('.')[:2]))")
+            # 版本 = <beta 基版>.<构建号>，例如 3.5.0-beta.379
+            # 基版取插件版本里到 beta 为止的部分（插件版本是 3.5.0-beta.1 ⇒ 基版 3.5.0-beta），
+            # 递增落在 beta 之后，与操作者要求一致。
+            VER=$(python3 -c "import json,re;v=json.load(open('plugins/agent2api-providers.json'))['version'];m=re.match(r'^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+?)?)(?:\.\d+)?$',v);print((m.group(1) if m else v).rstrip('.'))")
             STAMP="${BUILD_NUMBER:-$(date +%y%m%d%H%M)}"
             STAMP_VER="${VER}.${STAMP}"
             for PREFIX in "/var/jb" ""; do

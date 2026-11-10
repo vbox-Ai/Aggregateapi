@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Card, Input, Label, SegmentedControl, Switch, Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
-import { Badge, Empty, ErrorNote, SectionHead } from '../components/ui'
+import { Badge, Empty, ErrorNote, SectionHead, copyWithToast } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { serverIdentity } from '../lib/servers'
 import { formatInt } from '../lib/format'
@@ -89,7 +89,11 @@ type RoutePreview = {
 /** 请求需要哪一类能力（影响候选过滤）。没有组时固定按文本对话算，与桌面端一致。 */
 type PreviewNeed = 'text' | 'tools' | 'images' | 'video'
 
-export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (group: RouteGroup) => void }) {
+export function RoutingGroupsSection({ onPreviewGroup, keyword = '' }: {
+  onPreviewGroup: (group: RouteGroup) => void
+  /** 入口页的搜索词：按组名 / 对外模型 ID / 说明过滤（空 = 不过滤） */
+  keyword?: string
+}) {
   const identity = serverIdentity()
   const [data, setData] = useState<RouteGroups | null>(null)
   const [error, setError] = useState('')
@@ -147,7 +151,11 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
     setEditing({ group, revision })
   }
 
-  const groups = data?.groups || []
+  const all = data?.groups || []
+  const needle = keyword.trim().toLowerCase()
+  const groups = needle
+    ? all.filter(({ group }) => `${group.name} ${group.model} ${group.description}`.toLowerCase().includes(needle))
+    : all
   const catalogModels = useMemo(() => {
     const set = new Set<string>()
     for (const item of data?.catalog || []) set.add(item.model)
@@ -162,11 +170,34 @@ export function RoutingGroupsSection({ onPreviewGroup }: { onPreviewGroup: (grou
       </p>
       {error ? <ErrorNote text={error} /> : null}
 
+      {!groups.length && needle ? <Card className='m-card'><Empty text={t('没有匹配的路由组')} /></Card> : null}
       {groups.length ? (
         groups.map(({ group, revision }) => {
           const open = openId === group.id
+          /**
+           * 调用示例：客户端要用**对外模型 ID**（`group.model`）发请求，
+           * 而不是成员里的原始模型名 —— 这是路由组对外的那张脸。
+           * 端口取当前源（网关就在手机本地时是 3065），与首页那张连接卡一致。
+           */
+          const exampleModel = group.model || ''
+          const exampleHost = `${window.location.protocol}//${window.location.host}`
+          const example = `curl ${exampleHost}/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${exampleModel}","messages":[{"role":"user","content":"hi"}]}'`
           return (
             <Card key={group.id} className='m-card' style={{ marginBottom: 10 }}>
+              {/* 调用示例：给人直接抄的；模型名用对外 ID，复制按钮把整条命令拿走 */}
+              {group.model ? <div style={{ padding: '10px 14px 0' }}>
+                <div className='m-ck-toolbar'>
+                  <span className='m-ck-title m-ck-grow'>{t('调用示例')}</span>
+                  <Button size='sm' variant='outline'
+                    onClick={() => void copyWithToast(`curl ${window.location.protocol}//${window.location.host}/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${group.model}","messages":[{"role":"user","content":"hi"}]}'`, t('调用示例已复制'))}>
+                    {t('复制')}
+                  </Button>
+                </div>
+              </div> : null}
               <Button
                 size='default'
                 variant='ghost'

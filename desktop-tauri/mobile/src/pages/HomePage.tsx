@@ -105,18 +105,8 @@ export function HomePage() {
     <div className='m-page' ref={pull.bindRef}>
       <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <PageHead
-        title={branding.displayName}
+        title='Agent2API'
         subtitle={`${t('网关运行中')} · ${t('{n} 个账号启用 · {m} 个限流中', { n: enabled, m: limited })}`}
-        actions={canRefresh ? (
-          <Button size='icon-touch' variant='outline' type='button' className='m-icon-btn'
-            aria-label={state.loading ? t('刷新中…') : t('刷新')}
-            title={state.loading ? t('刷新中…') : t('刷新')}
-            disabled={state.loading}
-            onClick={() => { setRefreshAsked(true); void store.refresh(true) }}>
-            {/* 复用下拉指示器那套 keyframes，不再另写一段动画 */}
-            <Icon name='refresh' style={state.loading ? { animation: 'm-ptr-rotate .9s linear infinite' } : undefined} />
-          </Button>
-        ) : undefined}
       />
 
       {state.sessionError ? <ErrorNote text={state.sessionError} /> : null}

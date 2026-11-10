@@ -337,9 +337,16 @@ body {
  * 胶囊本身的形态：左右各留 12px、离底部安全区 8px、整圆角 + 阴影 + 半透明毛玻璃，
  * 去掉原来的通栏上边框（那是"贴在屏幕底边"的形态，与悬浮胶囊冲突）。
  */
-.m-tabbar-gap {
-  flex: none;
-  height: calc(var(--m-tabbar-h) + var(--m-safe-b) + 10px);
+/*
+ * 底栏悬浮时给**滚动容器**留底部内边距（不再在流里放整宽占位块）。
+ *
+ * 占位块会显示页面底色，真机上就是一条整宽白带 —— 看起来像"旧底栏没去掉、
+ * 胶囊压在它上面"。内边距则让内容滚到胶囊下面经过，最后一屏也能完整看到。
+ * 由 `html[data-m-tabbar='1']` 驱动：只有底栏真的渲染时才留空间
+ * （键盘弹起、进入二级页、非主导航页时底栏不渲染，也就不留空）。
+ */
+html[data-m-tabbar='1'] .m-scroll {
+  padding-bottom: calc(var(--m-tabbar-h) + var(--m-safe-b) + 20px);
 }
 
 /* 选择器带 `.m-app` 前缀：`.m-tabbar` 在共享 ui-kit 的样式表里也有同名规则，
@@ -358,23 +365,32 @@ body {
  */
 .m-app .m-tabbar {
   position: fixed !important;
-  left: 16px !important;
-  right: 16px !important;
-  bottom: calc(var(--m-safe-b) + 10px) !important;
+  /*
+   * 左右 28px、离底 6px：**真机上"横条感"的来源不是描边，而是"几乎占满整行"
+   * + "白底压在白页面上"** —— 16px 的边距在手机上看起来仍像一条通栏。
+   * 收窄到 28px 并贴近底部之后，两端的圆角才真正读得出「这是一枚悬浮胶囊」。
+   */
+  left: 28px !important;
+  right: 28px !important;
+  bottom: calc(var(--m-safe-b) + 6px) !important;
   z-index: 30 !important;
   display: flex !important;
   align-items: stretch !important;
   height: var(--m-tabbar-h) !important;
   padding: 5px !important;
-  /* 通栏感的三件套：上边框、实心底、贴边圆角 —— 全部按悬浮胶囊口径清掉 */
-  border: 0 !important;
-  border-top: 0 !important;
+  /*
+   * 通栏感的三件套：上边框、实心底、贴边圆角 —— 按悬浮胶囊口径清掉；
+   * 但**四周**留一圈极细描边 + 双层投影：这是让白底胶囊从白底页面上"浮起来"
+   * 的唯一办法 —— 只靠半透明白底，在白页面上等于没有边界。
+   */
+  border: 1px solid color-mix(in srgb, var(--m-line) 65%, transparent) !important;
+  border-top: 1px solid color-mix(in srgb, var(--m-line) 65%, transparent) !important;
   border-radius: 999px !important;
-  background: color-mix(in srgb, var(--m-surface) 72%, transparent) !important;
+  background: color-mix(in srgb, var(--m-surface) 86%, transparent) !important;
   background-clip: padding-box !important;
   -webkit-backdrop-filter: blur(24px) saturate(1.6);
   backdrop-filter: blur(24px) saturate(1.6);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.08) !important;
 }
 
 /* 选中项：胶囊内的一枚实心药丸（悬浮底栏的通行做法，比换图标颜色更明确） */

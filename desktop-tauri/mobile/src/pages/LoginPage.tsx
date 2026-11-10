@@ -217,7 +217,7 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
             ? t('需要网关 API Key')
             : setup
               ? t('创建管理员账号')
-              : t('登录 {name}', { name: branding.displayName })}
+              : t('登录 Agent2API')}
         </h1>
         <p style={{ margin: '6px 0 0', fontSize: 12.5, lineHeight: 1.6, color: 'var(--m-text-3)' }}>
           {mode === 'key'

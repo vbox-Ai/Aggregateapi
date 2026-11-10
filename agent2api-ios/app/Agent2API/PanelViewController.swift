@@ -189,8 +189,8 @@ final class PanelViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // 标题直接显示构建戳，方便确认"装的是不是这一版"
-        title = "Agent2API \(Self.buildStamp)"
+        // 标题只放软件名：版本戳归状态胶囊的小窗（顶部那枚版本胶囊已按要求移除）
+        title = "Agent2API"
         view.backgroundColor = .systemBackground
         buildWebView()
         buildStatusBar()
@@ -617,52 +617,29 @@ final class PanelViewController: UIViewController {
             bar.setBackgroundImage(UIImage(), for: .default)
         }
 
-        let capsule = UIView()
-        capsule.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.75)
-        capsule.layer.cornerRadius = 15
-        capsule.layer.cornerCurve = .continuous
-        capsule.translatesAutoresizingMaskIntoConstraints = false
-
-        let label = UILabel()
-        // 只要精简版本号（v3.4.325）：sha / 构建时间属于排查信息，点状态胶囊能看到
-        label.text = Self.shortStamp
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = .label
-        label.lineBreakMode = .byTruncatingMiddle
-        label.translatesAutoresizingMaskIntoConstraints = false
-        capsule.addSubview(label)
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 12),
-            label.trailingAnchor.constraint(equalTo: capsule.trailingAnchor, constant: -12),
-            label.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
-            capsule.heightAnchor.constraint(equalToConstant: 30),
-        ])
-        // ── 不再把这两件挂在导航栏里 ──────────────────────────────
+        // 顶部**不再**放版本胶囊：操作者明确要求移除（真机上它占着状态栏那一行的宽度）。
+        // 版本号仍可在状态胶囊的小窗里看到（buildStamp 未删）。
+        // ── 不再把这件挂在导航栏里 ──────────────────────────────
         // 只要导航栏还在（哪怕 Appearance 全透明），系统仍会占掉一条顶部区域、
         // 并在某些滚动态画出一条底色 —— 真机反复反馈的"上面老有一条横条"就是它。
         // 所以改成**悬浮控件**：直接加在页面上，与状态胶囊同一层，页面向后滚到底下。
-        // 顶部那枚切换按钮：与版本胶囊并列的悬浮控件（原来挂在导航栏右项上）
+        // 顶部那枚切换按钮：唯一的悬浮控件（原来挂在导航栏右项上）
         topPanelButton.tintColor = .label
         topPanelButton.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.75)
-        topPanelButton.layer.cornerRadius = 15
+        topPanelButton.layer.cornerRadius = 12
         topPanelButton.translatesAutoresizingMaskIntoConstraints = false
         topPanelButton.addTarget(self, action: #selector(togglePanel), for: .touchUpInside)
         updatePanelButton()   // 图标与无障碍标签由它设置（表示"切过去的那一面"）
 
-        view.addSubview(capsule)
         view.addSubview(topPanelButton)
 
+        // 顶部只剩这一枚悬浮按钮：贴着安全区右上角，尺寸收到 24（原来 30）。
         NSLayoutConstraint.activate([
-            capsule.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
-            capsule.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-
-            topPanelButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
-            topPanelButton.centerYAnchor.constraint(equalTo: capsule.centerYAnchor),
-            topPanelButton.widthAnchor.constraint(equalToConstant: 30),
-            topPanelButton.heightAnchor.constraint(equalToConstant: 30),
+            topPanelButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            topPanelButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            topPanelButton.widthAnchor.constraint(equalToConstant: 24),
+            topPanelButton.heightAnchor.constraint(equalToConstant: 24),
         ])
-        view.bringSubviewToFront(capsule)
         view.bringSubviewToFront(topPanelButton)
         updatePanelButton()
     }

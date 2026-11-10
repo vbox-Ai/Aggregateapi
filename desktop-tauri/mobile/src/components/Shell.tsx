@@ -73,19 +73,28 @@ export function TabBar() {
   const state = useStore()
   const keyboardOpen = useKeyboardOpen()
   const active = state.stack.length === 0 ? state.route.screen : ''
-  if (!PRIMARY_SCREENS.has(state.route.screen) || state.stack.length > 0) return null
   // 键盘弹起时让位：那一条高度留给输入框，而不是导航
-  if (keyboardOpen) return null
+  const shown = PRIMARY_SCREENS.has(state.route.screen) && state.stack.length === 0 && !keyboardOpen
+  /**
+   * 底栏悬浮的实现方式：
+   *
+   * 原来在文档流里放了一个**整宽同高的占位块**，结果页面底部多出一条与页面同色的
+   * 白带 —— 真机上看起来就是"旧的通栏底栏还在、新胶囊压在它上面"（操作者的原话）。
+   *
+   * 现在改成给**滚动容器**加底部内边距（`html[data-m-tabbar]` 驱动，见 mobile.css）：
+   * 内容直接滚到胶囊下面经过，底部不再有那条白带，这才是"悬浮"该有的样子。
+   * 用 data 属性而不是把显示条件抄第二遍，是为了**只有一个真相来源**（就是这里的 shown）。
+   */
+  useEffect(() => {
+    const root = document.documentElement
+    if (shown) root.dataset.mTabbar = '1'
+    else delete root.dataset.mTabbar
+    return () => { delete root.dataset.mTabbar }
+  }, [shown])
+  if (!shown) return null
   const limited = state.session?.accounts?.accounts?.filter(a => a.enabled && isRateLimited(a)).length || 0
   return (
     <>
-      {/*
-        胶囊底栏是 `position: fixed`（悬浮形态），已经脱离布局流 —— 没有这个
-        同高的占位块，页面内容会一路排到屏幕底部、被胶囊盖住最后一截。
-        两者必须一起渲染 / 一起不渲染（下面那两个 return null 的分支同样如此），
-        所以它们放在同一个组件里返回。
-      */}
-      <div className='m-tabbar-gap' aria-hidden='true' />
       <BottomNavigation className='m-tabbar' aria-label={t('主导航')}>
         {TABS.map(tab => (
           <BottomNavigationItem

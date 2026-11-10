@@ -93,8 +93,8 @@ GIT_SHA="${GIT_SHA:-local}"
 BUILD_TIME="$(date -u '+%Y-%m-%d %H:%M:%SZ')"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $STAMP" "$APP/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $STAMP" "$APP/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 3.4.$STAMP" "$APP/Info.plist" 2>/dev/null \
-  || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 3.4.$STAMP" "$APP/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 3.5.0-beta.$STAMP" "$APP/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 3.5.0-beta.$STAMP" "$APP/Info.plist"
 for kv in "A2ABuildNumber:$STAMP" "A2AGitSha:$GIT_SHA" "A2ABuildTime:$BUILD_TIME"; do
   key="${kv%%:*}"; val="${kv#*:}"
   /usr/libexec/PlistBuddy -c "Add :$key string $val" "$APP/Info.plist" 2>/dev/null \
