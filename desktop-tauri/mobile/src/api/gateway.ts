@@ -441,7 +441,12 @@ export type ManageMapping = {
   dangling?: boolean
   carried?: boolean
 }
-export type ManageView = { models?: ManageModel[]; mappings?: ManageMapping[] }
+export type ManageView = {
+  models?: ManageModel[]
+  mappings?: ManageMapping[]
+  /** 提供商开关态：上游 `assistantTools` 用它判断哪家能进「提供商设置」。 */
+  providers?: Array<{ provider?: string; providerLabel?: string; settingsAvailable?: boolean }>
+}
 
 export function fetchManage(signal?: AbortSignal): Promise<ManageView> {
   return apiCall<ManageView>('/api/models/manage', { signal })

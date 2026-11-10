@@ -3638,3 +3638,41 @@ A1 的宿主闸门会对 iOS 直接拒绝下载（`当前运行形态不支持�
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,526.99 → **1,592.22 kB**，
 增量 65.23 kB ≈ 视觉面板 + 图片工具 + 提供商设置页）；`check-mobile-ui.py` 0。
+
+#### 记忆点 · 步骤 81（批次 E 第一批：品牌 + Turnstile + 杂项模块同步）
+
+**引入 12 个模块**：品牌 2（`branding.ts` 4.3 KB、`brand-logo.tsx`）、验证码 2
+（`panel-captcha.ts`、`turnstile-widget.tsx`）、签到活动 4（`checkin-benefit-details`、
+`checkin-campaign-rewards` 13.6 KB、`checkin-officeace-{types,subscription}`）、
+杂项 4（`assistant-read-models` 9 KB、`model-capability`、`usage-query-settings`、`antigravity-login`）。
+另有 6 个在 A/C 批已引入（`checkin-campaign-types`、`provider-icons`、`searchable-select`、
+`usage-query-task`、`github-failure`、`account-import-result`），本轮无需重复。
+
+**三个文件整取上游版**（我们与 v3.4.2 逐字节相同 ⇒ 无本地增量，零冲突）：
+`api/client.ts`(13145→13216 B)、`lib/assistantTools.ts`(24693→20491 B)、
+`lib/assistant-custom-models.ts`(4965→5203 B)。整取后**暴露一个类型缺口**：
+上游 `assistantTools` 读 `ManageView.providers`，而我们的 `mobile/src/api/gateway.ts` 里
+`ManageView` 是**简化版**（只有 models/mappings）⇒ 补上 `providers?: Array<{provider?, providerLabel?, settingsAvailable?}>`。
+
+**品牌接入**（App.tsx）：`mobileBranding.useValue()` + `useBrandingRefresh(mobileBranding, serverIdentity(), !needsServer)`，
+并把 `document.title` 从硬编码 `Agent2API` 改为 `branding.displayName || 'Agent2API'` ——
+网关可自定义名称/图标，手机端标题跟随。
+
+**Turnstile 接入**（LoginPage）：网关的验证码形态可切 `altcha` / `turnstile`，我们原来只有 ALTCHA。
+改法**不重构既有块**，而是把既有 `<Verification>` 包一层条件：
+`{captchaConfig?.captchaProvider === 'turnstile' ? (<TurnstileWidget url={url('/api/panel/turnstile')} …/>) : (<Verification>…</Verification>)}`。
+`runCaptcha` 加一个 `providerOverride` 参数 —— **因为首帧探测刚拿到面板状态时 React 的 state 还没生效**，
+不能从 `captchaConfig` 读 provider，必须由调用方把 `status.captchaProvider` 传下来；
+另外该作用域里组件内已有同名字符串变量 `status`，会遮蔽 ⇒ 用局部 `provider` 变量传递（踩过一次）。
+
+**批次 E 仍未完成的两项（明确记下，避免静默漏掉）**：
+1. **签到活动接入** `pages/checkin/CheckinBenefits.tsx`：上游用 `CampaignRewards` 组件 +
+   `getCampaignRewards/claimCampaignReward/redeemCampaignBenefit`（我们 A2 同步的 `api/checkin.ts` 已含这些函数），
+   在上游是「活动福利」节里按 `center.extras.campaigns` 渲染；我们的 CheckinBenefits 有自建的
+   「新手福利 / 活动福利 / 成长任务 / 积分与活动」四节，需要把这套奖励 UI 并进「活动福利」节；
+2. **Antigravity 登录方式** `pages/add-account-dynamic-sheet.tsx`：上游新增 `AntigravityMethods` 组件 +
+   `groupAntigravityCards/antigravityLoginProviders/isAntigravityAccountProvider` 三个助手，
+   在选中 Antigravity 系提供商时替换登录方式列表；我们的加号面板是自建版，需手工合并。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,592.22 → **1,599.79 kB**）；
+`check-mobile-ui.py` 0。

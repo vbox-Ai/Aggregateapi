@@ -3,9 +3,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { store, useStore } from '../state/store'
 import { authenticate, fetchPanelStatus, solveCaptcha } from '../api/auth'
-import { storeApiKey } from '../api/client'
+import { storeApiKey, url, type PanelStatus } from '../api/client'
 import { baseLabel, serverIdentity } from '../lib/servers'
 import { t } from '../i18n'
+import { TurnstileWidget } from '../../../ui-shared/turnstile-widget'
 import { Alert, AlertDescription, AppFrame, Button, Field as UiField, FieldLabel, Input, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@ui'
 import { supervisorFactoryReset } from '../api/supervisor'
 
@@ -53,6 +54,9 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
   const [captchaState, setCaptchaState] = useState<'idle' | 'solving' | 'ready' | 'off' | 'failed'>('idle')
   const [captcha, setCaptcha] = useState<string | null>(null)
   const [progress, setProgress] = useState(0)
+  /** 网关的验证码形态：ALTCHA（本地解）与 Turnstile（挂组件）走两条不同路径。 */
+  const [captchaConfig, setCaptchaConfig] = useState<PanelStatus | null>(null)
+  const [turnstileReset, setTurnstileReset] = useState(0)
   /** 「忘记密码」二次确认面板 */
   const [resetOpen, setResetOpen] = useState(false)
   const [resetPhrase, setResetPhrase] = useState('')
@@ -61,11 +65,21 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
   /** 代次：重试时作废上一轮，避免迟到的结果覆盖新状态 */
   const generation = useRef(0)
 
-  const runCaptcha = async () => {
+  const runCaptcha = async (providerOverride?: string) => {
     const mine = ++generation.current
     setCaptchaState('solving')
     setCaptcha(null)
     setProgress(0)
+    // Turnstile 的题在组件自己那边：这里只把状态切成「求解中」并让它重挂一次，
+    // 真正的 token 由 onToken 回填。providerOverride 是首帧用的 —— 探测刚拿到状态时
+    // React 的 state 还没生效，不能读 captchaConfig。
+    const provider = providerOverride ?? captchaConfig?.captchaProvider
+    if (provider === 'turnstile') {
+      setTurnstileReset(value => value + 1)
+      setCaptchaState('solving')
+      setCaptcha(null)
+      return
+    }
     try {
       const payload = await solveCaptcha(ratio => {
         if (generation.current === mine) setProgress(ratio)
@@ -88,17 +102,22 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
   useEffect(() => {
     let alive = true
     void (async () => {
+      // 面板状态的 `status` 只在 try 里可见，且组件里另有同名字符串变量，
+      // 所以这里把验证码形态提出来传下去，避免遮蔽。
+      let provider: string | undefined
       try {
         const status = await fetchPanelStatus()
         if (!alive) return
         setSetup(!status.registered)
+        setCaptchaConfig(status)
         setStatusKnown(true)
+        provider = status.captchaProvider
       } catch {
         if (!alive) return
         setStatusKnown(true)
       }
       if (!alive) return
-      await runCaptcha()
+      await runCaptcha(provider)
     })()
     return () => {
       alive = false
@@ -271,6 +290,11 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
             />
 
             <div className='flex flex-col gap-1.5'>
+              {captchaConfig?.captchaProvider === 'turnstile' ? (
+                <TurnstileWidget url={url('/api/panel/turnstile')} t={t} resetKey={turnstileReset}
+                  onToken={token => { setCaptcha(token); if (token) setCaptchaState('ready') }}
+                  onState={value => setCaptchaState(value === 'verified' ? 'ready' : value === 'error' ? 'failed' : 'solving')} />
+              ) : (
               <Verification className='w-full justify-start whitespace-normal text-left'
                 state={captchaState === 'ready' ? 'verified' : captchaState === 'solving' ? 'verifying' : captchaState === 'failed' ? 'error' : 'idle'}
                 disabled={captchaState !== 'failed'} onClick={() => void runCaptcha()}>
@@ -279,6 +303,7 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
                     : captchaState === 'failed' ? t('人机验证失败')
                       : captchaState === 'off' ? t('这台网关未启用机器人校验') : t('人机验证')}
               </Verification>
+              )}
               {captchaState === 'solving' && progress > 0 ? (
                 <UiProgress value={Math.round(progress * 100)} aria-label={t('人机验证')} />
               ) : null}

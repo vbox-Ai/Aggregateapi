@@ -2,6 +2,8 @@ import React, { useEffect } from 'react'
 import { AppFrame } from '@ui'
 import { store, useStore, bootstrapTheme } from './state/store'
 import { usePluginStartup } from './lib/usePluginStartup'
+import { mobileBranding } from './lib/branding'
+import { applyDocumentBranding, useBrandingRefresh } from '../../ui-shared/branding'
 import { serverIdentity } from './lib/servers'
 import { TabBar, Toast, AuthGate, ThemeSync } from './components/Shell'
 import { PwaNotice } from './components/PwaNotice'
@@ -101,6 +103,10 @@ export function App() {
   // 插件启动进度：网关拉起插件期间轮询一次，进度会显示在会话状态里。
   usePluginStartup(!needsServer && !state.authLost, serverIdentity())
 
+  // 网关可自定义品牌（名称 / 图标），标题与页头跟随；网关没配置时用内置名。
+  const branding = mobileBranding.useValue()
+  useBrandingRefresh(mobileBranding, serverIdentity(), !needsServer)
+
   useEffect(() => {
     bootstrapTheme()
     store.restoreFromHash()
@@ -165,7 +171,7 @@ export function App() {
 
   useEffect(() => {
     // 页面标题跟着当前页走（PWA 里影响任务切换器的显示）
-    document.title = needsServer ? `${t('服务器')} · Agent2API` : `${def.title} · Agent2API`
+    document.title = `${needsServer ? t('服务器') : def.title} · ${branding.displayName || 'Agent2API'}`
   }, [def.title, needsServer])
 
   if (needsServer) {
