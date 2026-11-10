@@ -15,6 +15,7 @@ import { PluginSettingsSheet } from './plugins/PluginSettingsSheet'
 import { t } from '../i18n'
 import { apiCall } from '../api/client'
 import { ScriptPluginsPanel } from '../../../ui-shared/plugins-scripts'
+import { PluginPackSettingsSheet } from './plugins/PluginPackSettingsSheet'
 import '../styles/checkin.css'
 
 const MIB = 1024 * 1024
@@ -65,6 +66,11 @@ async function readPackBase64(file: File, maxPackBytes: number): Promise<string>
 export function PluginsPage() {
   const { server } = useStore()
   const [payload, setPayload] = useState<PluginsPayload | null>(null)
+  /**
+   * 插件包设置抽屉。带上 `server` 是为了切换服务器后不误用上一台的包 ——
+   * 下面的 `settingsPack` 只在服务器一致时才找得到，找不到就不渲染。
+   */
+  const [packSettings, setPackSettings] = useState<{ id: string; server: string } | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [settings, setSettings] = useState(false)
@@ -224,12 +230,22 @@ export function PluginsPage() {
       </div> : null}
       <div className='m-section'>
         <SectionHead title={t('已安装插件')} />
+        {(() => {
+          const settingsPack = packSettings && packSettings.server === serverIdentity()
+            ? packs.find(item => item.id === packSettings.id) : undefined
+          return settingsPack ? <PluginPackSettingsSheet key={`${serverIdentity()}:${settingsPack.id}`}
+            pack={settingsPack} disabled={Boolean(busy)}
+            onClose={() => setPackSettings(null)}
+            onEnabled={enabled => void mutation(`enable:${settingsPack.id}`, () => setPluginEnabled(settingsPack.id, enabled))}
+            onProvider={(id, enabled) => void mutation(`provider:${id}`, () => setPluginProvider(settingsPack.id, id, enabled))} /> : null
+        })()}
         {packs.map(pack => <PluginCard key={pack.id} pack={pack} busy={Boolean(busy)} target={payload?.target || ''}
           update={payload?.updates?.find(update => update.id === pack.id)}
           operation={payload?.operations?.find(operation => operation.id === pack.id)}
           onEnabled={enabled => void mutation(`enable:${pack.id}`, () => setPluginEnabled(pack.id, enabled))}
           onProvider={(provider, enabled) => void mutation(`provider:${provider}`, () => setPluginProvider(pack.id, provider, enabled))}
-          onUpdate={() => void install(pack.id, true)} onRemove={() => setRemove(pack)} />)}
+          onUpdate={() => void install(pack.id, true)} onRemove={() => setRemove(pack)}
+          onSettings={() => setPackSettings({ id: pack.id, server: serverIdentity() })} />)}
         {!packs.length ? <Card className='m-card'><Empty text={payload ? t('这台网关还没有安装插件') : t('正在读取插件列表…')} /></Card> : null}
       </div>
       {/* 脚本插件：上游 v3.5.0 新增的第二类插件（Bun 脚本），与上面的进程插件并列展示；

@@ -708,6 +708,8 @@ export function restoreAgentClient(clientId: string, token: string): Promise<unk
 export type UsageRow = import('../../../ui-shared/usage-query-state').UsageQueryRow
 
 export type UsageSnapshot = {
+  /** 进行中的用量查询任务（账号用量页据此显示查询进度）。 */
+  queries?: import('../../../ui-shared/usage-query-task').UsageQueryTask[]
   sorting?: AccountSorting
   /** 全部行里最新的结论时刻 */
   at?: number

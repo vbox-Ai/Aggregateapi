@@ -3779,3 +3779,33 @@ A1 的宿主闸门会对 iOS 直接拒绝下载（`当前运行形态不支持�
 E-3（Antigravity 登录方式）本次提交。**A–E 五批全部完成**，只剩**批次 F**：
 全量对照（上游 25 个 mobile 页面 vs 我们 53 个）、i18n / 图标 / 入口一致性检查、
 出包（`only=store` + `publish=true`）、以及**包内标记核对**（U1–U16 与新功能同时在包里）。
+
+#### 记忆点 · 步骤 85（批次 F-1a：遗漏审计 + 插件包设置接线）
+
+**审计结论（用可达性闭包算，比"引用计数"可信）**：
+- `ui-shared` 我们 **131 / 上游 131**，`ui-kit` **45 / 45** —— **零缺失** ✓
+- 从手机端入口做 import 闭包后，**真·未接线 16 个**，其中上游手机端在用的 12 个是缺口
+- 我第一版分类把"未接线模块自身"也算作引用来源 ⇒ 链条看着通其实不通，**已改用闭包重算**
+- 另纠正我自己的两处误报：① `maintenance` 的 App 映射其实**在**（我查的是带引号的 key，
+  而实际是不带引号的 `maintenance:`）；② `/api/plugin-support` 是我**临时编的端点名**，不是真缺陷
+
+**本次接线（F-1a）**：
+1. 补齐两个上游有而我们缺的 mobile 文件：`hooks/useAccountUsage.ts`（4.7 KB）、
+   `pages/plugins/PluginPackSettingsSheet.tsx`（3.8 KB）；
+2. **插件包设置抽屉接进插件页**：`PluginCard` 加 `onSettings` 参数 + 用共享的
+   `PluginSettingsButton`（来自 `plugins-store.tsx` —— 这一步同时把该模块接上了），
+   插件页加 `packSettings` 状态、挂载抽屉、把 `onEnabled/onProvider` 接到既有的 mutation 上。
+   抽屉带 `server` 标识：切换服务器后 `settingsPack` 只在服务器一致时才找得到 ⇒ 不会误用上一台的包。
+3. 类型补全：我们的 `UsageSnapshot` 缺 `queries`（上游 hook 要读）⇒ 补
+   `queries?: import('../../../ui-shared/usage-query-task').UsageQueryTask[]`（与上游逐字一致）。
+
+**关于账号用量（重要，先查证再决定）**：上游把余额查询改成了**任务式**（`/api/accounts/usage/start`
+`/cancel`、`/snapshot`），并配 `useAccountUsage` 钩子（启动 / 取消 / 状态）。
+我先查了**同步端点还在不在** —— 结论：**仍在** ✓
+（`server/api/accounts_usage.rs:31` 的 `GET /api/accounts/usage` + `web_shim.rs:1782` 都在）
+⇒ **我们自建的「查询余额」按钮没有坏**，上游那套是**增强**（非阻塞 + 进度 + 取消），不是替换。
+因此这一步**没有**贸然替换我们已验证可用的查询路径；`useAccountUsage.ts` 已就位并随本批入库，
+下一步（F-1b）再决定是否切到任务式（切了要动 614 行的账号抽屉，需单独验证）。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,617.90 → **1,624.58 kB**）；
+`check-mobile-ui.py` 0。

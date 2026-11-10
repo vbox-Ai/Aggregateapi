@@ -3,6 +3,7 @@ import { Badge } from '../../components/ui'
 import type { PackSummary, PluginOperation, PluginUpdate, StorePlugin } from '../../api/plugins'
 import { pluginErrorMessage } from '../../api/plugins'
 import { t } from '../../i18n'
+import { PluginSettingsButton } from '../../../../ui-shared/plugins-store'
 
 function PluginProgress({ operation }: { operation?: PluginOperation }) {
   if (!operation) return null
@@ -51,7 +52,7 @@ export function StorePluginCard({ item, target, busy, operation, onInstall }: {
   </Card>
 }
 
-export function PluginCard({ pack, target, busy, update, operation, onEnabled, onProvider, onUpdate, onRemove }: {
+export function PluginCard({ pack, target, busy, update, operation, onEnabled, onProvider, onUpdate, onRemove, onSettings }: {
   pack: PackSummary
   target: string
   busy: boolean
@@ -61,6 +62,8 @@ export function PluginCard({ pack, target, busy, update, operation, onEnabled, o
   onProvider: (id: string, enabled: boolean) => void
   onUpdate: () => void
   onRemove: () => void
+  /** 打开「插件包设置」抽屉（运行态 / 助手 / 诊断）。 */
+  onSettings: () => void
 }) {
   const required = pack.updateRequired === true
   const locked = busy || operation?.active === true
@@ -92,6 +95,7 @@ export function PluginCard({ pack, target, busy, update, operation, onEnabled, o
         {t('启用')}<Switch checked={pack.enabled} disabled={locked} aria-label={t('启用插件 {name}', { name: pack.name })}
           onCheckedChange={onEnabled} />
       </Label>
+      <PluginSettingsButton name={pack.name || pack.id} t={t} onClick={onSettings} />
       <Button size='sm' variant='outline' disabled={locked} onClick={onRemove}>{t('卸载')}</Button>
       {required ? <Button size='sm' disabled={locked || update?.repairing === true} onClick={onUpdate}>
         {update?.repairing ? t('正在补齐插件…') : t('补齐插件')}
