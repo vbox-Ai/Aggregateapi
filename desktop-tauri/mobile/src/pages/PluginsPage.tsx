@@ -13,6 +13,8 @@ import { store, useStore } from '../state/store'
 import { PluginCard, StorePluginCard } from './plugins/PluginCards'
 import { PluginSettingsSheet } from './plugins/PluginSettingsSheet'
 import { t } from '../i18n'
+import { apiCall } from '../api/client'
+import { ScriptPluginsPanel } from '../../../ui-shared/plugins-scripts'
 import '../styles/checkin.css'
 
 const MIB = 1024 * 1024
@@ -230,6 +232,16 @@ export function PluginsPage() {
           onUpdate={() => void install(pack.id, true)} onRemove={() => setRemove(pack)} />)}
         {!packs.length ? <Card className='m-card'><Empty text={payload ? t('这台网关还没有安装插件') : t('正在读取插件列表…')} /></Card> : null}
       </div>
+      {/* 脚本插件：上游 v3.5.0 新增的第二类插件（Bun 脚本），与上面的进程插件并列展示；
+          iOS 沙盒下调不起来，脚本面板的安装动作会被网关的宿主闸门拒绝，属预期行为。 */}
+      {payload?.scripts ? <div className='m-section'>
+        <SectionHead title={t('脚本插件')} />
+        <Card className='m-card m-card-pad'>
+          <ScriptPluginsPanel key={server?.base || payload.target} state={payload.scripts} t={t}
+            disabled={Boolean(busy)} request={(path, body) => apiCall(path, { method: 'POST', body })}
+            refresh={load} />
+        </Card>
+      </div> : null}
       {payload?.catalog?.reason ? <div className='m-section'><p className='m-ck-note'>{pluginErrorMessage(payload.catalog.reason)}</p></div> : null}
       {failedOperations.length ? <div className='m-section'><Collapsible className='m-card m-card-pad'>
         <CollapsibleTrigger className='m-ck-title'>{t('最近失败')}</CollapsibleTrigger>

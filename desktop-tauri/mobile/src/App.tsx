@@ -1,6 +1,8 @@
 import React, { useEffect } from 'react'
 import { AppFrame } from '@ui'
 import { store, useStore, bootstrapTheme } from './state/store'
+import { usePluginStartup } from './lib/usePluginStartup'
+import { serverIdentity } from './lib/servers'
 import { TabBar, Toast, AuthGate, ThemeSync } from './components/Shell'
 import { PwaNotice } from './components/PwaNotice'
 import { usePwa } from './lib/usePwa'
@@ -94,6 +96,8 @@ export function App() {
    * 这里自然放行。
    */
   const needsServer = state.packaged && !state.server
+  // 插件启动进度：网关拉起插件期间轮询一次，进度会显示在会话状态里。
+  usePluginStartup(!needsServer && !state.authLost, serverIdentity())
 
   useEffect(() => {
     bootstrapTheme()

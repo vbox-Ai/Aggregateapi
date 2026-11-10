@@ -3575,3 +3575,33 @@ wasm 插件不被拦；`script/settings.rs` 的 `bun::ensure()`（下载 bun 运
 
 **验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,454.00 → **1,481.70 kB**，
 增量 27.70 kB ≈ 自动刷新控件 + 许可面板）；`check-mobile-ui.py` 0。
+
+#### 记忆点 · 步骤 79（批次 C：脚本插件体系 + 插件运行态）
+
+**这是上游 v3.5.0-beta.1 的主特性：第二种插件形态「脚本插件」**（Bun 运行时 + 脚本包 + 商店）。
+引入 16 个模块（约 76 KB）：`plugins-scripts.tsx`(21 KB)、`plugins-script-{catalog,display,install-notice,
+options,pagination,progress,settings}`、`plugins-store.tsx`、`plugins-permissions.tsx`，
+以及运行态 6 个：`plugin-startup-view.tsx`、`plugin-tasks.tsx`、`plugin-helpers.tsx`、
+`plugin-hidden.ts`、`plugin-login-interaction.tsx`、`plugin-provider-settings.tsx`。
+递归补齐时**顺带拉进了 4 个 provider 设置模块**（`provider-settings*.tsx/ts`、`provider-icons.ts`）——
+它们原属批次 D，但被 C 依赖，所以提前到位（D 批只需接入，不必再复制）。
+
+**mobile 接入两处**：
+1. `pages/PluginsPage.tsx` 在「已安装插件」之后加**脚本插件**分段：
+   `{payload?.scripts ? <ScriptPluginsPanel state={payload.scripts} request={(path, body) => apiCall(path, {method:'POST', body})} refresh={load} t={t} disabled={Boolean(busy)} /> : null}`。
+   数据来自 `PluginsPayload.scripts?: ScriptPluginsState`（A2 已把该类型同步进来）。
+   端点：`/api/plugins/scripts/{catalog,install,check,change,settings,prompts}`。
+2. `lib/usePluginStartup.ts` + `App.tsx` 调用 `usePluginStartup(!needsServer && !state.authLost, serverIdentity())`
+   —— 网关拉起插件期间轮询 `/api/plugins/startup`，进度写回会话。
+
+**类型适配的一个坑**：上游这个 hook 读 `store.get().session?.pluginStartup`，而**我们的会话类型还没有这个字段**
+（旧网关也不会返回）⇒ 不能照抄。改为**窄类型读取**：
+`(store.get().session as { pluginStartup?: PluginStartupSnapshot } | undefined)?.pluginStartup`，
+没有这段数据时 polling 退化为「只读 + 不刷新」，不报错也不影响旧网关。
+
+**iOS 上的预期行为**（已在代码注释写明，避免以后误判成 bug）：脚本插件需要 Bun 运行时，
+A1 的宿主闸门会对 iOS 直接拒绝下载（`当前运行形态不支持安装脚本插件（需要下载 Bun 运行时）`），
+所以脚本面板能看、能读，但**安装会被明确拒绝** —— 这是设计口径，不是故障。
+
+**验证**：`tsc --noEmit` 0；`pnpm run build` 0（`ui/m/mobile.js` 1,481.70 → **1,526.99 kB**，
+增量 45.29 kB ≈ 脚本面板 + 运行态）；`check-mobile-ui.py` 0。
