@@ -271,7 +271,7 @@ export function LogsPage() {
               <Button variant='ghost' size='xs' onClick={() => { stateRef.current.detail = group; setDetail(group) }}>{t('详情')}</Button>
             </div>
             <div style={{ color: 'var(--m-text)', lineHeight: 1.55, fontSize: 12.5, marginTop: 3 }}>{logSummary(group.entry, t)}</div>
-            {logContext(group.entry) ? <div style={{ color: 'var(--m-text-3)', fontSize: 11, lineHeight: 1.5, marginTop: 3, overflowWrap: 'anywhere' }}>{logContext(group.entry)}</div> : null}
+            {logContext(group.entry, t) ? <div style={{ color: 'var(--m-text-3)', fontSize: 11, lineHeight: 1.5, marginTop: 3, overflowWrap: 'anywhere' }}>{logContext(group.entry, t)}</div> : null}
             <div style={{ color: 'var(--m-text-3)', fontSize: 10.5, marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>{groupTime(group)}</div>
           </div>)}
         </Card></div> : null}
@@ -287,7 +287,7 @@ export function LogsPage() {
           {detail ? <>
             <div style={{ fontSize: 13, color: 'var(--m-text)', lineHeight: 1.6 }}>{logSummary(detail.entry, t)}</div>
             <div style={{ fontSize: 11, color: 'var(--m-text-3)' }}>{groupTime(detail)} · {t('原始记录 {n} 条', { n: detail.count })}</div>
-            <div style={{ fontSize: 11.5, color: 'var(--m-text-2)', overflowWrap: 'anywhere' }}>{logContext(detail.entry)}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--m-text-2)', overflowWrap: 'anywhere' }}>{logContext(detail.entry, t)}</div>
             <h3 style={{ fontSize: 12 }}>{t('原始记录')}</h3>
             {detail.entries.map((entry, index) => <div key={entry.id ?? index}>
               <div style={{ fontSize: 10.5, color: 'var(--m-text-3)', marginBottom: 5 }}>{formatLogTime(entry.ts)}</div>

@@ -42,7 +42,6 @@ export function StorePluginCard({ item, target, busy, operation, onInstall }: {
   return <Card render={<article />} className='m-card m-card-pad'>
     <Head name={item.name || item.id} version={item.version} icon={item.icon} />
     <p className='m-ck-note'>{t(item.description)}</p>
-    {item.official ? <Badge tone='brand'>{t('官方')}</Badge> : null}
     {item.reason ? <p className={item.error ? 'm-ck-error' : 'm-ck-note'}>{pluginErrorMessage(item.reason)}</p> : null}
     <PluginProgress operation={operation} />
     {!operation?.active ? <div className='m-ck-actions'>

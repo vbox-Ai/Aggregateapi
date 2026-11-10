@@ -46,9 +46,10 @@ export function PluginSettingsSheet({ onClose, onChanged }: { onClose: () => voi
     } finally { setBusy(false) }
   }
 
-  const options: Array<{ key: 'autoUpdate' | 'autoInstallOfficial'; label: string; note: string }> = [
-    { key: 'autoUpdate', label: t('自动更新插件'), note: t('检测到更新后自动下载、校验并安装已启用的官方签名插件。关闭此项不影响最低版本补齐；未签名或第三方插件仍需手动更新。') },
-    { key: 'autoInstallOfficial', label: t('自动下载官方插件'), note: t('开启期间卸载的官方插件也会重新安装。') },
+  // 上游 v3.5.0 新版插件设置里已没有 utoInstallOfficial 这一项（改为按最低版本自动补齐），
+  // 这里同步移除，避免把不存在的键写回网关。
+  const options: Array<{ key: 'autoUpdate'; label: string; note: string }> = [
+    { key: 'autoUpdate', label: t('自动更新插件'), note: t('检测到更新后自动下载、校验并安装已启用的插件。关闭此项不影响最低版本补齐；未签名或第三方插件仍需手动更新。') },
   ]
   const saveInterval = () => {
     const interval = Number(draft)

@@ -3489,3 +3489,36 @@ wasm 插件不被拦；`script/settings.rs` 的 `bun::ensure()`（下载 bun 运
 的情况最危险 —— 两边一起错就会自证通过。
 
 **改动**：`agent2api-universal/patches/0001-plugin-host-ios-exec-gate.diff`（5222 B，3 hunk / 2 文件）。
+
+#### 记忆点 · 步骤 76（批次 A2：同步 25 个既有 ui-shared 模块 + 触发的依赖链）
+
+**做了什么**
+1. 25 个被上游改动的既有 `ui-shared` 模块：**24 个直接整文件替换**（我们与 v3.4.2 逐字节相同，
+   零冲突），`plugins.ts` 做**三方合并** —— 以上游新版为底，把我们的 `PackUiSummary` 类型与
+   `PackUiSummary[]` 字段加回去（上游没有这两样，属于我们的「插件自定义页面」增量）。
+2. 同步触发的**依赖链**（新模块 import 了更多新版模块，必须一起引入，否则类型检查直接报缺失）：
+   `account-import-result.ts`、`searchable-select.tsx`、`checkin-campaign-types.ts`、
+   `github-failure.tsx`、`plugin-startup.ts`、`plugins-filters.ts`、`usage-query-task.ts`。
+3. **ui-kit 也要同步**：`searchable-select` 依赖 `@ui` 的 Combobox 组件，而上游 ui-kit 新增了
+   `combobox.tsx` 与 `lib/select-boundary.ts`，并改了 `index.ts` / `segmented-control.tsx` / `select.tsx`
+   —— 后两个我们与 v3.4.2 相同，直接替换。
+4. **按上游变更改我们自己的页面**（3 处）：
+   - `LogsPage.tsx`：`logContext(entry)` 新版要求第二个参数 `t`，3 个调用点全部补上；
+   - `PluginCards.tsx`：新版 `StorePlugin` 已**没有** `official` 字段（上游移除了官方徽标概念），
+     删掉「官方」Badge；
+   - `PluginSettingsSheet.tsx`：新版 `PluginSettings` 已**没有** `autoInstallOfficial`
+     （改为按最低版本自动补齐），从选项数组移除该项，避免把不存在的键写回网关。
+
+**两个必须记住的技术坑**
+- **base-ui 类型不匹配**：`@base-ui/react` 我们装的是 1.9.0，上游 `combobox.tsx`/`select.tsx` 把
+  `Root.ChangeEventDetails` 传给期望 `OpenChangeEventDetails` 的位置；在 1.9.0 里后者是
+  `ChangeEventDetails & { preventUnmountOnClose }`，**多一个字段**故不兼容。
+  没有升级依赖（会牵连 43 个既有组件的用法），而是**最小适配**：把两处标注改为
+  `OpenChangeEventDetails`，并给 `createChangeEventDetails(...)` 的返回值补一个
+  `preventUnmountOnClose: () => {}` —— 这条路径是我们**主动关**，不需要延迟卸载，空实现即语义正确。
+- **动态 import 的依赖也要补**：`plugins.ts` 用 `import('./plugins-filters').ScriptPublisher`
+  这种**类型级动态导入**，只匹配 `from './x'` 的正则会漏掉它 —— 依赖补齐器必须同时匹配
+  `from '\./x'` 与 `import\('\./x'\)` 两种写法。
+
+**验证**：`tsc --noEmit` **0**；`pnpm run build` **0**（`ui/m/mobile.js` 1,409.80 → **1,425.74 kB**，
+增量与同步进来的代码量相符）；`check-mobile-ui.py` **0**。
