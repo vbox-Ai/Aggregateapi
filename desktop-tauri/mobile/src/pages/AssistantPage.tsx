@@ -24,7 +24,8 @@ import { assistantFileContext, formatFileSize, type AssistantTextFile } from '..
 import { AssistantImageResults } from '../../../ui-shared/assistant-image-results'
 import { loadAssistantImage } from '../api/assistant-images'
 import { saveMobileAssistantImage } from '../lib/assistant-image-save'
-import { readMobileAttachments, ATTACHMENT_ACCEPT } from '../lib/assistant-attachments'
+import { readMobileAttachments, ATTACHMENT_ACCEPT, isZipAttachment } from '../lib/assistant-attachments'
+import { uploadAssistantPack, describePackResult } from '../api/assistant-files'
 import { serverIdentity } from '../lib/servers'
 import { MobileMessageActions } from '../components/MobileMessageActions'
 import { AssistantTitleSettings } from '../../../ui-shared/assistant-title-settings'
@@ -76,6 +77,8 @@ export function AssistantPage() {
   const [attachments, setAttachments] = useState<string[]>([])
   const [textFiles, setTextFiles] = useState<AssistantTextFile[]>([])
   const [readingAttachments, setReadingAttachments] = useState(false)
+  /** 大包上传进度（0–1）；null = 没有在传 */
+  const [packProgress, setPackProgress] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [historyBusy, setHistoryBusy] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -395,16 +398,35 @@ export function AssistantPage() {
   const addAttachments = async (files: FileList | File[]) => {
     if (readingAttachments || busy || checkingModelRef.current) return
     const session = sessionRef.current
+    const list = Array.from(files)
+    // 大包（zip）与内联附件走两条不同的路：前者上传网关解包入库，后者仍按内联限额。
+    // 分开处理是刻意的 —— 混在一起会让 zip 撞上 512 KiB / 3 个文件的内联上限，
+    // 而且那条上限对"上百个文件、100 MB"根本没有意义。
+    const packs = list.filter(isZipAttachment)
+    const inline = list.filter(file => !isZipAttachment(file))
     setReadingAttachments(true)
     try {
-      const result = await readMobileAttachments(files, { images: attachments.length, files: textFiles.length })
-      if (sessionRef.current === session) {
-        setAttachments(current => [...current, ...result.images])
-        setTextFiles(current => [...current, ...result.files])
+      if (inline.length) {
+        const result = await readMobileAttachments(inline, { images: attachments.length, files: textFiles.length })
+        if (sessionRef.current === session) {
+          setAttachments(current => [...current, ...result.images])
+          setTextFiles(current => [...current, ...result.files])
+        }
+      }
+      for (const pack of packs) {
+        setPackProgress(0)
+        try {
+          const imported = await uploadAssistantPack(pack, session, ratio => setPackProgress(ratio))
+          store.toast(describePackResult(pack.name, imported), imported.skipped?.length ? 'warn' : 'ok')
+        } catch (failure) {
+          store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
+        } finally {
+          if (sessionRef.current === session) setPackProgress(null)
+        }
       }
     } catch (failure) {
       store.toast(failure instanceof Error ? failure.message : String(failure), 'err')
-    } finally { setReadingAttachments(false) }
+    } finally { setReadingAttachments(false); setPackProgress(null) }
   }
 
   const stop = () => {
@@ -716,6 +738,7 @@ export function AssistantPage() {
           </Button>)}
         </div> : null}
         {textFiles.length ? <div style={{ paddingBottom: 8, fontSize: 10.5, color: 'var(--m-warn)', lineHeight: 1.5 }}>{t('文本文件会以文本发送给当前对话模型，其中的凭证也会保存在这条会话里。')}</div> : null}
+        {packProgress !== null ? <div style={{ paddingBottom: 8, fontSize: 10.5, color: 'var(--m-text-3)' }}>{t('正在上传压缩包… {n}%', { n: Math.round(packProgress * 100) })}</div> : null}
         {/* accept 与 lib/assistant-attachments 的判定共用同一个常量：不一致会出现"选了却什么都没发生" */}
         <input ref={fileRef} type='file' hidden multiple accept={ATTACHMENT_ACCEPT} onChange={event => {
           const files = event.currentTarget.files

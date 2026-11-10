@@ -11,6 +11,11 @@ export type ImageToolContext = {
   apiKey?: string
   apiKeyName?: string
   signal?: AbortSignal
+  /**
+   * 只读 GET。宿主注入；不提供时（老宿主）依赖它的工具要**静默回落到原行为**，
+   * 不能因为少一个能力就整体失败。
+   */
+  get?: (path: string, signal?: AbortSignal) => Promise<unknown>
 }
 export type ImageToolResult = { text: string; summary: string; images: ImageAsset[] }
 export type ImageToolApi = (path: string, body: unknown, signal?: AbortSignal, apiKey?: string) => Promise<unknown>

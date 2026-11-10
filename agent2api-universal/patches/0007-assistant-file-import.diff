@@ -1,0 +1,615 @@
+--- a/desktop-tauri/src-tauri/server/src/server/db/schema.rs
++++ b/desktop-tauri/src-tauri/server/src/server/db/schema.rs
+@@ -347,7 +347,7 @@
+ /// 请求日志新增「积分」列读它。与 token 四列刻意不同：这一列**可空 REAL** ——
+ /// `NULL` = 这一家没上报（旧行 / 不提供该读数），0 = 确实零消耗；用 0 兜底会
+ /// 把「没读到」画成「花了 0 积分」，比缺一列更难排查。
+-pub const SCHEMA_VERSION: i64 = 29;
++pub const SCHEMA_VERSION: i64 = 30;
+ 
+ /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
+ ///
+@@ -1087,6 +1087,8 @@
+         27 => conn.execute_batch(include_str!("schema_coding.sql")),
+         28 => conn.execute_batch(include_str!("schema_model_recency.sql")),
+         29 => conn.execute_batch(include_str!("schema_usage_query.sql")),
++        // v30：助手文件库（大包导入；见 db/schema_assistant_files.sql）
++        30 => conn.execute_batch(include_str!("schema_assistant_files.sql")),
+         _ => Ok(()),
+     }
+ }
+--- a/desktop-tauri/src-tauri/server/src/server/http.rs
++++ b/desktop-tauri/src-tauri/server/src/server/http.rs
+@@ -631,6 +631,9 @@
+         .route("/api/assistant/images/generations", post(api::assistant_images::generations))
+         .route("/api/assistant/images/edits", post(api::assistant_images::edits))
+         .route("/api/assistant/images/files/{id}", get(api::assistant_images::download))
++        // 助手文件库：大包（zip）由网关解包入库，助手按需分页读（见 api::assistant_files）
++        .route("/api/assistant/files", get(api::assistant_files::list).post(api::assistant_files::upload))
++        .route("/api/assistant/files/{id}", get(api::assistant_files::read).delete(api::assistant_files::delete))
+         // 历史会话（左边那列对话）：列表 / 读 / 存 / 删 / 清空。存的是用户与
+         // 助手聊过的正文，敏感度与设置同级，一起挂 protected。
+         // `GET|DELETE /api/assistant/sessions` 是同一条路由的两个方法（清空走
+--- a/desktop-tauri/src-tauri/server/src/server/core/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/mod.rs
+@@ -72,6 +72,7 @@
+ pub mod auth_http;
+ pub mod assistant_sessions;
+ pub mod assistant_images;
++pub mod assistant_files;
+ pub mod auto_checkin;
+ pub mod beijing;
+ pub mod billing;
+--- a/desktop-tauri/src-tauri/server/src/server/api/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/mod.rs
+@@ -50,6 +50,7 @@
+ pub mod assistant;
+ pub mod assistant_history;
+ pub mod assistant_images;
++pub mod assistant_files;
+ // 工具服务（「工具服务」页）：列表 / 开关 / 超时 / 上游提供商 / 视觉配置 /
+ // 本机接入的管理面，以及对外运行时端点（Skill / MCP / REST）。上游配置与
+ // 编排在 `core::tool_services`，见那两个文件模块头
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/assistant_files.rs b/desktop-tauri/src-tauri/server/src/server/core/assistant_files.rs
+new file mode 100644
+--- /dev/null
++++ b/desktop-tauri/src-tauri/server/src/server/core/assistant_files.rs
+@@ -0,0 +1,224 @@
++//! 助手文件库：zip 导入的落地处。
++//!
++//! ── 为什么需要它（与 `assistant_images` 的区别）────────────────
++//! `assistant_images` 解决的是"图片字节不进上下文"；这里解决的是**体量**：
++//! 操作者会丢进来上百个文件、上百 MB 的 zip。这类东西**不能内联进消息**
++//! （前端 `MAX_TEXT_FILES = 3` / `MAX_TEXT_FILE_BYTES = 512 KiB` 那套上限
++//! 是内联通路的必然边界，不是随便定的）。所以：
++//!
++//!   zip 上传 → 网关侧解包 → **逐条入库** → 助手按需**分页**读取
++//!
++//! 消息历史里只留文件 ID，字节全在库里；读取用 SQLite 的 `substr(bytes, …)`
++//! **在库内切片**，一次只把请求的那一段带回内存 —— 于是"峰值内存不随包体
++//! 增长"，这是能在手机上处理 100 MB 包的关键。
++//!
++//! ── 与 `assistant_images` 同构的部分（刻意照抄，别自创）──────────
++//! `OnceLock<Option<Db>>` + `install/database/available` 三件套、
++//! `Db::with` / `with_mut`、32 字节随机 → 64 位 hex ID、`logging::now_ms()`、
++//! `GatewayError::new` / `with_status`、以及"总量上限 + 507"的语义。
++//! 两个库的表都集中在 `db/schema.rs` 的版本化 DDL 里建（v30），
++//! 不在本文件里写 `CREATE TABLE`。
++
++use std::sync::OnceLock;
++
++use rusqlite::{params, OptionalExtension};
++
++use crate::server::db::Db;
++use crate::server::errors::GatewayError;
++use crate::server::logging;
++
++static DB: OnceLock<Option<Db>> = OnceLock::new();
++
++/// 文件库总量上限。比图片库（512 MiB）大得多：这里的用途就是装大包。
++const MAX_STORAGE_BYTES: i64 = 2 * 1024 * 1024 * 1024;
++
++/// 单次分页读取的上限。助手侧一次读不完就多读几页 —— 上限存在的意义是
++/// **不让一次工具调用把上百 MB 拉进上下文**，而不是限制文件本身的大小。
++pub const MAX_READ_BYTES: i64 = 256 * 1024;
++
++pub fn install(db: Option<Db>) {
++    let _ = DB.set(db);
++}
++
++fn database() -> Result<&'static Db, GatewayError> {
++    DB.get()
++        .and_then(Option::as_ref)
++        .ok_or_else(|| GatewayError::with_status(503, "助手文件库不可用"))
++}
++
++/// 可用性：库能读、且没到总量上限。
++pub fn available() -> Result<(), GatewayError> {
++    let used = database()?
++        .with(|conn| {
++            conn.query_row(
++                "SELECT COALESCE(SUM(length(bytes)), 0) FROM assistant_files",
++                [],
++                |row| row.get::<_, i64>(0),
++            )
++        })
++        .ok_or_else(|| GatewayError::with_status(503, "助手文件库数据库不可用"))?
++        .map_err(|_| GatewayError::with_status(503, "助手文件库无法读取"))?;
++    if used >= MAX_STORAGE_BYTES {
++        return Err(GatewayError::with_status(
++            507,
++            "助手文件库已满（上限 2 GiB），请先删除不再需要的导入",
++        ));
++    }
++    Ok(())
++}
++
++/// 库内一个文件的元信息（不含字节）。
++#[derive(Clone, serde::Serialize)]
++pub struct FileMeta {
++    pub id: String,
++    pub name: String,
++    pub mime: String,
++    pub size: i64,
++    pub created_at: i64,
++}
++
++fn random_id() -> Result<String, GatewayError> {
++    let mut random = [0u8; 32];
++    getrandom::getrandom(&mut random).map_err(|_| GatewayError::new("无法生成助手文件 ID"))?;
++    Ok(random.iter().map(|byte| format!("{byte:02x}")).collect())
++}
++
++/// 把解包出来的条目**逐条入库**，返回各自的 ID（顺序与入参一致）。
++///
++/// 入参已经是"一条一条"的形态：调用方（`api::assistant_files::upload`）是
++/// 从临时文件里的 `ZipArchive` 逐条读出来喂进来的，所以这里**不会**同时持有
++/// 整个包的字节。整批走一个事务：要么全进，要么全不进。
++pub fn store_unpacked(
++    session: &str,
++    entries: Vec<(String, String, Vec<u8>)>,
++) -> Result<Vec<String>, GatewayError> {
++    let mut prepared = Vec::with_capacity(entries.len());
++    for (name, mime, bytes) in entries {
++        prepared.push((random_id()?, name, mime, bytes));
++    }
++    let ids: Vec<String> = prepared.iter().map(|(id, ..)| id.clone()).collect();
++    database()?
++        .with_mut(|conn| -> Result<(), GatewayError> {
++            let tx = conn
++                .transaction()
++                .map_err(|_| GatewayError::new("无法保存助手文件"))?;
++            let used: i64 = tx
++                .query_row(
++                    "SELECT COALESCE(SUM(length(bytes)), 0) FROM assistant_files",
++                    [],
++                    |row| row.get(0),
++                )
++                .map_err(|_| GatewayError::new("无法读取助手文件库用量"))?;
++            let added: i64 = prepared.iter().map(|(_, _, _, bytes)| bytes.len() as i64).sum();
++            if used.saturating_add(added) > MAX_STORAGE_BYTES {
++                return Err(GatewayError::with_status(
++                    507,
++                    "助手文件库已满（上限 2 GiB），本次导入未保存，请先删除不再需要的导入",
++                ));
++            }
++            for (id, name, mime, bytes) in &prepared {
++                tx.execute(
++                    "INSERT INTO assistant_files (id, session_id, name, mime, bytes, created_at) \
++                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
++                    params![id, session, name, mime, bytes, logging::now_ms()],
++                )
++                .map_err(|_| GatewayError::new("助手文件保存失败，请勿自动重发"))?;
++            }
++            tx.commit()
++                .map_err(|_| GatewayError::new("助手文件保存失败，请勿自动重发"))
++        })
++        .ok_or_else(|| GatewayError::with_status(503, "助手文件库数据库不可用"))??;
++    Ok(ids)
++}
++
++/// 列出某个会话导入的全部文件（**不含字节**：列表接口不该把 100 MB 拉出来）。
++pub fn list(session: &str) -> Result<Vec<FileMeta>, GatewayError> {
++    database()?
++        .with(|conn| {
++            let mut stmt = conn
++                .prepare(
++                    "SELECT id, name, mime, length(bytes), created_at FROM assistant_files \
++                     WHERE session_id = ?1 ORDER BY created_at, id",
++                )
++                .map_err(|_| ())?;
++            let rows = stmt
++                .query_map(params![session], |row| {
++                    Ok(FileMeta {
++                        id: row.get(0)?,
++                        name: row.get(1)?,
++                        mime: row.get(2)?,
++                        size: row.get(3)?,
++                        created_at: row.get(4)?,
++                    })
++                })
++                .map_err(|_| ())?
++                .collect::<Result<Vec<_>, _>>()
++                .map_err(|_| ())?;
++            Ok(rows)
++        })
++        .ok_or_else(|| GatewayError::with_status(503, "助手文件库数据库不可用"))?
++        .map_err(|_| GatewayError::with_status(500, "助手文件列表读取失败"))
++}
++
++/// 分页读取一个文件的一段。返回 `(名字, MIME, 总字节数, 这一段字节)`。
++///
++/// `offset` 从 0 开始；`limit` 超过 [`MAX_READ_BYTES`] 时按上限截断（调用方
++/// 需要更多就多调几次）。**在 SQL 里切片**：`substr(bytes, offset+1, limit)`，
++/// 所以内存占用只与这一次请求的 `limit` 有关，与文件大小无关。
++pub fn read(
++    id: &str,
++    session: Option<&str>,
++    offset: i64,
++    limit: i64,
++) -> Option<(String, String, i64, Vec<u8>)> {
++    if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
++        return None;
++    }
++    let offset = offset.max(0);
++    let limit = limit.clamp(1, MAX_READ_BYTES);
++    database()
++        .ok()?
++        .with(|conn| {
++            conn.query_row(
++                "SELECT name, mime, length(bytes), substr(bytes, ?3, ?4) FROM assistant_files \
++                 WHERE id = ?1 AND (?2 IS NULL OR session_id = ?2)",
++                params![id, session, offset + 1, limit],
++                |row| {
++                    Ok((
++                        row.get::<_, String>(0)?,
++                        row.get::<_, String>(1)?,
++                        row.get::<_, i64>(2)?,
++                        row.get::<_, Vec<u8>>(3)?,
++                    ))
++                },
++            )
++            .optional()
++            .ok()
++            .flatten()
++        })
++        .flatten()
++}
++
++/// 删除一个会话导入的全部文件。会话被删时由调用方触发（与图片库同一时机）。
++pub fn delete_session(session: &str) -> Result<usize, GatewayError> {
++    database()?
++        .with(|conn| conn.execute("DELETE FROM assistant_files WHERE session_id = ?1", params![session]))
++        .ok_or_else(|| GatewayError::with_status(503, "助手文件库数据库不可用"))
++        .map(|n| n.unwrap_or(0))
++}
++
++/// 删除单个文件（操作者在导入结果里手工清掉某一个）。
++pub fn delete(id: &str, session: Option<&str>) -> Result<usize, GatewayError> {
++    if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
++        return Ok(0);
++    }
++    database()?
++        .with(|conn| {
++            conn.execute(
++                "DELETE FROM assistant_files WHERE id = ?1 AND (?2 IS NULL OR session_id = ?2)",
++                params![id, session],
++            )
++        })
++        .ok_or_else(|| GatewayError::with_status(503, "助手文件库数据库不可用"))
++        .map(|n| n.unwrap_or(0))
++}
+diff --git a/desktop-tauri/src-tauri/server/src/server/api/assistant_files.rs b/desktop-tauri/src-tauri/server/src/server/api/assistant_files.rs
+new file mode 100644
+--- /dev/null
++++ b/desktop-tauri/src-tauri/server/src/server/api/assistant_files.rs
+@@ -0,0 +1,296 @@
++//! 助手文件库的 HTTP 面：导入（zip 上传）/ 列表 / 分页读取 / 删除。
++//!
++//! ── 为什么上传要落临时文件 ────────────────────────────────────
++//! 目标体量是上百 MB 的 zip。**绝不能**把请求体整个读进内存再解包：手机上
++//! 那一步直接 OOM。所以走 `tempfile::NamedTempFile` 落盘 → `ZipArchive`
++//! 从文件读 → **一次只把一个条目读进内存** → 立刻入库。峰值内存 = 单个条目
++//! 的大小，与包体无关。
++//!
++//! ── 为什么读取走 query 分页而不是流式响应 ──────────────────────
++//! 助手侧的需求是"读一段、看一段、再读下一段"（`read_attachment` 的语义），
++//! 不是"下载整个文件"。同一组 `offset`/`limit` 参数既服务助手的工具调用，
++//! 也够手工排查；`limit` 由 `core::assistant_files::MAX_READ_BYTES` 兜底，
++//! 一次调用不可能把上百 MB 拉进上下文。
++//!
++//! ── 与 `api::assistant_images` 的关系 ──────────────────────────
++//! 同构：处理函数签名、`GatewayError`、`ok_json` 的用法都照那一份写；
++//! 路由挂进同一个 `protected` 分组（鉴权由分组负责，见 `http.rs`）。
++
++use axum::body::Bytes;
++use axum::extract::{Multipart, Path, Query, State};
++use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
++use axum::response::{IntoResponse, Response};
++use serde::Deserialize;
++use serde_json::json;
++use std::io::{Read, Seek, Write};
++
++use crate::server::core::assistant_files;
++use crate::server::errors::GatewayError;
++use crate::server::http::ok_json;
++use crate::server::ServerState;
++
++/// zip 包体积上限：100 MB 留出余量。
++const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
++/// 条目数上限。操作者说"有时上百个文件"，留到 2000。
++const MAX_ENTRIES: usize = 2000;
++/// 单个条目上限。超过就跳过并报原因（不因为一个巨型文件废掉整次导入）。
++const MAX_ENTRY_BYTES: u64 = 32 * 1024 * 1024;
++/// 一次事务里入库多少条。分小批是为了让"入库"这一步的内存占用也有上界。
++const BATCH: usize = 32;
++
++#[derive(Deserialize)]
++pub struct ReadQuery {
++    session: Option<String>,
++    offset: Option<i64>,
++    limit: Option<i64>,
++}
++
++#[derive(Deserialize)]
++pub struct SessionQuery {
++    session: Option<String>,
++}
++
++/// `POST /api/assistant/files`：收一个 zip，解包入库，返回导入结果。
++///
++/// 返回 `{ imported, ids, skipped: [{ name, reason }] }`：**跳过的东西一定带原因**
++/// —— 静默丢弃会让人以为"传上去了"，而助手那边读不到，最难排查。
++pub async fn upload(
++    State(_state): State<ServerState>,
++    headers: HeaderMap,
++    mut multipart: Multipart,
++) -> Response {
++    let session = session_id(&headers).unwrap_or_else(|| "default".to_string());
++    match import_zip(&session, &mut multipart).await {
++        Ok((ids, skipped)) => ok_json(json!({
++            "imported": ids.len(),
++            "ids": ids,
++            "skipped": skipped,
++        })),
++        Err(err) => err.into_response(),
++    }
++}
++
++/// 把 multipart 里的 zip 落到临时文件再解包。
++async fn import_zip(
++    session: &str,
++    multipart: &mut Multipart,
++) -> Result<(Vec<String>, Vec<serde_json::Value>), GatewayError> {
++    assistant_files::available()?;
++
++    let mut spool = tempfile::NamedTempFile::new()
++        .map_err(|_| GatewayError::with_status(500, "无法创建导入临时文件"))?;
++    let mut total: u64 = 0;
++    let mut got_field = false;
++    while let Some(mut field) = multipart
++        .next_field()
++        .await
++        .map_err(|_| GatewayError::with_status(400, "上传内容不是合法的 multipart"))?
++    {
++        // 只收文件字段；普通表单字段（例如 session）忽略。
++        if field.file_name().is_none() {
++            continue;
++        }
++        got_field = true;
++        while let Some(chunk) = field
++            .chunk()
++            .await
++            .map_err(|_| GatewayError::with_status(400, "上传中断"))?
++        {
++            total = total.saturating_add(chunk.len() as u64);
++            if total > MAX_PACKAGE_BYTES {
++                return Err(GatewayError::with_status(
++                    413,
++                    "压缩包超过 128 MB，请拆分后再导入",
++                ));
++            }
++            spool
++                .write_all(&chunk)
++                .map_err(|_| GatewayError::with_status(500, "写入导入临时文件失败"))?;
++        }
++    }
++    if !got_field {
++        return Err(GatewayError::with_status(400, "没有收到压缩包文件"));
++    }
++    spool
++        .flush()
++        .map_err(|_| GatewayError::with_status(500, "写入导入临时文件失败"))?;
++
++    // 从临时文件解包：一次一个条目，读完立刻入库。
++    let mut file = spool
++        .reopen()
++        .map_err(|_| GatewayError::with_status(500, "无法读取导入临时文件"))?;
++    file.seek(std::io::SeekFrom::Start(0))
++        .map_err(|_| GatewayError::with_status(500, "无法读取导入临时文件"))?;
++    let mut archive = zip::ZipArchive::new(file)
++        .map_err(|_| GatewayError::with_status(400, "这不是一个可读的 zip 压缩包"))?;
++
++    let mut ids: Vec<String> = Vec::new();
++    let mut skipped: Vec<serde_json::Value> = Vec::new();
++    let mut batch: Vec<(String, String, Vec<u8>)> = Vec::with_capacity(BATCH);
++    let count = archive.len().min(MAX_ENTRIES);
++    if archive.len() > MAX_ENTRIES {
++        skipped.push(json!({ "name": "(其余条目)", "reason": format!("超过 {MAX_ENTRIES} 个条目上限，未导入") }));
++    }
++    for index in 0..count {
++        let name = {
++            let entry = archive
++                .by_index(index)
++                .map_err(|_| GatewayError::with_status(400, "压缩包条目无法读取"))?;
++            if entry.is_dir() {
++                continue;
++            }
++            entry.name().to_string()
++        };
++        // 目录穿越与绝对路径：只取基名，绝不按包内路径落任何地方。
++        let safe_name = name
++            .rsplit(['/', '\\'])
++            .next()
++            .unwrap_or(&name)
++            .trim_matches('\u{0}')
++            .to_string();
++        if safe_name.is_empty() {
++            skipped.push(json!({ "name": name, "reason": "条目名为空" }));
++            continue;
++        }
++        let mut entry = archive
++            .by_index(index)
++            .map_err(|_| GatewayError::with_status(400, "压缩包条目无法读取"))?;
++        if entry.size() > MAX_ENTRY_BYTES {
++            skipped.push(json!({
++                "name": safe_name,
++                "reason": format!("单文件超过 {} MB 上限", MAX_ENTRY_BYTES / 1024 / 1024),
++            }));
++            continue;
++        }
++        let mut bytes = Vec::with_capacity(entry.size().min(MAX_ENTRY_BYTES) as usize);
++        // 用 take 兜住"声明大小与实际不符"的包：读到的绝不会超过上限。
++        entry
++            .by_ref()
++            .take(MAX_ENTRY_BYTES)
++            .read_to_end(&mut bytes)
++            .map_err(|_| GatewayError::with_status(400, "压缩包条目解压失败（可能已损坏）"))?;
++        if bytes.is_empty() {
++            skipped.push(json!({ "name": safe_name, "reason": "空文件" }));
++            continue;
++        }
++        batch.push((safe_name, mime_of(&name), bytes));
++        if batch.len() >= BATCH {
++            let stored = assistant_files::store_unpacked(session, std::mem::take(&mut batch))?;
++            ids.extend(stored);
++        }
++    }
++    if !batch.is_empty() {
++        let stored = assistant_files::store_unpacked(session, batch)?;
++        ids.extend(stored);
++    }
++    Ok((ids, skipped))
++}
++
++/// `GET /api/assistant/files?session=`：列出这个会话导入的文件（不含字节）。
++pub async fn list(
++    State(_state): State<ServerState>,
++    headers: HeaderMap,
++    Query(query): Query<SessionQuery>,
++) -> Response {
++    let session = query.session.or_else(|| session_id(&headers));
++    let session = session.unwrap_or_else(|| "default".to_string());
++    match assistant_files::list(&session) {
++        Ok(items) => ok_json(json!({ "files": items })),
++        Err(err) => err.into_response(),
++    }
++}
++
++/// `GET /api/assistant/files/{id}?offset=&limit=`：分页读取一段字节。
++///
++/// 响应带 `X-Total-Bytes` 与 `X-Name`，调用方据此翻页；`limit` 会被
++/// `core::assistant_files::MAX_READ_BYTES` 截断（读不完就再来一页）。
++pub async fn read(
++    State(_state): State<ServerState>,
++    Path(id): Path<String>,
++    headers: HeaderMap,
++    Query(query): Query<ReadQuery>,
++) -> Response {
++    let session = query.session.or_else(|| session_id(&headers));
++    let offset = query.offset.unwrap_or(0);
++    let limit = query.limit.unwrap_or(assistant_files::MAX_READ_BYTES);
++    match assistant_files::read(&id, session.as_deref(), offset, limit) {
++        Some((name, mime, total, bytes)) => {
++            let mut response = bytes.into_response();
++            let headers = response.headers_mut();
++            if let Ok(value) = HeaderValue::from_str(&mime) {
++                headers.insert(header::CONTENT_TYPE, value);
++            }
++            if let Ok(value) = HeaderValue::from_str(&total.to_string()) {
++                headers.insert("x-total-bytes", value);
++            }
++            if let Ok(value) = HeaderValue::from_str(&offset.to_string()) {
++                headers.insert("x-offset", value);
++            }
++            if let Ok(value) = HeaderValue::from_str(&url_encode(&name)) {
++                headers.insert("x-name", value);
++            }
++            response
++        }
++        None => GatewayError::with_status(404, "助手文件不存在").into_response(),
++    }
++}
++
++/// `DELETE /api/assistant/files/{id}?session=`
++pub async fn delete(
++    State(_state): State<ServerState>,
++    Path(id): Path<String>,
++    headers: HeaderMap,
++    Query(query): Query<SessionQuery>,
++) -> Response {
++    let session = query.session.or_else(|| session_id(&headers));
++    match assistant_files::delete(&id, session.as_deref()) {
++        Ok(removed) => ok_json(json!({ "removed": removed })),
++        Err(err) => err.into_response(),
++    }
++}
++
++/// multipart 之外的会话标识：优先 `X-Session-Id`，其次 `X-Assistant-Session`。
++fn session_id(headers: &HeaderMap) -> Option<String> {
++    for key in ["x-session-id", "x-assistant-session"] {
++        if let Some(value) = headers.get(key).and_then(|v| v.to_str().ok()) {
++            let trimmed = value.trim();
++            if !trimmed.is_empty() {
++                return Some(trimmed.to_string());
++            }
++        }
++    }
++    None
++}
++
++/// 按扩展名给 MIME。只用于让助手/下载端知道自己拿到的是什么，不参与判定。
++fn mime_of(name: &str) -> String {
++    let lower = name.to_ascii_lowercase();
++    let ext = lower.rsplit('.').next().unwrap_or("");
++    match ext {
++        "json" => "application/json",
++        "md" | "markdown" => "text/markdown",
++        "txt" | "log" | "csv" | "tsv" | "yml" | "yaml" | "toml" | "ini" | "conf" => "text/plain",
++        "xml" => "application/xml",
++        "png" => "image/png",
++        "jpg" | "jpeg" => "image/jpeg",
++        "webp" => "image/webp",
++        "gif" => "image/gif",
++        "pdf" => "application/pdf",
++        _ => "application/octet-stream",
++    }
++    .to_string()
++}
++
++/// 头部里放文件名时的最小百分号编码（非 ASCII 与分隔符一律转义）。
++fn url_encode(value: &str) -> String {
++    let mut out = String::with_capacity(value.len());
++    for byte in value.as_bytes() {
++        match byte {
++            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
++                out.push(*byte as char)
++            }
++            other => out.push_str(&format!("%{other:02X}")),
++        }
++    }
++    out
++}
+diff --git a/desktop-tauri/src-tauri/server/src/server/db/schema_assistant_files.sql b/desktop-tauri/src-tauri/server/src/server/db/schema_assistant_files.sql
+new file mode 100644
+--- /dev/null
++++ b/desktop-tauri/src-tauri/server/src/server/db/schema_assistant_files.sql
+@@ -0,0 +1,28 @@
++-- ── assistant_files：助手文件库（schema v30）────────────────────────────
++--
++-- 为什么需要这张表：操作者会往助手里丢**上百个文件、上百 MB 的 zip**。内联进
++-- 消息那条路（前端 MAX_TEXT_FILES=3 / MAX_TEXT_FILE_BYTES=512 KiB）是它自身的
++-- 必然边界，装不下这种体量；于是 zip 由网关侧解包、**逐条入库**，消息历史里只留
++-- 文件 ID，助手按需**分页**读。
++--
++-- 与 assistant_images 同构（`schema_assistant_images.sql`，version 19）：都是
++-- "字节在库里、ID 在消息里、会话删了一起删"。区别只有体量与读取方式：
++--   · 总量上限 2 GiB（图片是 512 MiB）—— 这张表的用途就是装大包；
++--   · 读取走 `substr(bytes, offset, limit)` **在库内切片**，一次只把请求的那
++--     一段带回内存，于是峰值内存与文件大小无关。这也是为什么用 BLOB 而不是外部
++--     文件：切片、事务、随会话删除三件事都白拿。
++--
++-- 会话外键：与 assistant_images 同口径 —— 会话被删时这些行由调用方一并清掉
++-- （`core::assistant_files::delete_session`），不依赖数据库层 CASCADE，
++-- 以免与既有表的删除时机分叉。
++CREATE TABLE IF NOT EXISTS assistant_files (
++  id          TEXT PRIMARY KEY,
++  session_id  TEXT NOT NULL,
++  name        TEXT NOT NULL,
++  mime        TEXT NOT NULL,
++  bytes       BLOB NOT NULL,
++  created_at  INTEGER NOT NULL
++);
++
++-- 按会话列清单是最常走的一条（导入后立刻列表、会话清理时按会话删）。
++CREATE INDEX IF NOT EXISTS idx_assistant_files_session ON assistant_files (session_id, created_at);

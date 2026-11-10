@@ -444,6 +444,8 @@ const setAccountEnabledTool: AssistantTool = {
 const readAttachment = createAttachmentReadTool(t)
 const importAccount = createAccountImportTool({
   post: (path, body, signal) => apiCall(path, { method: 'POST', body, signal }),
+  // 只读 GET：会话由调用方拼在路径上（工具上下文里本来就有 context.session）
+  get: (path, signal) => apiCall(path, { method: 'GET', signal }),
 }, t)
 
 /** 全部工具（顺序 = 设置页清单顺序：只读在前，改动在后，高危最后） */
@@ -462,6 +464,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   setAccountEnabledTool,
   importAccount,
 ]
+
 
 export function toolById(id: string): AssistantTool | undefined {
   return ASSISTANT_TOOLS.find(tool => tool.id === id)

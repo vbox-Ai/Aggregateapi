@@ -39,6 +39,7 @@ const PROVIDER_HINT = 'workbuddy / workbuddy-intl（WorkBuddy）、raccoon（小
 
 export type AccountImportApi = {
   /** 发一条管理请求（桌面与手机各自注入，见两端的工具表） */
+  get?: (path: string, signal?: AbortSignal) => Promise<unknown>
   post: (path: string, body: unknown, signal?: AbortSignal) => Promise<unknown>
   /** 导入成功后刷新账号列表（桌面端有；手机端可不传） */
   refresh?: () => void
@@ -132,6 +133,71 @@ function inferProvider(parsed: unknown): string {
   return ''
 }
 
+
+/**
+ * 从「导入的压缩包」里读一个文件（网关侧解包入库的那种）。
+ *
+ * ── 为什么需要它 ──────────────────────────────────────────────
+ * 内联附件那条路有它自身的上限（一次性塞进消息），大包（上百个文件 / 100 MB）
+ * 走的是**网关侧解包入库**。那条路上的文件不在 `context.files` 里，所以这里
+ * 先问网关要一份清单，再按名字或编号分页读一段。
+ *
+ * ── 并存而非替换 ──────────────────────────────────────────────
+ * 内联附件仍然优先（老网关、老对话都照旧）；只有"内联里找不到"时才去文件库。
+ * 反过来会让老网关上的行为发生变化 —— 那是不能接受的回归。
+ */
+async function packAttachmentOf(
+  args: Record<string, unknown>,
+  context: ImageToolContext | undefined,
+  t: Translate,
+): Promise<{ text: string; summary: string } | null> {
+  const get = context?.get
+  if (!get) return null
+  let list: unknown = null
+  try {
+    const session = context?.session ? `?session=${encodeURIComponent(context.session)}` : ''
+    list = await get(`/api/assistant/files${session}`, context?.signal)
+  } catch {
+    // 旧网关没有这条路由 / 网络失败：静默回落到内联，保持原行为
+    return null
+  }
+  const items = (Array.isArray(list) ? list : (list as { files?: unknown[] } | null)?.files) || []
+  if (!Array.isArray(items) || !items.length) return null
+  const ref = refText(args.attachment)
+  const index = typeof args.attachment === 'number' ? Math.round(args.attachment) : null
+  const byIndex = index ? (items[index - 1] as Record<string, unknown> | undefined) : undefined
+  const byName = (items as Array<Record<string, unknown>>).find(item =>
+    String(item?.name || '').toLowerCase() === String(ref || '').toLowerCase())
+  const target = byName || byIndex
+  if (!target || typeof target.id !== 'string') return null
+
+  const total = Number(target.size) || 0
+  const offset = Math.max(0, Math.round(num(args.offset) ?? 0))
+  const limit = Math.max(1, Math.min(READ_MAX, Math.round(num(args.limit) ?? READ_DEFAULT)))
+  // 会话在路径上（声明提到这里，读清单与读分片两处共用同一个值）
+  const session = context?.session ? `&session=${encodeURIComponent(context.session)}` : ''
+  const slice = await get(
+    `/api/assistant/files/${target.id}?offset=${offset}&limit=${limit}${session}`,
+    context?.signal,
+  )
+  const text = typeof slice === 'string' ? slice : String((slice as { text?: unknown })?.text ?? '')
+  const end = Math.min(total, offset + text.length)
+  const hasMore = end < total
+  return {
+    text: JSON.stringify({
+      name: target.name,
+      from: t('导入的压缩包（网关文件库）'),
+      size: total,
+      offset,
+      returnedChars: text.length,
+      hasMore,
+      nextOffset: hasMore ? end : null,
+      text,
+    }, null, 2),
+    summary: t('读取「{name}」{a}-{b} / {n}', { name: String(target.name || ''), a: offset, b: end, n: total }),
+  }
+}
+
 /** 只读：按编号 / 文件名读取附件正文，支持分页 */
 export function createAttachmentReadTool(t: Translate): AccountImportTool {
   return {
@@ -154,6 +220,8 @@ export function createAttachmentReadTool(t: Translate): AccountImportTool {
     run: async (args, context) => {
       if (context?.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
       const files = context?.files || []
+      const foundPack = await packAttachmentOf(args, context, t)
+      if (foundPack) return foundPack
       if (!files.length) throw new Error(t('当前对话没有可读取的文本附件：请先把 JSON 文件发给助手'))
       const found = assistantFileOf(files, args.attachment)
       if (!found) {

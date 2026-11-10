@@ -62,9 +62,23 @@ export const ATTACHMENT_ACCEPT = [
   ...TEXT_FILE_EXTENSIONS.map(ext => `.${ext}`),
   'application/json',
   'text/*',
+  // 大包（zip）单独一条路：**不走内联**，由网关解包入库、助手按需分页读。
+  // 它必须出现在这里，否则选择器里根本挑不到 zip（用户会以为"没这个功能"）。
+  '.zip',
+  'application/zip',
+  'application/x-zip-compressed',
 ].join(',')
 
+/** 是不是 zip 大包（走上传那条路，而不是内联文本） */
+export function isZipAttachment(file: File): boolean {
+  return /\.zip$/i.test(file.name)
+    || file.type === 'application/zip'
+    || file.type === 'application/x-zip-compressed'
+}
+
 function isTextAttachment(file: File): boolean {
+  // zip 走专门的上传通道（见 isZipAttachment），不能被当成内联文本
+  if (isZipAttachment(file)) return false
   const byName = new RegExp(`\\.(${TEXT_FILE_EXTENSIONS.join('|')})$`, 'i').test(file.name)
   // 有些平台拿不到扩展名或 MIME（Windows 上 .json 的 MIME 常为空），两条都要认
   const byType = file.type.startsWith('text/')
