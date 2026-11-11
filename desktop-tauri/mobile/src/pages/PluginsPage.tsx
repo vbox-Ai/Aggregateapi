@@ -16,7 +16,7 @@ import { PluginSettingsSheet } from './plugins/PluginSettingsSheet'
 import { t } from '../i18n'
 import { apiCall } from '../api/client'
 import { ScriptPluginsPanel } from '../../../ui-shared/plugins-scripts'
-import { ScriptPluginLoginSheet } from '../components/ScriptPluginLoginSheet'
+import { useScriptHostAttach } from '../lib/plugin-host-attach'
 import { PluginPackSettingsSheet } from './plugins/PluginPackSettingsSheet'
 import { PluginStartupDialog, subscribePluginDiagnostics, takePluginDiagnostics } from '../../../ui-shared/plugin-startup-view'
 import { refreshPluginStartup } from '../../../ui-shared/plugin-startup'
@@ -90,10 +90,16 @@ export function PluginsPage() {
   const [busy, setBusy] = useState('')
   const [settings, setSettings] = useState(false)
   const [remove, setRemove] = useState<PackSummary | null>(null)
-  /** 「在本机运行」的那支脚本插件：iOS 上网关装不起来（没有 iOS 版 Bun），改在手机本地跑 */
-  const [localScript, setLocalScript] = useState<{ id: string; name?: string } | null>(null)
   /** 脚本插件搜索词：过滤由共享面板自己完成，这里只负责把词传下去 */
   const [scriptQuery, setScriptQuery] = useState('')
+  /** 接入失败的可读原因（显示在脚本插件区上方，不弹窗打断） */
+  const [attachReason, setAttachReason] = useState('')
+  const hostAttach = useScriptHostAttach({
+    // 只在"网关侧没有可用运行时"时介入：有 Bun 的平台上这是多余的第二次握手
+    enabled: Boolean(payload?.scripts && !payload.scripts.runtime.installed),
+    packages: payload?.scripts?.packages ?? [],
+    onNotice: setAttachReason,
+  })
   const [maxPackBytes, setMaxPackBytes] = useState(LEGACY_MAX_PACK_BYTES)
   const fileRef = useRef<HTMLInputElement>(null)
   const locked = useRef(false)
@@ -271,18 +277,14 @@ export function PluginsPage() {
           iOS 沙盒下调不起来，脚本面板的安装动作会被网关的宿主闸门拒绝，属预期行为。 */}
       {payload?.scripts ? <div className='m-section'>
         <SectionHead title={t('脚本插件')} />
-        {/* iOS 上脚本插件装不起来：网关侧没有 iOS 版运行时（bun.rs 的 asset() 没有 ios 分支）。
-            这里给一条本地运行的出口 —— 宿主与插件放进手机自己的 Worker，网络请求仍经网关出网。
-            只加在手机端：ScriptPluginsPanel 是共享组件，桌面端还在用，不动它以免牵连桌面行为。 */}
-        {payload.scripts.packages?.length ? <Card className='m-card m-card-pad'>
-          <div className='m-ck-note' style={{ paddingBottom: 8 }}>
-            {t('手机本地运行（实验）：iOS 上网关装不了脚本插件，可在本机执行并登录。')}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {payload.scripts.packages.map(item => <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name || item.id}</span>
-              <Button variant='ghost' onClick={() => setLocalScript({ id: item.id, name: item.name })}>{t('本机登录')}</Button>
-            </div>)}
+        {/* 网关这台机器没有可用的脚本运行时时（iOS：bun.rs 的 asset() 没有 ios 分支），
+            由手机把宿主跑起来并接上（补丁 0011 的远端宿主）。接上之后，商店卡片、
+            插件设置与各提供商的登录流程都照常工作 —— 它们本来就经网关走同一套 RPC。 */}
+        {hostAttach.state !== 'idle' ? <Card className='m-card m-card-pad'>
+          <div className='m-ck-note'>
+            {hostAttach.state === 'attaching' ? t('正在接入手机端宿主…')
+              : hostAttach.state === 'attached' ? t('手机端宿主已接入：脚本插件可安装并使用。')
+                : t('手机端宿主接入失败：{reason}', { reason: attachReason })}
           </div>
         </Card> : null}
         <Card className='m-card m-card-pad'>
@@ -301,7 +303,6 @@ export function PluginsPage() {
             refresh={load} />
         </Card>
       </div> : null}
-      <ScriptPluginLoginSheet plugin={localScript} onClose={() => setLocalScript(null)} />
       {/* 插件启动诊断：点卡片上的「诊断」后弹出，可在里面重试启动 */}
       {startupId ? <PluginStartupDialog id={startupId}
         name={packs.find(pack => pack.id === startupId)?.name
