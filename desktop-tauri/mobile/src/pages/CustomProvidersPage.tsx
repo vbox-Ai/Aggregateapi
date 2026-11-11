@@ -7,6 +7,7 @@ import { usePolling } from '../lib/usePolling'
 import { serverIdentity } from '../lib/servers'
 import { store } from '../state/store'
 import { t } from '../i18n'
+import { formProtocol, takeProviderPreset, type ProviderPreset } from '../lib/preset-request'
 import { confirmDialog } from '@ui'
 import {
   PROTOCOL_OPTIONS,
@@ -34,8 +35,19 @@ export function CustomProvidersPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [creating, setCreating] = useState(false)
+  /** 从「API 模板」跳过来时带上的预置：表单初值，并在标题上说明用的是哪个模板 */
+  const [presetSeed, setPresetSeed] = useState<ProviderPreset | null>(null)
   const [editing, setEditing] = useState<CustomProvider | null>(null)
   const [fetching, setFetching] = useState<CustomProvider | null>(null)
+
+  // 从「API 模板」跳过来：直接打开新建表单并预填模板的名称/协议/Base URL。
+  // 与桌面同一流程（点模板 ⇒ 弹出预填表单 ⇒ 填 Key ⇒ 创建并添加账号）。
+  useEffect(() => {
+    const preset = takeProviderPreset()
+    if (!preset) return
+    setPresetSeed(preset)
+    setCreating(true)
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -79,7 +91,8 @@ export function CustomProvidersPage() {
         title={t('自定义提供商')}
         subtitle={t('{n} 个 · 新建会同时创建该家第一个账号', { n: providers.length })}
         actions={
-          <Button variant='outline' size='sm' disabled={Boolean(busy)} onClick={() => setCreating(true)}>
+          <Button variant='outline' size='sm' disabled={Boolean(busy)}
+            onClick={() => { setPresetSeed(null); setCreating(true) }}>
             <Icon name='plus' style={{ width: 14, height: 14 }} />
             {t('新建')}
           </Button>
@@ -130,8 +143,9 @@ export function CustomProvidersPage() {
       </div>
 
       {creating ? <CreateProviderSheet
-        onClose={() => setCreating(false)}
-        onCreated={async () => { setCreating(false); await load() }}
+        initial={presetSeed}
+        onClose={() => { setCreating(false); setPresetSeed(null) }}
+        onCreated={async () => { setCreating(false); setPresetSeed(null); await load() }}
       /> : null}
       {editing ? <EditProviderSheet
         provider={editing}
@@ -148,10 +162,16 @@ export function CustomProvidersPage() {
 }
 
 /** 新建：名称 / 协议 / 地址 / API Key 一次提交，网关同时建好首个账号 */
-function CreateProviderSheet({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
-  const [name, setName] = useState('')
-  const [protocol, setProtocol] = useState<string>('openai')
-  const [baseUrl, setBaseUrl] = useState('')
+function CreateProviderSheet({ initial, onClose, onCreated }: {
+  /** 从「API 模板」带来的预置（可空 = 手建） */
+  initial: ProviderPreset | null
+  onClose: () => void
+  onCreated: () => Promise<void>
+}) {
+  const [name, setName] = useState(initial?.name ?? '')
+  // 协议要把预置的后端值映射成表单的三档（chat_completions → openai），否则下拉会是空选
+  const [protocol, setProtocol] = useState<string>(initial ? formProtocol(initial.protocol) : 'openai')
+  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '')
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -183,9 +203,14 @@ function CreateProviderSheet({ onClose, onCreated }: { onClose: () => void; onCr
       onClose()
     }}>
       <SheetContent showCloseButton={!busy}>
-        <SheetHeader><SheetTitle>{t('新建自定义提供商')}</SheetTitle></SheetHeader>
+        <SheetHeader><SheetTitle>
+          {initial ? t('使用 {name} 模板新建提供商', { name: initial.name }) : t('新建自定义提供商')}
+        </SheetTitle></SheetHeader>
         <SheetBody>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 8 }}>
+            {initial ? <p style={{ fontSize: 12, color: 'var(--m-subtle)' }}>
+              {t('已按模板预填；填好 API Key 即可创建 —— 网关会同时建好该家的第一个账号。')}
+            </p> : null}
             <div>
               <Label htmlFor='cp-name'>{t('名称')}</Label>
               <Input id='cp-name' value={name} onChange={event => setName(event.currentTarget.value)} placeholder={t('例如：某家 OpenAI 兼容上游')} />

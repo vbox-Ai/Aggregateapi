@@ -27,6 +27,7 @@ import { apiCall } from '../api/client'
 import { fetchProxyPool, type PoolItem } from '../api/gateway'
 import { readSystemProxy } from '../../../ui-shared/proxy-system'
 import { PluginLoginInteraction } from '../../../ui-shared/plugin-login-interaction'
+import { requestProviderPreset } from '../lib/preset-request'
 import { t } from '../i18n'
 
 /** 桌面端 `ui/preset-providers.js` 暴露的预置清单（同一份文件，见 apk.html 的 script 标签） */
@@ -98,8 +99,6 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
   const [kind, setKind] = useState<'all' | 'agent' | 'web' | 'custom' | 'preset'>('all')
   /** 「API 模板」：来自桌面同一份预置清单 */
   const [presets, setPresets] = useState<PresetProvider[]>([])
-  const [presetBusy, setPresetBusy] = useState('')
-  const [presetError, setPresetError] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -108,25 +107,19 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
   }, [])
 
   /**
-   * 点模板 ⇒ 直接用它的三个字段（名称 / 协议 / Base URL）建好自定义提供商。
-   * 桌面端是"选中 ⇒ 预填表单 ⇒ 提交"，手机端少一步填表；落库后与手建的一样是普通自定义提供商，
-   * 所以建完切到「已建 API」那一档，用户能立刻给它添加账号。
+   * 点模板 ⇒ 去「自定义提供商」页**打开预填好的表单**（与桌面同一流程）。
+   *
+   * 先前我在这里直接把提供商建了出来 —— 那是错的：桌面点模板是弹出
+   * 「使用 XX 模板新建提供商」表单，让用户填 **API Key**，提交时网关**一次事务
+   * 建齐提供商 + 首个账号**。少了填表这一步，既没有设置项也没有账号，
+   * 建出来的是个空壳提供商。所以这里只负责把预置带过去，其余交给那个表单。
    */
-  const createFromPreset = async (preset: PresetProvider) => {
-    setPresetBusy(preset.key)
-    setPresetError('')
-    try {
-      await apiCall('/api/custom-providers', {
-        method: 'POST',
-        body: { name: preset.name, protocol: preset.protocol, baseUrl: preset.baseUrl },
-      })
-      onAdded()
-      setKind('custom')
-    } catch (failure) {
-      setPresetError(failure instanceof Error ? failure.message : String(failure))
-    } finally {
-      setPresetBusy('')
-    }
+  const openPresetForm = (preset: PresetProvider) => {
+    requestProviderPreset({
+      key: preset.key, name: preset.name, protocol: preset.protocol, baseUrl: preset.baseUrl,
+    })
+    onClose()
+    store.go('custom-providers')
   }
 
   const keyword = search.trim().toLowerCase()
@@ -208,13 +201,11 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
                 <Button key={preset.key} variant='outline'
                   className='h-auto min-h-16 justify-start whitespace-normal text-left'
                   style={{ width: '100%', marginBottom: 6 }}
-                  disabled={presetBusy !== ''}
-                  onClick={() => void createFromPreset(preset)}>
+                  onClick={() => openPresetForm(preset)}>
                   <span className='block'>
                     <span className='block text-sm'>{preset.name}</span>
                     {preset.hint ? <span className='block text-xs text-subtle'>{preset.hint}</span> : null}
                     <span className='block text-xs text-subtle'>{preset.baseUrl}</span>
-                    {presetBusy === preset.key ? <span className='block text-xs'>{t('正在新建…')}</span> : null}
                   </span>
                 </Button>
               )) : (
@@ -222,7 +213,6 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
                   {t('预置清单未加载（网关版本较旧或页面未带上 preset-providers.js）。也可直接去「自定义提供商」新建。')}
                 </p>
               )}
-              {presetError ? <p className='text-xs text-subtle' style={{ lineHeight: 1.7 }}>{presetError}</p> : null}
               <Button variant='outline' style={{ marginTop: 8 }}
                 onClick={() => { onClose(); store.go('custom-providers') }}>
                 {t('去自定义提供商新建')}
