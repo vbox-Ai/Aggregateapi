@@ -1,0 +1,75 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
+@@ -21,8 +21,72 @@
+         if self.ready() {
+             return Ok(self.providers.lock().map(|providers| providers.clone()).unwrap_or_default());
+         }
++        // 远端宿主优先：这台机器上起不了子进程（iOS 没有 Bun 运行时，bun.rs 的 asset() 无 ios 分支），
++        // 但会话可能来自手机（0009 的远端桥）。这时**不 spawn**，握手由手机完成。
++        if self.has_remote() { return self.start_remote().await; }
+         self.start().await
+     }
++    /// 远端宿主的「启动」：本机没有可用的 JS 运行时，握手改由接入的手机完成。
++    ///
++    /// ── 为什么不改 start() ────────────────────────────────────────
++    /// `start()` 通篇假设有子进程（stdin/stdout 管道、进程守卫、reap、读循环）。
++    /// 在那里插分支，会让子进程路径既有的保证（帧边界、退出回收）变得难以推理。
++    /// 所以这里只做远端必须的三件事：标记运行中、把 init 发出去、按应答置 ready。
++    /// 失败处理与 `start()` 同一套语义（记失败原因、把 running 放回 false）。
++    ///
++    /// ── 为什么函数体是写出来的，不是从 start() 切出来的 ────────────
++    /// 试过切片搬运，结果是跨到闭包边界：带进了 `Ok((providers, settings))`、`});`
++    /// 和整段 `match result { … }`（里面的 `run`/`result` 在这里不存在）。
++    /// 这个函数只有二十来行，且每个名字都能在 start() 里逐一对上，写出来更可靠。
++    async fn start_remote(self: &Arc<Self>) -> Result<Vec<proto::ProviderInfo>, String> {
++        let _serial = self.starting.lock().await;
++        if self.ready() {
++            return Ok(self.providers.lock().map(|providers| providers.clone()).unwrap_or_default());
++        }
++        if !self.has_remote() {
++            return Err("没有可用的脚本运行时，也没有接入远端宿主".to_string());
++        }
++        self.running.store(true, Ordering::Release);
++        if let Some(attempt) = &self.options.startup {
++            attempt.waiting(super::startup::Phase::Loading, self.options.init_timeout.as_secs());
++        }
++        let env = proto::HostEnv {
++            data_dir: self.options.data_dir.clone(), host_version: self.options.host_version.clone(),
++            target: self.options.target.clone(), proxy: self.options.proxy.clone(),
++            debug_traffic: self.options.debug_traffic, loopback_port: self.options.loopback_port,
++        };
++        let mut init = json!({ "env": env });
++        if let (Some(target), Some(extra)) = (init.as_object_mut(), self.options.init_payload.as_object()) {
++            target.extend(extra.clone());
++        }
++        let handshake = tokio::time::timeout(self.options.init_timeout,
++            self.call_coded(proto::methods::gateway::INIT, init, self.options.init_timeout)).await;
++        let value = match handshake {
++            Ok(Ok(value)) => value,
++            Ok(Err(error)) => {
++                let message = super::process::redact(&format!("远端插件握手失败：{}", error.message));
++                self.running.store(false, Ordering::Release);
++                self.note_failure(&message);
++                return Err(message);
++            }
++            Err(_) => {
++                let message = "远端插件握手超时".to_string();
++                self.running.store(false, Ordering::Release);
++                self.note_failure(&message);
++                return Err(message);
++            }
++        };
++        let settings = super::provider_settings::parse(self, &value)?;
++        let providers = serde_json::from_value::<Vec<proto::ProviderInfo>>(value)
++            .map_err(|error| format!("插件返回的 provider 列表无法解析：{error}"))?;
++        if let Ok(mut current) = self.providers.lock() { *current = providers.clone(); }
++        if let Ok(mut current) = self.provider_settings.lock() { *current = settings; }
++        if let Ok(mut crashes) = self.crashes.lock() { *crashes = 0; }
++        self.ready.store(true, Ordering::Release);
++        if let Some(attempt) = &self.options.startup { attempt.runtime_ready(); }
++        Ok(providers)
++    }
++
+ 
+     pub async fn shutdown(&self) {
+         self.activity.retire();
