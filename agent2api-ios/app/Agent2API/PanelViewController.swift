@@ -662,7 +662,17 @@ final class PanelViewController: UIViewController {
     }
 
     private func reload() {
-        webView.load(URLRequest(url: panelBaseURL.appendingPathComponent("m")))
+        // 保留**当前地址**再重载：手机端路由记在 hash 里（`routeFromHash(location.hash)`），
+        // 而这里原来硬写加载 `/m`（不带 hash）⇒ 每次重载都把用户甩回首页
+        // （前台切回、端口变化、状态刷新都会走到这里）。
+        // 只在确实停在手机面板上时才沿用当前 URL；否则（首次加载、加载失败、停在桌面面板）
+        // 仍按老规矩去 `/m`，不改变既有行为。
+        if let current = webView.url,
+           current.path.hasSuffix("/m") || current.path.contains("/m/") {
+            webView.load(URLRequest(url: current))
+        } else {
+            webView.load(URLRequest(url: panelBaseURL.appendingPathComponent("m")))
+        }
     }
 
     /// 问 supervisor 面板现在在哪个端口，必要时跟上并重载。

@@ -316,9 +316,12 @@ export function PluginsPage() {
           refreshPluginStartup()
           await load()
         }} /> : null}
-      {/* 插件任务：网关侧的插件后台任务（与脚本插件同一套请求约定） */}
+      {/* 插件任务：网关侧的插件后台任务（与脚本插件同一套请求约定）。
+          但签名不同 —— ui-shared/plugin-tasks 按 (method, path, body) 调用，
+          而上面脚本面板要的是 (path, body)。这里曾按后者传 ⇒ 参数错位 ⇒
+          后端兜底 404 回「Not found: POST /GET」（方法被当成了路径）。 */}
       <div className='m-section'><PluginTasks t={t}
-        request={(path, body) => apiCall(path, { method: 'POST', body })} /></div>
+        request={(method, path, body) => apiCall(path, { method, body })} /></div>
       {payload?.catalog?.reason ? <div className='m-section'><p className='m-ck-note'>{pluginErrorMessage(payload.catalog.reason)}</p></div> : null}
       {failedOperations.length ? <div className='m-section'><Collapsible className='m-card m-card-pad'>
         <CollapsibleTrigger className='m-ck-title'>{t('最近失败')}</CollapsibleTrigger>
