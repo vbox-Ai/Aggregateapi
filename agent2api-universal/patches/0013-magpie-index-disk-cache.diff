@@ -1,0 +1,65 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+@@ -11,8 +11,14 @@
+ /// （npm tarball 大得多，而且需要运行时解析依赖 —— 手机上根本没有）。
+ const MIRROR: &str = "https://cdn.jsdelivr.net/gh/magpie-community/plugins@dist/";
+ /// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
+-/// TTL 取 10 分钟 —— 足够覆盖"刷新后连着装几支"，又不会让版本信息长时间陈旧。
+-const INDEX_TTL_MS: u64 = 10 * 60 * 1000;
++///
++/// TTL 取 6 小时：安装只关心"这支插件有没有发布包、integrity 是多少"，不需要秒级新鲜；
++/// 而这份索引约 2.9 MB，在部分网络（典型是国内直连 raw.githubusercontent.com）会被中途掐断
++/// —— 少下一次就少一次被掐的机会。
++const INDEX_TTL_MS: u64 = 6 * 60 * 60 * 1000;
++/// 索引的**磁盘**缓存文件名（放在网关配置目录下）。
++/// 只做内存缓存不够：手机上网关随 App 重启，内存缓存跟着没了 —— 于是每次重新越狱后又得再下那 2.9 MB。
++const INDEX_FILE: &str = "magpie-dist-index.json";
+ static INDEX_CACHE: std::sync::Mutex<Option<(u64, Value)>> = std::sync::Mutex::new(None);
+ 
+ /// 按 `BASE` 的相对路径取字节：先试镜像，再退回 GitHub raw。
+@@ -35,13 +41,45 @@
+             if now.saturating_sub(*at) < INDEX_TTL_MS { return Ok(cached.clone()); }
+         }
+     }
++    // 磁盘缓存优先：网关重启后仍然有效（手机上的网关会随 App 重启）。
++    if let Some(cached) = read_cached_index(now) { return Ok(cached); }
+     let bytes = dist_bytes("index.json", INDEX_LIMIT).await?;
+     let index: Value = serde_json::from_slice(&bytes).map_err(|_| "Magpie 社区索引无法解析")?;
+     if index["version"].as_u64() != Some(1) {
+         return Err("Magpie 社区分发索引版本暂不兼容".into());
+     }
+     if let Ok(mut cache) = INDEX_CACHE.lock() { *cache = Some((now, index.clone())); }
++    write_cached_index(&index);
+     Ok(index)
++}
++
++/// 索引缓存文件路径（网关配置目录下）。
++fn index_path() -> std::path::PathBuf {
++    crate::server::config::config_dir().join(INDEX_FILE)
++}
++
++/// 读磁盘缓存：文件不存在、过期或解析失败都当作"没缓存"，重新下。
++fn read_cached_index(now: u64) -> Option<Value> {
++    let modified = std::fs::metadata(index_path()).ok()?.modified().ok()?;
++    let age_ms = std::time::SystemTime::now().duration_since(modified).ok()?.as_millis() as u64;
++    if age_ms >= INDEX_TTL_MS { return None; }
++    let bytes = std::fs::read(index_path()).ok()?;
++    let index: Value = serde_json::from_slice(&bytes).ok()?;
++    if index["version"].as_u64() != Some(1) { return None; }
++    if let Ok(mut cache) = INDEX_CACHE.lock() { *cache = Some((now, index.clone())); }
++    Some(index)
++}
++
++/// 写磁盘缓存：失败只留痕，不影响这次安装 —— 缓存是加速手段，不是正确性前提。
++fn write_cached_index(index: &Value) {
++    let path = index_path();
++    if let Some(parent) = path.parent() {
++        if std::fs::create_dir_all(parent).is_err() { return; }
++    }
++    match serde_json::to_vec(index) {
++        Ok(bytes) => { let _ = std::fs::write(&path, bytes); }
++        Err(error) => crate::server::logging::verbose("[Magpie]", &format!("索引缓存写入失败：{error}")),
++    }
+ }
+ 
+ pub(super) async fn download(name: &str, selector: &str) -> Result<Package, String> {
