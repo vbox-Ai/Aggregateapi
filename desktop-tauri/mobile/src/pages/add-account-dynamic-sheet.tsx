@@ -29,6 +29,40 @@ import { readSystemProxy } from '../../../ui-shared/proxy-system'
 import { PluginLoginInteraction } from '../../../ui-shared/plugin-login-interaction'
 import { t } from '../i18n'
 
+/** 桌面端 `ui/preset-providers.js` 暴露的预置清单（同一份文件，见 apk.html 的 script 标签） */
+type PresetProvider = {
+  key: string
+  name: string
+  icon?: string
+  protocol: string
+  baseUrl: string
+  hint?: string
+}
+declare global {
+  interface Window { wbPresetProviders?: { list?: PresetProvider[] } }
+}
+
+/**
+ * 取预置清单。
+ *
+ * 正常路径是页面上的 `<script src="preset-providers.js">`（与桌面同一份文件）。
+ * 但面板有 Service Worker 缓存，**升级后第一次打开可能仍是旧 HTML**（没有这行标签），
+ * 所以这里再兜一次：缺了就动态注入同一路径的脚本，等它挂上 `window.wbPresetProviders`。
+ */
+async function loadPresets(): Promise<PresetProvider[]> {
+  const present = () => window.wbPresetProviders?.list
+  if (!present()) {
+    await new Promise<void>(resolve => {
+      const script = document.createElement('script')
+      script.src = 'preset-providers.js'
+      script.onload = () => resolve()
+      script.onerror = () => resolve()
+      document.head.appendChild(script)
+    })
+  }
+  return present() ?? []
+}
+
 export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
   const { session, sessionError } = useStore()
   const providers = sessionError ? [] : (session?.accounts?.providers || [])
@@ -62,6 +96,39 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
    * 不列假数据，而是把用户送到已有的「自定义提供商」页面去新建 —— 那条路手机端本来就有。
    */
   const [kind, setKind] = useState<'all' | 'agent' | 'web' | 'custom' | 'preset'>('all')
+  /** 「API 模板」：来自桌面同一份预置清单 */
+  const [presets, setPresets] = useState<PresetProvider[]>([])
+  const [presetBusy, setPresetBusy] = useState('')
+  const [presetError, setPresetError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    void loadPresets().then(list => { if (alive) setPresets(list) })
+    return () => { alive = false }
+  }, [])
+
+  /**
+   * 点模板 ⇒ 直接用它的三个字段（名称 / 协议 / Base URL）建好自定义提供商。
+   * 桌面端是"选中 ⇒ 预填表单 ⇒ 提交"，手机端少一步填表；落库后与手建的一样是普通自定义提供商，
+   * 所以建完切到「已建 API」那一档，用户能立刻给它添加账号。
+   */
+  const createFromPreset = async (preset: PresetProvider) => {
+    setPresetBusy(preset.key)
+    setPresetError('')
+    try {
+      await apiCall('/api/custom-providers', {
+        method: 'POST',
+        body: { name: preset.name, protocol: preset.protocol, baseUrl: preset.baseUrl },
+      })
+      onAdded()
+      setKind('custom')
+    } catch (failure) {
+      setPresetError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setPresetBusy('')
+    }
+  }
+
   const keyword = search.trim().toLowerCase()
   const kindOf = (item: { id?: string; category?: string }): 'agent' | 'web' | 'custom' => {
     if (String(item.id || '').startsWith('custom-')) return 'custom'
@@ -133,9 +200,29 @@ export function DynamicProviderSheet({ onClose, onAdded }: { onClose: () => void
           </div>
           {kind === 'preset' ? (
             <div style={{ padding: '8px 0 4px' }}>
-              <p className='text-xs text-subtle' style={{ lineHeight: 1.7 }}>
-                {t('「API 模板」是新建自定义提供商的入口（桌面端第 1 步的模板卡）。手机端在「自定义提供商」页里新建，建好后再回这里添加账号。')}
-              </p>
+              {/* 模板清单来自桌面同一份 preset-providers.js（见 apk.html 的 script 标签）。
+                  桌面端是"选中模板 ⇒ 预填表单 ⇒ 提交"；手机端少一步：点一下就用该模板的值
+                  （名称 / 协议 / Base URL，正是自定义提供商的三个字段）直接建好，
+                  之后回这个面板就能给它添加账号。 */}
+              {presets.length ? presets.map(preset => (
+                <Button key={preset.key} variant='outline'
+                  className='h-auto min-h-16 justify-start whitespace-normal text-left'
+                  style={{ width: '100%', marginBottom: 6 }}
+                  disabled={presetBusy !== ''}
+                  onClick={() => void createFromPreset(preset)}>
+                  <span className='block'>
+                    <span className='block text-sm'>{preset.name}</span>
+                    {preset.hint ? <span className='block text-xs text-subtle'>{preset.hint}</span> : null}
+                    <span className='block text-xs text-subtle'>{preset.baseUrl}</span>
+                    {presetBusy === preset.key ? <span className='block text-xs'>{t('正在新建…')}</span> : null}
+                  </span>
+                </Button>
+              )) : (
+                <p className='text-xs text-subtle' style={{ lineHeight: 1.7 }}>
+                  {t('预置清单未加载（网关版本较旧或页面未带上 preset-providers.js）。也可直接去「自定义提供商」新建。')}
+                </p>
+              )}
+              {presetError ? <p className='text-xs text-subtle' style={{ lineHeight: 1.7 }}>{presetError}</p> : null}
               <Button variant='outline' style={{ marginTop: 8 }}
                 onClick={() => { onClose(); store.go('custom-providers') }}>
                 {t('去自定义提供商新建')}

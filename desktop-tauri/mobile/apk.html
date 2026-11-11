@@ -68,6 +68,10 @@
 <div id="root"></div>
 <!-- APK 里没有 Service Worker：界面来自包内文件，不经过 HTTP，离线本来就能开。
      数据请求照常打网关，连不上时各页面自己报错。 -->
+<!-- 自定义提供商的预置清单：与桌面端 ui/index.html 用的是同一份文件
+     （入口 ui/m.html 在根目录，相对路径正好指向它）。没有这一行，「API 模板」那一档
+     在手机端只能是空的 —— 清单本身由 window.wbPresetProviders 暴露。 -->
+<script src="preset-providers.js"></script>
 <script src="mobile.js"></script>
 </body>
 </html>

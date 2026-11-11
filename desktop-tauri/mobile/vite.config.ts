@@ -102,6 +102,11 @@ function apkBundle(): Plugin {
       // 入口页：库模式不生成 HTML，这里把 apk.html 改名成 index.html。
       // Capacitor 的 webDir 只认 index.html。
       fs.copyFileSync(path.resolve(__dirname, 'apk.html'), path.join(root, 'index.html'))
+  // 预置清单也要进包：apk.html 里引用了 preset-providers.js。
+  // ⚠️ 这份文件**不在本仓库**里 —— 它由上游网页包骨架提供（CI 下载骨架时才有），
+  // 本机源码树里没有 ⇒ 必须判存在再拷，否则 APK 构建会在这里直接抛异常。
+  const presets = path.resolve(__dirname, '../ui/preset-providers.js')
+  if (fs.existsSync(presets)) fs.copyFileSync(presets, path.join(root, 'preset-providers.js'))
 
       // 词典：只带运行时用得到的那几个域文件，连同 manifest.js
       const i18nSrc = path.join(source, 'i18n')
