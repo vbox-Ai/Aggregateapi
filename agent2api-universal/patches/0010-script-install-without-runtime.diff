@@ -37,29 +37,35 @@
      let temporary = tempfile::tempdir_in(super::root()).map_err(|error| error.to_string())?;
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
-@@ -84,9 +84,19 @@
+@@ -84,9 +84,25 @@
      begin("install", target)?;
      crate::spawn_task(async move {
          let result = async {
 -            let executable = super::bun::ensure().await?;
-+            // 取运行时**不再等于装不上**：没有运行时也先把包下载并登记。
-+            // 依据：dependencies::install 对"没有依赖"的包本来就什么都不做，
-+            // 而 Magpie dist 发布的就是已构建产物（实测 dependencies 为空）。
-+            // 今天 iOS 上连下载都走不到，唯一原因就是这一行曾是前置条件。
-+            let executable = super::bun::ensure().await.ok();
++            // **先下载**：这一步不需要运行时（Magpie dist 发布的已是构建产物）。
++            // 原来是 `bun::ensure()` 在前、下载在后 —— iOS 上第一步就失败，包从未下载过。
              let mut package = source.download().await?;
 -            super::dependencies::install(&package, &executable).await?;
-+            match executable.as_ref() {
-+                Some(executable) => super::dependencies::install(&package, executable).await?,
-+                None if !super::dependencies::requires_install(&package)? => {}
-+                None => {
-+                    return Err("这支插件声明了依赖，需要先解析才能运行；当前平台没有可用的脚本运行时。请在桌面端安装，或等待把它适配到本平台。".into())
++            // 取运行时**不再等于装不上**：没有运行时时，只有"确实声明了依赖"的包才拒绝。
++            // `executable` 的类型必须是 **PathBuf**（不是 Option）：下面第 120 行的
++            // `switch(before, after, executable, None)` 与 reload 那条路都要它；
++            // 没有运行时时用空路径占位 —— 与源码里原有的写法一致（见 switch 调用处的 else 分支）。
++            let executable = match super::bun::ensure().await.ok() {
++                Some(executable) => {
++                    super::dependencies::install(&package, &executable).await?;
++                    executable
 +                }
-+            }
++                None => {
++                    if super::dependencies::requires_install(&package)? {
++                        return Err("这支插件声明了依赖，需要先解析才能运行；当前平台没有可用的脚本运行时。请在桌面端安装，或等待把它适配到本平台。".into());
++                    }
++                    std::path::PathBuf::new()
++                }
++            };
              if expected_id.as_ref().is_some_and(|id| id != &package.id) {
                  return Err("下载的脚本插件包名与待更新插件不一致，未替换原插件".into());
              }
-@@ -166,8 +176,25 @@
+@@ -166,8 +182,25 @@
      begin(&action, target)?;
      crate::spawn_task(async move {
          let result = async {
