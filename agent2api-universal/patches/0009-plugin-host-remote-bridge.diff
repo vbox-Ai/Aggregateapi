@@ -1,9 +1,10 @@
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/callbacks.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/callbacks.rs
-@@ -179,6 +179,29 @@
+@@ -179,7 +179,29 @@
              return;
          }
          let _lease = lease;
+-        let Some(mut method) = frame.method.clone() else { return };
 +        let id = frame.id;
 +        // 无方法名的帧今天就是**不应答**的；抽取时不顺手改语义
 +        let Some(outcome) = self.serve_request(frame).await else { return };
@@ -26,11 +27,21 @@
 +        &self,
 +        frame: proto::Frame,
 +    ) -> Option<Result<serde_json::Value, proto::WireError>> {
-+        frame.method.clone()?;
-         let Some(mut method) = frame.method.clone() else { return };
++        let Some(mut method) = frame.method.clone() else { return None };
          if self.options.script {
              method = match method.as_str() {
-@@ -318,11 +341,6 @@
+                 "store.ledger.get" => proto::methods::plugin::STORE_LEDGER_GET.to_string(),
+@@ -235,8 +257,7 @@
+             _ => Ok(()),
+         };
+         if let Err(error) = authorization {
+-            let _ = self.write_for_run(proto::Frame { id, error: Some(error), ..Default::default() }, run).await;
+-            return;
++            return Some(Err(error));
+         }
+         let outcome: Result<serde_json::Value, proto::WireError> = match method.as_str() {
+             "script.usage" => super::script::record_usage(&params),
+@@ -318,11 +339,6 @@
              )),
          };
  
