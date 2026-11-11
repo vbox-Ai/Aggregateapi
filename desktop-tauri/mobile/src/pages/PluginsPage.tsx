@@ -97,7 +97,6 @@ export function PluginsPage() {
   const hostAttach = useScriptHostAttach({
     // 只在"网关侧没有可用运行时"时介入：有 Bun 的平台上这是多余的第二次握手
     enabled: Boolean(payload?.scripts && !payload.scripts.runtime.installed),
-    packages: payload?.scripts?.packages ?? [],
     onNotice: setAttachReason,
   })
   const [maxPackBytes, setMaxPackBytes] = useState(LEGACY_MAX_PACK_BYTES)

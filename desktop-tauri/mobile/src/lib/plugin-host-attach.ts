@@ -10,6 +10,10 @@
  * 以及各提供商的登录流程**都不需要额外界面** —— 它们本来就经网关走同一套 RPC
  * （`client.auth.set` 也在里面），宿主活着它们就能正常工作。
  *
+ * ── init 的方向（踩过一次）────────────────────────────────────
+ * `init` 是**网关发给宿主**的方法（上游 `host/main.mjs` 里 `frame.method === "init"` 由宿主应答）。
+ * 所以面板**不能**主动发 init —— 那样它只会等一个不会来的回复。面板只负责把宿主跑起来并接上。
+ *
  * ── 与"每支插件一个 Worker"的关系 ──────────────────────────────
  * 宿主本身**只有一份**（它是"共享的运行时"，桌面端也如此）；隔离发生在插件之间，
  * 而插件是由宿主在自己的上下文里装载的。所以这里只需要**一个** Worker。
@@ -28,11 +32,6 @@ async function loadHostFiles(): Promise<HostFile[]> {
   const payload = await response.json() as { files?: Array<{ path: string; text: string }> }
   if (!Array.isArray(payload.files) || !payload.files.length) throw new Error('网关返回的宿主源码为空')
   return payload.files.map(file => ({ path: file.path, text: file.text }))
-}
-
-/** 取已装脚本插件的包目录：交给宿主 `init`，它据此装载各支插件 */
-async function loadInstalledPackages(packages: Array<{ id: string }>): Promise<Array<{ id: string; directory: string }>> {
-  return packages.map(item => ({ id: item.id, directory: `packages/${item.id}` }))
 }
 
 /**
@@ -132,16 +131,15 @@ function httpTransport(onNotice: (text: string) => void): HostTransport {
  * 这里接入反而是多余的第二次握手。判据用网关给的 runtime.installed。
  */
 export function useScriptHostAttach(options: {
+  /** 只在网关侧没有可用脚本运行时（iOS）时介入 */
   enabled: boolean
-  packages: Array<{ id: string }>
   onNotice: (text: string) => void
 }): { state: AttachState } {
-  const { enabled, packages, onNotice } = options
+  const { enabled, onNotice } = options
   // 状态必须走 useState：用 ref 的话界面不会跟着更新（"正在接入"永远不变）
   const [state, setState] = useState<AttachState>('idle')
   const sessionRef = useRef<PluginHostSession | null>(null)
   const transportRef = useRef<HostTransport | null>(null)
-  const packagesKey = packages.map(item => item.id).join('|')
 
   const stop = useCallback(() => {
     sessionRef.current?.close()
@@ -165,11 +163,11 @@ export function useScriptHostAttach(options: {
         transportRef.current = transport
         const session = await startPluginHost({ hostFiles, pluginFiles: [], transport })
         sessionRef.current = session
-        // 把已装插件目录喂给 init：宿主据此装载它们，网关那边就会看到 provider 注册上来
-        await session.call('init', {
-          packages: await loadInstalledPackages(packages),
-          env: { data_dir: '/tmp' },
-        })
+        // **不要在这里发 init**：`init` 是网关发给宿主的方法（host/main.mjs 里 `frame.method === "init"`
+        // 由宿主自己应答），方向是 网关 → 宿主。宿主主动发 init 只会等一个不会来的回复，
+        // 界面就停在「正在接入」，插件也起不来。
+        // 面板的职责到此为止：宿主跑起来、传输层接上；随后用户在商店点「获取」时，
+        // 网关启动插件会自己发 init，宿主（这里这个 Worker）应答，provider 就注册上来了。
         if (cancelled) return
         setState('attached')
       } catch (failure) {
@@ -183,8 +181,7 @@ export function useScriptHostAttach(options: {
       stop()
       setState('idle')
     }
-    // packagesKey 而不是 packages：数组每次渲染都是新引用，用它会反复重连
-  }, [enabled, packagesKey, onNotice, stop])
+  }, [enabled, onNotice, stop])
 
   return { state }
 }
