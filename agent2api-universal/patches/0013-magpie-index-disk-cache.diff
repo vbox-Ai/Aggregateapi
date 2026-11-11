@@ -1,23 +1,18 @@
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
-@@ -11,8 +11,14 @@
- /// （npm tarball 大得多，而且需要运行时解析依赖 —— 手机上根本没有）。
- const MIRROR: &str = "https://cdn.jsdelivr.net/gh/magpie-community/plugins@dist/";
+@@ -13,7 +13,10 @@
  /// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
--/// TTL 取 10 分钟 —— 足够覆盖"刷新后连着装几支"，又不会让版本信息长时间陈旧。
--const INDEX_TTL_MS: u64 = 10 * 60 * 1000;
-+///
-+/// TTL 取 6 小时：安装只关心"这支插件有没有发布包、integrity 是多少"，不需要秒级新鲜；
-+/// 而这份索引约 2.9 MB，在部分网络（典型是国内直连 raw.githubusercontent.com）会被中途掐断
-+/// —— 少下一次就少一次被掐的机会。
-+const INDEX_TTL_MS: u64 = 6 * 60 * 60 * 1000;
+ /// TTL 取 10 分钟 —— 足够覆盖"刷新后连着装几支"，又不会让版本信息长时间陈旧。
+ /// 类型跟 `crate::server::logging::now_ms()` 一致（i64）—— CI 第一次就是在这里报的 E0308。
+-const INDEX_TTL_MS: i64 = 10 * 60 * 1000;
++const INDEX_TTL_MS: i64 = 6 * 60 * 60 * 1000;
 +/// 索引的**磁盘**缓存文件名（放在网关配置目录下）。
 +/// 只做内存缓存不够：手机上网关随 App 重启，内存缓存跟着没了 —— 于是每次重新越狱后又得再下那 2.9 MB。
 +const INDEX_FILE: &str = "magpie-dist-index.json";
- static INDEX_CACHE: std::sync::Mutex<Option<(u64, Value)>> = std::sync::Mutex::new(None);
+ static INDEX_CACHE: std::sync::Mutex<Option<(i64, Value)>> = std::sync::Mutex::new(None);
  
  /// 按 `BASE` 的相对路径取字节：先试镜像，再退回 GitHub raw。
-@@ -35,13 +41,45 @@
+@@ -36,13 +39,45 @@
              if now.saturating_sub(*at) < INDEX_TTL_MS { return Ok(cached.clone()); }
          }
      }
@@ -39,9 +34,9 @@
 +}
 +
 +/// 读磁盘缓存：文件不存在、过期或解析失败都当作"没缓存"，重新下。
-+fn read_cached_index(now: u64) -> Option<Value> {
++fn read_cached_index(now: i64) -> Option<Value> {
 +    let modified = std::fs::metadata(index_path()).ok()?.modified().ok()?;
-+    let age_ms = std::time::SystemTime::now().duration_since(modified).ok()?.as_millis() as u64;
++    let age_ms = std::time::SystemTime::now().duration_since(modified).ok()?.as_millis() as i64;
 +    if age_ms >= INDEX_TTL_MS { return None; }
 +    let bytes = std::fs::read(index_path()).ok()?;
 +    let index: Value = serde_json::from_slice(&bytes).ok()?;

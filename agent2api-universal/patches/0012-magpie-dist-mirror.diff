@@ -29,7 +29,7 @@
  pub(super) async fn github_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
-@@ -3,15 +3,44 @@
+@@ -3,15 +3,45 @@
  use super::storage::{Package, PackageSource};
  
  const BASE: &str = "https://raw.githubusercontent.com/magpie-community/plugins/dist/";
@@ -42,8 +42,9 @@
 +const MIRROR: &str = "https://cdn.jsdelivr.net/gh/magpie-community/plugins@dist/";
 +/// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
 +/// TTL 取 10 分钟 —— 足够覆盖"刷新后连着装几支"，又不会让版本信息长时间陈旧。
-+const INDEX_TTL_MS: u64 = 10 * 60 * 1000;
-+static INDEX_CACHE: std::sync::Mutex<Option<(u64, Value)>> = std::sync::Mutex::new(None);
++/// 类型跟 `crate::server::logging::now_ms()` 一致（i64）—— CI 第一次就是在这里报的 E0308。
++const INDEX_TTL_MS: i64 = 10 * 60 * 1000;
++static INDEX_CACHE: std::sync::Mutex<Option<(i64, Value)>> = std::sync::Mutex::new(None);
 +
 +/// 按 `BASE` 的相对路径取字节：先试镜像，再退回 GitHub raw。
 +async fn dist_bytes(path: &str, limit: usize) -> Result<Vec<u8>, String> {
@@ -75,7 +76,7 @@
      Ok(index)
  }
  
-@@ -45,7 +74,7 @@
+@@ -45,7 +75,7 @@
          value.starts_with("sha512-") && !value.chars().any(char::is_whitespace)
      }).ok_or("Magpie 插件缺少 SHA-512 完整性校验值")?;
      super::operations::stage("package", "正在下载 Magpie 社区脚本插件");
