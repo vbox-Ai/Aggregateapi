@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle , Card, Collapsible, CollapsibleTrigger, CollapsibleContent } from '@ui'
+import { Input } from '@ui'
 import { PageIntro, ErrorNote, Empty, SectionHead } from '../components/ui'
 import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
 import {
@@ -91,6 +92,8 @@ export function PluginsPage() {
   const [remove, setRemove] = useState<PackSummary | null>(null)
   /** 「在本机运行」的那支脚本插件：iOS 上网关装不起来（没有 iOS 版 Bun），改在手机本地跑 */
   const [localScript, setLocalScript] = useState<{ id: string; name?: string } | null>(null)
+  /** 脚本插件搜索词：过滤由共享面板自己完成，这里只负责把词传下去 */
+  const [scriptQuery, setScriptQuery] = useState('')
   const [maxPackBytes, setMaxPackBytes] = useState(LEGACY_MAX_PACK_BYTES)
   const fileRef = useRef<HTMLInputElement>(null)
   const locked = useRef(false)
@@ -283,7 +286,17 @@ export function PluginsPage() {
           </div>
         </Card> : null}
         <Card className='m-card m-card-pad'>
+          {/* 搜索框：共享面板本来就支持 query（按名称/简介/provider 过滤），只是调用方一直没传
+              ⇒ 手机端因此"能过滤但没入口"。这里补上入口，过滤逻辑仍用面板自己那一套，不另写一遍。 */}
+          <Input
+            value={scriptQuery}
+            onChange={event => setScriptQuery(event.target.value)}
+            placeholder={t('搜索脚本插件（名称 / 提供商 / 简介）')}
+            aria-label={t('搜索脚本插件')}
+            style={{ marginBottom: 8 }}
+          />
           <ScriptPluginsPanel key={server?.base || payload.target} state={payload.scripts} t={t}
+            query={scriptQuery}
             disabled={Boolean(busy)} request={(path, body) => apiCall(path, { method: 'POST', body })}
             refresh={load} />
         </Card>
