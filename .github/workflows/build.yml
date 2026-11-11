@@ -271,9 +271,13 @@ jobs:
             cp agent2api-ios/build/Agent2API.ipa "$GITHUB_WORKSPACE/out/ios/Agent2API-standalone.ipa"
           fi
 
-          # ③ deb 用客户端壳重建一次（保证只有面板，不抢 3065）
-          echo "=== deb 用客户端壳 ==="
-          EMBED=0 ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-platform.plist" \
+          # ③ deb 里的 App 也**链接内嵌网关**（EMBED=1），但运行期**优先用守护进程**：
+          #    守护进程在（越狱机常规形态）⇒ 行为与从前完全一致，不抢 3065；
+          #    守护进程不在（例如重启 / 重新越狱后 launchd 里的注册丢了）⇒ App 自己把网关跑起来。
+          #    这样装 deb 的人不必在每次重新越狱后再重装一遍。
+          #    注意：EMBED=1 只是"链接"，不再是"必须内嵌运行" —— 形态由 PanelViewController 在运行期定。
+          echo "=== deb 用链接了内嵌网关的壳 ==="
+          EMBED=1 ENTITLEMENTS="$GITHUB_WORKSPACE/agent2api-ios/app/Agent2API/entitlements-platform.plist" \
             ./agent2api-ios/scripts/build-ipa.sh
 
           if command -v dpkg-deb >/dev/null 2>&1; then

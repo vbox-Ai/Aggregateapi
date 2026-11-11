@@ -11,15 +11,21 @@ final class PanelViewController: UIViewController {
 
     enum Backend { case daemon, embedded }
 
-    /// 编译期决定默认后端：
-    /// · `A2A_EMBEDDED`（链接了 agent2api_ios 静态库）→ 网关跑在 App 进程内，
-    ///   IPA 装上即可用，不依赖越狱机的 LaunchDaemon；
-    /// · 否则 → 纯客户端壳，连 127.0.0.1:3065 上由 LaunchDaemon 拉起的网关。
+    /// 本包是否**链接了内嵌网关**（`agent2api_ios` 静态库）。
+    ///
+    /// 以前它同时决定"用哪个后端"，于是 deb 里的 App（历史上按 EMBED=0 编）在守护进程
+    /// 起不来时**只能干等** —— 重启或重新越狱后 launchd 里的注册丢了，面板就一直报
+    /// 「网关未响应 127.0.0.1:3065」。现在两者分开：链接与否是**编译期**事实，
+    /// 用哪个后端是**运行期**决定。
     #if A2A_EMBEDDED
-    static var backend: Backend = .embedded
+    static let embeddedLinked = true
     #else
-    static var backend: Backend = .daemon
+    static let embeddedLinked = false
     #endif
+
+    /// 当前后端。**默认先试守护进程**（越狱机的常规形态：让守护进程独占 3065、插件常驻）；
+    /// 只有它确实起不来、且本包链接了内嵌网关时，才在 `activateGateway` 里退回内嵌形态。
+    static var backend: Backend = .daemon
 
     static var backendName: String {
         backend == .embedded ? "A2 内嵌网关" : "A1 守护进程"
@@ -772,6 +778,17 @@ final class PanelViewController: UIViewController {
                     self.syncPanelPort(reloadIfChanged: false) { self.reload() }
                 } else if !self.appIsActive {
                     self.deactivateGateway()
+                } else if PanelViewController.embeddedLinked {
+                    // 守护进程没起来，而本包链了内嵌网关 ⇒ 自己把网关跑起来，别再让面板空转。
+                    // 场景：重启 / 重新越狱后 launchd 里的注册丢了（App 无权 bootstrap，需 root）。
+                    // 端口不冲突：守护进程不在时 3065 本来就空着（它在了上面就成功了）。
+                    // 这是**一次性**的退回：本次运行就按内嵌形态走，不再来回切。
+                    PanelViewController.backend = .embedded
+                    self.startEmbeddedGateway()
+                    // 心跳是"向 supervisor 报到"的机制 —— 内嵌形态没有 supervisor，
+                    // 起了只会每 5 秒发一次注定失败的请求，所以这里不启。
+                    self.needsReloadAfterActivation = false
+                    self.syncPanelPort(reloadIfChanged: false) { self.reload() }
                 } else {
                     // 不直接判死：gateway 可能已经由旧实例拉起，交给 /health 定时器确认。
                     self.probeHealth()
