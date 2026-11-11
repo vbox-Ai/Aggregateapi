@@ -33,19 +33,25 @@ async function loadHostFiles(): Promise<HostFile[]> {
     // 带上状态码与响应片段：这个端点缺失/被中间层改写时，光看"失败"没法定位
     throw new Error(`网关未提供宿主源码（HTTP ${response.status}）：${body.slice(0, 200)}`)
   }
-  let payload: { files?: Array<{ path: string; text: string }> } | null = null
+  // 网关的响应信封：`ok_json` 会把内容包进 `data`（见下方注释）。两个形状都接受。
+  type SourcePayload = { files?: Array<{ path: string; text: string }>; data?: { files?: Array<{ path: string; text: string }> } }
+  let payload: SourcePayload
   try {
-    payload = JSON.parse(body) as { files?: Array<{ path: string; text: string }> }
+    payload = JSON.parse(body) as SourcePayload
   } catch {
     throw new Error(`宿主源码响应不是 JSON：${body.slice(0, 200)}`)
   }
-  if (!Array.isArray(payload.files) || !payload.files.length) {
+  // ⚠️ 网关的 JSON 响应有**一层信封**：`ok_json()` 会把内容包进 `data`
+  // （真机实测返回的是 `{"data":{"files":[{"path":"bunfig.toml",…}]}}`）。
+  // 最早这里直接读 `payload.files` ⇒ 取到 undefined ⇒ 误报"宿主源码为空"。
+  const files = payload.data?.files ?? payload.files
+  if (!Array.isArray(files) || !files.length) {
     // 上游 script_files() 是无条件 include_str! 的 29 个模块，正常不可能为空 ——
-    // 真出现空清单，只有可能是"响应不是那个端点的"（路由被改写、中间层返回了别的 JSON）。
+    // 真出现空清单，只可能是"响应不是那个端点的"（路由被改写、中间层返回了别的 JSON）。
     // 所以把原始响应带上，别让这句话只说"空"。
     throw new Error(`网关返回的宿主源码为空：${body.slice(0, 200)}`)
   }
-  return payload.files.map(file => ({ path: file.path, text: file.text }))
+  return files.map(file => ({ path: file.path, text: file.text }))
 }
 
 /**
