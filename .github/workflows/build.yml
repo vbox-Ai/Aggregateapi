@@ -682,10 +682,14 @@ jobs:
           set -euo pipefail
           mkdir -p dist/app dist/main dist/web
 
-          # 只发布三样东西，避免用户分不清：
-          #   ① all-in-one deb（App + 网关 + 面板资源）—— 用户只需装这一个
+          # 发布的东西：
+          #   ① all-in-one deb（App + 网关 + 面板资源）—— 越狱机装这一个（形态 A1：靠 LaunchDaemon）
           #   ② 两个插件 zip —— 由面板内下载，不用手动装
+          #   ③ 独立版 IPA（EMBED=1，形态 A2：网关跑在 App 进程内）—— **不依赖 LaunchDaemon**。
+          #      重启 / 重新越狱之后，A1 那套的 launchd 注册会丢（面板报「网关未响应 127.0.0.1:3065」），
+          #      而 A2 不受影响 ⇒ 必须让用户能拿到它，否则只能反复重装 deb。
           find artifacts -name '*.deb' -exec cp -v {} dist/app/ \;
+          find artifacts -name 'Agent2API-standalone.ipa' -exec cp -v {} dist/app/ \;
           find artifacts -name 'agent2api-providers-*.zip' -exec cp -v {} dist/app/ \;
           find artifacts -name 'agent2api-web-providers-*.zip' -exec cp -v {} dist/app/ \;
 

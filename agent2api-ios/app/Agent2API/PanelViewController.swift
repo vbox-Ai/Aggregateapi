@@ -870,6 +870,13 @@ final class PanelViewController: UIViewController {
                     text += "\n形态：\(Self.backendName)"
                     if Self.backend == .daemon {
                         text += "\n提示：App 在前台会自动请求 supervisor 启动网关。"
+                        // 形态 A1 的网关由 LaunchDaemon 常驻。**重启手机或重新越狱之后**，launchd 是重开的，
+                        // 上一次 deb 安装时注册的作业不在了 ⇒ 这里会一直连不上。此时 App 无权自己 bootstrap
+                        // （要 root），只能把该做的事说清楚，别让用户面对一句"未响应"无从下手。
+                        text += "\n如果这是重启手机或重新越狱之后：守护进程的注册已丢失，在 Sileo 里把 deb 重装一次即可恢复"
+                        text += "（安装脚本会自动重新注册并拉起它）；也可以在终端执行 launchctl bootstrap system "
+                        text += "/Library/LaunchDaemons/com.chiyu.agent2api.plist。"
+                        text += "\n另一种不依赖守护进程的形态是「独立版 IPA（EMBED=1）」：网关跑在 App 进程内，重启后无需任何操作。"
                         self.activateGateway()
                     }
                     self.statusLabel.text = text
