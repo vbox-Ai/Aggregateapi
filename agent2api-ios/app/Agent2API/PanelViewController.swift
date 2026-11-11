@@ -788,7 +788,10 @@ final class PanelViewController: UIViewController {
                     // 心跳是"向 supervisor 报到"的机制 —— 内嵌形态没有 supervisor，
                     // 起了只会每 5 秒发一次注定失败的请求，所以这里不启。
                     self.needsReloadAfterActivation = false
-                    self.syncPanelPort(reloadIfChanged: false) { self.reload() }
+                    // 也不查 supervisor 的面板端口（`syncPanelPort` 问的就是它）：
+                    // 内嵌形态下面板与网关同一个端口，直接加载即可 —— 否则日志里会堆一串
+                    // 「supervisor status 失败：请求超时」。
+                    self.reload()
                 } else {
                     // 不直接判死：gateway 可能已经由旧实例拉起，交给 /health 定时器确认。
                     self.probeHealth()

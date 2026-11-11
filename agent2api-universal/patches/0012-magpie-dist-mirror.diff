@@ -1,0 +1,86 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
+@@ -23,6 +23,26 @@
+         return Ok(None);
+     }
+     read(response, 4 * 1024 * 1024, None).await.map(Some)
++}
++
++/// 取一个**非 GitHub** 地址的字节（例如 jsDelivr 这类镜像）。
++///
++/// 为什么不能用 `github_bytes`：那条路走的是 GitHub 专用客户端（候选源 / 限速冷却 / 镜像切换），
++/// 对第三方域名不适用。这里用通用的 `fetch_public`，仍然带 UA 与状态码检查。
++pub(super) async fn public_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
++    let headers = vec![("User-Agent".to_string(), "agent2api".to_string())];
++    let response = client::fetch_public(url, &headers, None).await?;
++    if !response.status().is_success() {
++        return Err(format!("镜像返回 HTTP {}", response.status().as_u16()));
++    }
++    let mut stream = response.bytes_stream();
++    let mut bytes = Vec::new();
++    while let Some(chunk) = stream.next().await {
++        let chunk = chunk.map_err(|error| error.to_string())?;
++        if bytes.len() + chunk.len() > limit { return Err("镜像内容超出大小上限".into()); }
++        bytes.extend_from_slice(&chunk);
++    }
++    Ok(bytes)
+ }
+ 
+ pub(super) async fn github_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+@@ -3,15 +3,44 @@
+ use super::storage::{Package, PackageSource};
+ 
+ const BASE: &str = "https://raw.githubusercontent.com/magpie-community/plugins/dist/";
++/// 同一份内容的镜像（jsDelivr 的 GitHub 代理）：路径规则与 raw 一致，只是前缀不同。
++///
++/// 为什么要它：`raw.githubusercontent.com` 在部分网络（典型是国内直连）会被中途掐断 ——
++/// 实测「获取」的进度停在 2.5–2.8 MiB 之间反复飘然后断掉，而这份索引约 2.9 MB，
++/// 正好对上。取不到索引，目录里所有 Magpie 插件就会退化成"从 npm 装"
++/// （npm tarball 大得多，而且需要运行时解析依赖 —— 手机上根本没有）。
++const MIRROR: &str = "https://cdn.jsdelivr.net/gh/magpie-community/plugins@dist/";
++/// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
++/// TTL 取 10 分钟 —— 足够覆盖"刷新后连着装几支"，又不会让版本信息长时间陈旧。
++const INDEX_TTL_MS: u64 = 10 * 60 * 1000;
++static INDEX_CACHE: std::sync::Mutex<Option<(u64, Value)>> = std::sync::Mutex::new(None);
++
++/// 按 `BASE` 的相对路径取字节：先试镜像，再退回 GitHub raw。
++async fn dist_bytes(path: &str, limit: usize) -> Result<Vec<u8>, String> {
++    let mirror = super::download::public_bytes(&format!("{MIRROR}{path}"), limit).await;
++    match mirror {
++        Ok(bytes) => Ok(bytes),
++        Err(mirror_error) => super::download::github_bytes(&format!("{BASE}{path}"), limit).await
++            .map_err(|error| format!("镜像与官方源都取不到（镜像：{mirror_error}；官方：{error}）")),
++    }
++}
+ const INDEX_LIMIT: usize = 16 * 1024 * 1024;
+ 
+ /// 官方分发索引（`dist` 分支的 `index.json`）：下载与「检查更新」共用一份读法。
+ pub(super) async fn index() -> Result<Value, String> {
+-    let bytes = super::download::github_bytes(&format!("{BASE}index.json"), INDEX_LIMIT).await?;
++    // 缓存命中就直接用：刷新目录后紧接着安装时，不必再下那 2.9 MB（也避开被掐断的那一段）。
++    let now = crate::server::logging::now_ms();
++    if let Ok(cache) = INDEX_CACHE.lock() {
++        if let Some((at, cached)) = cache.as_ref() {
++            if now.saturating_sub(*at) < INDEX_TTL_MS { return Ok(cached.clone()); }
++        }
++    }
++    let bytes = dist_bytes("index.json", INDEX_LIMIT).await?;
+     let index: Value = serde_json::from_slice(&bytes).map_err(|_| "Magpie 社区索引无法解析")?;
+     if index["version"].as_u64() != Some(1) {
+         return Err("Magpie 社区分发索引版本暂不兼容".into());
+     }
++    if let Ok(mut cache) = INDEX_CACHE.lock() { *cache = Some((now, index.clone())); }
+     Ok(index)
+ }
+ 
+@@ -45,7 +74,7 @@
+         value.starts_with("sha512-") && !value.chars().any(char::is_whitespace)
+     }).ok_or("Magpie 插件缺少 SHA-512 完整性校验值")?;
+     super::operations::stage("package", "正在下载 Magpie 社区脚本插件");
+-    let archive = super::download::github_bytes(&format!("{BASE}{file}"), super::packages::MAX_PACKAGE_BYTES).await?;
++    let archive = dist_bytes(file, super::packages::MAX_PACKAGE_BYTES).await?;
+     super::packages::verify_integrity(&archive, integrity)?;
+     let source = PackageSource::Magpie { file: file.into(), integrity: integrity.into() };
+     super::packages::store_archive(archive, Some((name.into(), version.into())), Some(source)).await
