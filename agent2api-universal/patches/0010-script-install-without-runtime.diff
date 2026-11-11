@@ -1,0 +1,88 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/dependencies.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/dependencies.rs
+@@ -15,13 +15,31 @@
+     paths
+ }
+ 
++/// 这支插件**是否真的需要解析依赖**。
++///
++/// ── 为什么单独抽出来 ──────────────────────────────────────────
++/// 阶段 0 的 iOS 形态里，网关侧可能**没有任何 JS 运行时**（bun.rs 的 asset() 没有 ios 分支）。
++/// 那时"要不要拒绝安装"完全取决于这个判定：Magpie dist 发布的是已构建产物
++/// （实测 `dependencies` 为空），没有运行时也能跑；真声明了依赖的包才必须拒绝。
++/// `install` 与 `operations` 共用这一份判定，避免两处各写一遍而分叉。
++pub(super) fn requires_install(package: &super::storage::Package) -> Result<bool, String> {
++    let directory = super::storage::directory(package)?;
++    let manifest: Value = serde_json::from_slice(&std::fs::read(directory.join("package.json")).map_err(|error| error.to_string())?)
++        .map_err(|_| "插件清单无法解析")?;
++    Ok(needs_dependencies(&manifest))
++}
++
++/// 判定本体：只看依赖字段是否**非空**（部署清单里的空对象不算需要装）
++fn needs_dependencies(manifest: &Value) -> bool {
++    ["dependencies", "optionalDependencies", "peerDependencies"].iter()
++        .any(|key| manifest[*key].as_object().is_some_and(|items| !items.is_empty()))
++}
++
+ pub(super) async fn install(package: &super::storage::Package, executable: &Path) -> Result<(), String> {
+     let directory = super::storage::directory(package)?;
+     let manifest: Value = serde_json::from_slice(&std::fs::read(directory.join("package.json")).map_err(|error| error.to_string())?)
+         .map_err(|_| "插件清单无法解析")?;
+-    if !["dependencies", "optionalDependencies", "peerDependencies"].iter().any(|key| manifest[*key].as_object().is_some_and(|items| !items.is_empty())) {
+-        return Ok(());
+-    }
++    if !needs_dependencies(&manifest) { return Ok(()); }
+     if directory.join(".agent2api-dependencies").is_file() { return Ok(()); }
+     super::operations::stage("dependencies", "正在安装提供商插件依赖（不执行安装脚本）");
+     let temporary = tempfile::tempdir_in(super::root()).map_err(|error| error.to_string())?;
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
+@@ -84,9 +84,19 @@
+     begin("install", target)?;
+     crate::spawn_task(async move {
+         let result = async {
+-            let executable = super::bun::ensure().await?;
++            // 取运行时**不再等于装不上**：没有运行时也先把包下载并登记。
++            // 依据：dependencies::install 对"没有依赖"的包本来就什么都不做，
++            // 而 Magpie dist 发布的就是已构建产物（实测 dependencies 为空）。
++            // 今天 iOS 上连下载都走不到，唯一原因就是这一行曾是前置条件。
++            let executable = super::bun::ensure().await.ok();
+             let mut package = source.download().await?;
+-            super::dependencies::install(&package, &executable).await?;
++            match executable.as_ref() {
++                Some(executable) => super::dependencies::install(&package, executable).await?,
++                None if !super::dependencies::requires_install(&package)? => {}
++                None => {
++                    return Err("这支插件声明了依赖，需要先解析才能运行；当前平台没有可用的脚本运行时。请在桌面端安装，或等待把它适配到本平台。".into())
++                }
++            }
+             if expected_id.as_ref().is_some_and(|id| id != &package.id) {
+                 return Err("下载的脚本插件包名与待更新插件不一致，未替换原插件".into());
+             }
+@@ -166,8 +176,25 @@
+     begin(&action, target)?;
+     crate::spawn_task(async move {
+         let result = async {
++            // 与 install 同一套：没有运行时时，只有"确实声明了依赖且处于启用状态"的包才拒绝。
+             let executable = if after.packages.iter().any(|package| package.enabled) {
+-                super::bun::ensure().await?
++                match super::bun::ensure().await {
++                    Ok(executable) => executable,
++                    Err(_) => {
++                        let mut blocked = None;
++                        for package in after.packages.iter().filter(|package| package.enabled) {
++                            if super::dependencies::requires_install(package).unwrap_or(false) {
++                                blocked = Some(package.id.clone());
++                                break;
++                            }
++                        }
++                        match blocked {
++                            Some(id) => return Err(format!(
++                                "脚本插件「{id}」声明了依赖，需要先解析才能运行；当前平台没有可用的脚本运行时。请在桌面端安装，或等待适配到本平台。")),
++                            None => std::path::PathBuf::new(),
++                        }
++                    }
++                }
+             } else {
+                 std::path::PathBuf::new()
+             };
