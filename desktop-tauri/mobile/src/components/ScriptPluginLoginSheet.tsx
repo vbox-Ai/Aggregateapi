@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
-import { apiCall, url } from '../api/client'
+import { apiCall, authHeaders, url } from '../api/client'
 import { store } from '../state/store'
 import { Button, Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from '@ui'
 import type { HostFile, HostTransport } from '../lib/plugin-host'
@@ -60,31 +60,108 @@ async function loadHostFiles(): Promise<HostFile[]> {
   return files.map(file => ({ path: file.path, text: file.text }))
 }
 
-/** 用网关的 WS 桥当传输层：帧就是宿主 stdin/stdout 上的一行 JSON */
-function gatewayTransport(provider: string, onNotice: (text: string) => void): HostTransport {
-  const base = url('/api/plugins/host/stream').replace(/^http/, 'ws')
-  const socket = new WebSocket(base, ['agent2api-plugin-host'])
+/**
+ * 用网关的**纯 HTTP 三端点**当传输层：帧就是宿主 stdin/stdout 上的一行 JSON。
+ *
+ * ── 为什么不是 WebSocket ────────────────────────────────────────
+ * 网关的 axum 只开了 multipart 特性（`Cargo.toml:80`），没有 ws；为这一处开特性
+ * 等于动依赖面。网关侧（补丁 0009）因此用两个普通端点承载同一份 NDJSON：
+ *   · 上行 POST /api/plugins/host/frames  —— 把宿主发出的帧交回去
+ *   · 下行 GET  /api/plugins/host/stream  —— 长连接收网关（与插件）发出的帧
+ * 外加 POST /open（挂上会话）与 POST /close（拆掉）。
+ *
+ * ── 两个必须照做的细节（来自网关侧实现）────────────────────────
+ * · `open` 先、`stream` 后：下行端点会把出站接收端**取走**，且只能取一次。
+ * · 上行要合并成一批再发：端点收的是 `{ lines: string[] }`，逐帧一个请求太碎。
+ */
+function gatewayTransport(onNotice: (text: string) => void): HostTransport {
   const lineHandlers: Array<(line: string) => void> = []
   const closeHandlers: Array<(reason: string) => void> = []
-  // WS 建好之前的帧先排队：宿主会立刻发 init，丢掉就会卡在握手
-  const queued: string[] = []
-  socket.addEventListener('open', () => {
-    for (const line of queued.splice(0)) socket.send(line)
-  })
-  socket.addEventListener('message', event => {
-    for (const handler of lineHandlers) handler(String(event.data))
-  })
-  socket.addEventListener('close', () => {
-    for (const handler of closeHandlers) handler(t('与网关的连接已断开'))
-  })
-  socket.addEventListener('error', () => onNotice(t('与网关的插件通道建立失败')))
+  const outbox: string[] = []
+  let flushing = false
+  let closed = false
+
+  const finish = (reason: string) => {
+    if (closed) return
+    closed = true
+    for (const handler of closeHandlers) handler(reason)
+  }
+
+  const flush = async () => {
+    if (flushing || closed) return
+    flushing = true
+    try {
+      while (outbox.length) {
+        const batch = outbox.splice(0, outbox.length)
+        const response = await fetch(url('/api/plugins/host/frames'), {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lines: batch }),
+        })
+        if (!response.ok) {
+          const text = await response.text().catch(() => '')
+          onNotice(t('上行失败（HTTP {code}）：{detail}', { code: String(response.status), detail: text.slice(0, 120) }))
+          finish(t('与网关的插件通道已断开'))
+          return
+        }
+      }
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error))
+      finish(t('与网关的插件通道已断开'))
+    } finally {
+      flushing = false
+    }
+  }
+
+  const teardown = () => {
+    finish(t('插件会话已关闭'))
+    void fetch(url('/api/plugins/host/close'), { method: 'POST', headers: authHeaders() }).catch(() => {})
+  }
+
+  void (async () => {
+    try {
+      const opened = await fetch(url('/api/plugins/host/open'), { method: 'POST', headers: authHeaders() })
+      if (!opened.ok) {
+        const text = await opened.text().catch(() => '')
+        // 缺宿主源码接口/网关版本旧时，这里要说清是网关那一侧的问题
+        onNotice(t('网关没有打开远端宿主会话（HTTP {code}）：{detail}', { code: String(opened.status), detail: text.slice(0, 120) }))
+        finish(t('远端宿主会话未建立'))
+        return
+      }
+      const response = await fetch(url('/api/plugins/host/stream'), { headers: authHeaders() })
+      if (!response.ok || !response.body) {
+        onNotice(t('下行流未建立（HTTP {code}）', { code: String(response.status) }))
+        finish(t('远端宿主会话未建立'))
+        return
+      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
+          const line = buffer.slice(0, at)
+          buffer = buffer.slice(at + 1)
+          if (line.trim()) for (const handler of lineHandlers) handler(line)
+        }
+      }
+      finish(t('与网关的连接已断开'))
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : String(error))
+      finish(t('与网关的连接已断开'))
+    }
+  })()
+
   return {
     send(line) {
-      if (socket.readyState === WebSocket.OPEN) socket.send(line)
-      else queued.push(line)
+      outbox.push(line)
+      void flush()
     },
     onLine(handler) { lineHandlers.push(handler) },
     onClose(handler) { closeHandlers.push(handler) },
+    teardown,
   }
 }
 
@@ -93,11 +170,15 @@ export function ScriptPluginLoginSheet({ plugin, onClose }: { plugin: ScriptPlug
   const [detail, setDetail] = useState('')
   const [login, setLogin] = useState<LoginStart | null>(null)
   const sessionRef = useRef<PluginHostSession | null>(null)
+  const transportRef = useRef<HostTransport | null>(null)
   const providerRef = useRef('')
 
   const stop = useCallback(() => {
     sessionRef.current?.close()
     sessionRef.current = null
+    // 传输层要主动收：网关侧会挂着一个远端出站口，不清掉的话下次 open 会替换旧会话。
+    transportRef.current?.teardown?.()
+    transportRef.current = null
   }, [])
 
   useEffect(() => {
@@ -110,18 +191,10 @@ export function ScriptPluginLoginSheet({ plugin, onClose }: { plugin: ScriptPlug
       try {
         const [hostFiles, pluginFiles] = await Promise.all([loadHostFiles(), loadPluginFiles(plugin)])
         if (cancelled) return
-        const transport = gatewayTransport(plugin.id, text => setDetail(text))
+        const transport = gatewayTransport(text => setDetail(text))
         const session = await startPluginHost({ hostFiles, pluginFiles, transport })
         sessionRef.current = session
-        // 对端侧（网关）负责 script.http.* / store.*；网关自己没有的应答要如实回错，
-        // 否则宿主会一直等（表现为界面卡住而不是报错）。
-        session.onRequest((method, params, id) => {
-          void apiCall('/api/plugins/host/call', { method: 'POST', body: { method, params, id } })
-            .then(result => session.reply(id, { result }))
-            .catch(error => session.reply(id, {
-              error: { code: 'unsupported', message: error instanceof Error ? error.message : String(error) },
-            }))
-        })
+        transportRef.current = transport
         session.onEvent(event => {
           if (event.event === 'startup') setDetail(t('正在装载插件…'))
         })

@@ -43,6 +43,11 @@ export type HostTransport = {
   onLine: (handler: (line: string) => void) => void
   /** 传输层关闭 */
   onClose: (handler: (reason: string) => void) => void
+  /**
+   * 主动收拾传输层（清掉网关侧的会话）。
+   * 可选：有的实现（例如本地假对端）没有远端状态要清。
+   */
+  teardown?: () => void
 }
 
 /** 把一个模块表编译成「可 import 的 URL 表」：改写相对与 node: 说明符为 Blob URL */
