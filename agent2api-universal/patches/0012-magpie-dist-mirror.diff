@@ -1,6 +1,6 @@
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
-@@ -23,6 +23,26 @@
+@@ -23,6 +23,29 @@
          return Ok(None);
      }
      read(response, 4 * 1024 * 1024, None).await.map(Some)
@@ -12,7 +12,10 @@
 +/// 对第三方域名不适用。这里用通用的 `fetch_public`，仍然带 UA 与状态码检查。
 +pub(super) async fn public_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
 +    let headers = vec![("User-Agent".to_string(), "agent2api".to_string())];
-+    let response = client::fetch_public(url, &headers, None).await?;
++    // ⚠️ 必须带超时：镜像（jsDelivr）在国内有时会**连上但不发数据**。
++    // 传 None 时这条请求会一直等 ⇒ 安装操作卡在"进行中"、面板上既不报错也不结束
++    // （实测到的"点了直接装不了、没反应"）。45 秒足够下完 2.9 MB 索引。
++    let response = client::fetch_public(url, &headers, Some(45_000)).await?;
 +    if !response.status().is_success() {
 +        return Err(format!("镜像返回 HTTP {}", response.status().as_u16()));
 +    }
