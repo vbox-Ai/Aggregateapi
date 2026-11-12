@@ -1,0 +1,250 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
+@@ -12,11 +12,101 @@
+     STATE.get_or_init(|| Mutex::new(json!({ "active": false })))
+ }
+ 
++/// 多久没有任何进展就判定为卡死。
++/// 必须大于单次请求的超时（镜像请求现在是 45 秒），否则慢线路会被误伤。
++const STALL_MS: i64 = 180_000;
++
++/// 任务代际：每开始一次任务 +1。卡死判定把状态让给新任务之后，旧任务就**不该再写状态**
++/// （否则它收尾时会把新任务写成"已结束"）。
++fn next_generation() -> u64 {
++    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
++}
++
++/// 记一次"有进展"（阶段切换、下载字节、等待循环里都调）。
++fn touch(value: &mut Value) {
++    value["progressAt"] = json!(crate::server::logging::now_ms());
++}
++
++/// 本次任务的心跳：只在状态仍属于这一代任务时生效。
++fn heartbeat_if(generation: u64) {
++    if let Ok(mut value) = state().lock() {
++        if value["active"] == true && value["generation"].as_u64() == Some(generation) {
++            touch(&mut value);
++        }
++    }
++}
++
++/// 等"在途请求结束"这一类等待的心跳：它不属于某一次具体的下载，所以不做代际检查。
++fn heartbeat() {
++    if let Ok(mut value) = state().lock() {
++        if value["active"] == true {
++            touch(&mut value);
++        }
++    }
++}
++
++/// 给"自己不报进度的慢步骤"打心跳；guard 掉落即停表。
++///
++/// 这些步骤（下运行时、装依赖）**不经过** stage()/download_progress()，所以它们本身不算进展；
++/// 但它们确实在干活 ⇒ 用一个 10 秒一跳的心跳把它们和"真卡死"区分开。
++struct KeepAlive {
++    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
++}
++
++impl Drop for KeepAlive {
++    fn drop(&mut self) {
++        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
++    }
++}
++
++fn keepalive(generation: u64) -> KeepAlive {
++    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
++    let flag = stop.clone();
++    crate::spawn_task(async move {
++        while !flag.load(std::sync::atomic::Ordering::Relaxed) {
++            heartbeat_if(generation);
++            tokio::time::sleep(Duration::from_secs(10)).await;
++        }
++    });
++    KeepAlive { stop }
++}
++
++/// 进行中的任务如果长时间没有任何进展，就**当场判定失败**并给出原因。
++///
++/// 为什么在读取状态时判定、而不是起一个后台任务：面板在任务进行中每 1.5 秒轮询一次这个值，
++/// 读取时判定既不用额外的调度，也不会在没人看的时候偷偷改状态。
++/// 判定之后任务变成"已结束的失败" ⇒ 客户端会把它列进「最近失败」，用户终于能看到原因；
++/// `begin()` 也不再被一个卡死的任务永久占住。
++fn stalled(value: &mut Value) {
++    if value["active"] != true {
++        return;
++    }
++    let now = crate::server::logging::now_ms();
++    let last = value["progressAt"]
++        .as_i64()
++        .or_else(|| value["startedAt"].as_i64())
++        .unwrap_or(now);
++    if now.saturating_sub(last) < STALL_MS {
++        return;
++    }
++    let seconds = now.saturating_sub(last) / 1000;
++    value["active"] = json!(false);
++    value["updatedAt"] = json!(now);
++    value["stage"] = json!("failed");
++    value["error"] = json!(format!(
++        "任务已有 {seconds} 秒没有任何进展，已判定为卡死（多半是下载线路中断）。请在「设置 → 自动更新」里换一条出网线路，或稍后重试。"
++    ));
++}
++
+ pub fn operation() -> Value {
+-    state()
+-        .lock()
+-        .map(|value| value.clone())
+-        .unwrap_or(Value::Null)
++    match state().lock() {
++        Ok(mut value) => {
++            stalled(&mut value);
++            value.clone()
++        }
++        Err(_) => Value::Null,
++    }
+ }
+ 
+ pub fn stage(stage: &str, message: &str) {
+@@ -24,31 +114,40 @@
+         value["stage"] = json!(stage);
+         value["message"] = json!(message);
+         value["received"] = json!(0);
++        touch(&mut value);
+     }
+ }
+ 
+ pub fn download_progress(received: usize) {
+     if let Ok(mut value) = state().lock() {
+         value["received"] = json!(received);
+-    }
+-}
+-
+-pub(super) fn begin(action: &str, target: Value) -> Result<(), String> {
++        touch(&mut value);
++    }
++}
++
++pub(super) fn begin(action: &str, target: Value) -> Result<u64, String> {
+     let mut value = state().lock().map_err(|_| "脚本插件任务不可用")?;
+     if value["active"] == true {
+         return Err("已有脚本插件任务正在执行".into());
+     }
++    let now = crate::server::logging::now_ms();
++    let generation = next_generation();
+     *value = json!({ "active": true, "action": action, "target": target, "stage": "starting", "received": 0,
+-        "startedAt": crate::server::logging::now_ms(), "error": null });
+-    Ok(())
+-}
+-
+-pub(super) fn finished(result: Result<(), String>) {
++        "startedAt": now, "progressAt": now, "generation": generation, "error": null });
++    Ok(generation)
++}
++
++pub(super) fn finished(generation: u64, result: Result<(), String>) {
+     super::icons::wake(false);
+     // 装了／更了／卸了之后可更新状态必须重算：自动检查的间隔是 6 小时，不强制的话
+     // 刚更新完的插件会顶着一小时前的旧结论继续显示「可更新」（点进去才发现没有）。
+     super::updates::wake(true);
+     if let Ok(mut value) = state().lock() {
++        // 只有状态仍属于**这次**任务才收尾：卡死判定之后用户可能已经开了新任务，
++        // 旧任务这时再写会把新任务的进度抹掉（active=false ⇒ 界面以为已经结束）。
++        if value["generation"].as_u64() != Some(generation) {
++            return;
++        }
+         value["active"] = json!(false);
+         value["updatedAt"] = json!(crate::server::logging::now_ms());
+         value["stage"] = json!(if result.is_ok() { "done" } else { "failed" });
+@@ -81,7 +180,7 @@
+         }),
+     };
+     if let Some(id) = &expected_id { target["id"] = json!(id); }
+-    begin("install", target)?;
++    let generation = begin("install", target)?;
+     crate::spawn_task(async move {
+         let result = async {
+             // **先下载**：这一步不需要运行时（Magpie dist 发布的已是构建产物）。
+@@ -91,8 +190,15 @@
+             // `executable` 的类型必须是 **PathBuf**（不是 Option）：下面第 120 行的
+             // `switch(before, after, executable, None)` 与 reload 那条路都要它；
+             // 没有运行时时用空路径占位 —— 与源码里原有的写法一致（见 switch 调用处的 else 分支）。
+-            let executable = match super::bun::ensure().await.ok() {
++            // 取运行时（可能要下几十 MB）与装依赖这两步**自己不上报进度**，
++            // 期间用 keepalive 打心跳，免得被卡死判定误伤（它们之外仍没有任何心跳）。
++            let runtime = {
++                let _keepalive = keepalive(generation);
++                super::bun::ensure().await
++            };
++            let executable = match runtime.ok() {
+                 Some(executable) => {
++                    let _keepalive = keepalive(generation);
+                     super::dependencies::install(&package, &executable).await?;
+                     executable
+                 }
+@@ -136,7 +242,7 @@
+             switch(before, after, executable, None).await
+         }
+         .await;
+-        finished(result);
++        finished(generation, result);
+     });
+     Ok(operation())
+ }
+@@ -179,12 +285,17 @@
+         },
+         _ => return Err("未知的脚本插件操作".into()),
+     }
+-    begin(&action, target)?;
++    let generation = begin(&action, target)?;
+     crate::spawn_task(async move {
+         let result = async {
+             // 与 install 同一套：没有运行时时，只有"确实声明了依赖且处于启用状态"的包才拒绝。
+             let executable = if after.packages.iter().any(|package| package.enabled) {
+-                match super::bun::ensure().await {
++                // 同上：取运行时期间打心跳。
++                let runtime = {
++                    let _keepalive = keepalive(generation);
++                    super::bun::ensure().await
++                };
++                match runtime {
+                     Ok(executable) => executable,
+                     Err(_) => {
+                         let mut blocked = None;
+@@ -207,7 +318,7 @@
+             switch(before, after, executable, (action == "reload").then_some(id.as_str())).await
+         }
+         .await;
+-        finished(result);
++        finished(generation, result);
+     });
+     Ok(operation())
+ }
+@@ -250,6 +361,8 @@
+         if tokio::time::Instant::now() >= deadline {
+             return Err("脚本插件仍有在途任务，未中断请求；请稍后重试".into());
+         }
++        // 这里最长可以等 600 秒，且期间没有任何进度可报 ⇒ 主动打心跳，别被卡死判定误伤。
++        heartbeat();
+         tokio::time::sleep(Duration::from_millis(500)).await;
+     };
+     let before_ids = ids.clone();
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/settings.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/settings.rs
+@@ -54,14 +54,14 @@
+         }
+         crate::server::core::providers::catalog::invalidate();
+     } else {
+-        super::operations::begin("settings", json!({ "id": id, "name": package.name, "version": package.version }))?;
++        let generation = super::operations::begin("settings", json!({ "id": id, "name": package.name, "version": package.version }))?;
+         crate::spawn_task(async move {
+             let result = async {
+                 let executable = if after.packages.iter().any(|package| package.enabled) { super::bun::ensure().await? }
+                     else { std::path::PathBuf::new() };
+                 super::operations::switch(before, after, executable, None).await
+             }.await;
+-            super::operations::finished(result);
++            super::operations::finished(generation, result);
+         });
+         return Ok(json!({ "operation": super::operations::operation() }));
+     }

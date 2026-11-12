@@ -4750,3 +4750,38 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
 ② 断点续传（`Range`）未实现，需要自建 client（现有 `client::fetch_*` 内部构造请求、带不了 Range 头）；
 ③ 手机端「自定义提供商」表单仍缺桌面那三项（鉴权 / User-Agent / 代理）；
 ④ 既有未修：补丁 0003 只应用一半（`packages.rs` 成功、`update.rs:10` 失败）。
+### 125. 补丁 0014：脚本插件任务卡死判定 + 任务代际（待 CI 验证）
+
+**要解决的问题**：安装/切换这类脚本插件任务在**没有任何进展**时会永远停在 `active=true`。
+
+- 客户端看不见：`mobile/src/pages/PluginsPage.tsx` 过滤 `if (operation.active) continue`（第 125 行）、
+  `failedOperations` 也要求 `!operation.active`（第 216-220 行）⇒ 卡住的任务既不报错、也不进「最近失败」，
+  界面上只有"点了没反应"。toast 也只在操作**结束**时出现。
+- 更糟的是它会把整个插件页锁住：`script/settings.rs:11,38` 与 `operations.rs::begin()` 都是
+  `active == true` 就拒绝新任务（「已有脚本插件任务正在执行」）。
+- 触发条件很现实：下载走外部域名（镜像 jsDelivr / 官方 raw），socket 可能"连着但不发数据"。
+  0012 已给镜像请求补了 45 秒超时（治因），0014 再加**兜底**：任何原因的无进展都会结束任务。
+
+**0014 内容**（改 2 个文件）
+
+- `operations.rs`：`STALL_MS = 180_000`（大于单次请求超时，免得慢线路被误伤）；
+  `touch()` 在任何进展时写 `progressAt`（`stage()` 与 `download_progress()` 末尾各调一次）；
+  `stalled()` 在 **`operation()` 被读取时**判定（面板每 1.5 秒轮询一次，无需额外调度）：
+  超过 `STALL_MS` 没有进展就写 `active=false` / `stage="failed"` /
+  `error="任务已有 N 秒没有任何进展，已判定为卡死（多半是下载线路中断）…"`。
+- `operations.rs`：任务**代际**（`begin()` 返回 `generation`，状态里记 `generation`）。
+  卡死判定之后用户可能立刻开新任务，旧任务这时才收尾就会把新任务写成"已结束" ⇒
+  `finished(generation, result)` 只在代际相符时写状态；心跳 `heartbeat_if(generation)` 同理，
+  免得旧任务的 keepalive 替新任务"续命"。
+- `operations.rs`：`keepalive(generation)`（10 秒一跳，guard 掉落即停）包住**自己不报进度**的两步
+  —— 取运行时（`bun::ensure()`，可能要下几十 MB）与装依赖；等"在途请求结束"的 600 秒轮询循环里
+  也补 `heartbeat()`。
+- `settings.rs`：`begin(...)` 取回代际、`finished(generation, result)` 带上（第三处调用点）。
+
+**刻意没改**：`switch(before, after, executable, retry)` 的签名（有 3 个调用点，改它一圈都要动）。
+
+**验证**：本地两级干跑 —— 每个文件"施加后的文本 == 目标文本"，且交叉校验
+"原始 → 0010 → 0014 与目标逐字一致"（0010 是唯一动过 `operations.rs` 的前序补丁）。
+
+**与 0012/0013 的关系**：0012 修的是"镜像请求没超时"（卡死的**因**），0014 修的是
+"不管什么原因卡住都得让用户看见并能重试"（**兜底**）。两者互补，都要。
