@@ -1,0 +1,177 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
+@@ -258,6 +258,46 @@
+     pub disabled: bool,
+     /// 尚未恢复的失败原因；历史诊断保留在日志中。
+     pub last_error: Option<String>,
++}
++
++/// 远端宿主会话（iOS：宿主跑在手机里）的出站口。
++///
++/// ── 为什么放在模块级，而不是宿主实例的字段里 ────────────────────
++/// 安装/切换会把脚本宿主实例**换掉**：`switch` 先 `shutdown_packs(HOST_ID)`，
++/// 之后 `prepare` 新建一个实例并重新登记。而 `shutdown()` 会把旧实例标成
++/// `closing`，`ensure()` 明确拒绝复活它 —— 所以"把会话存在实例上"必然在新实例里
++/// 丢失：新实例既没有远端、又起不了子进程（iOS 上没有 Bun，`spawn()` 必然 ENOENT）。
++/// 会话是**面板级**的（一台网关同一时刻只服务一个面板），放这里之后谁先到都行：
++/// 手机先接入，之后新建的宿主实例照常看得见这条会话。
++static REMOTE_SESSION: std::sync::OnceLock<
++    StdMutex<Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>>>,
++> = std::sync::OnceLock::new();
++
++fn remote_session() -> &'static StdMutex<Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>>> {
++    REMOTE_SESSION.get_or_init(|| StdMutex::new(None))
++}
++
++/// 挂上远端宿主会话，交出本会话的出站接收端（由 `GET /api/plugins/host/stream` 取走）。
++///
++/// 重复挂载会替换旧会话：旧通道被丢弃后它的写入会失败（见 `Host::write`），
++/// 不会与新会话串帧。
++pub(crate) fn attach_remote_session(
++) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>> {
++    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
++    let mut slot = remote_session().lock().ok()?;
++    *slot = Some(sender);
++    Some(receiver)
++}
++
++/// 拆掉远端宿主会话；之后脚本宿主回到子进程路径。
++pub(crate) fn detach_remote_session() {
++    if let Ok(mut slot) = remote_session().lock() {
++        *slot = None;
++    }
++}
++
++fn remote_sender() -> Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>> {
++    remote_session().lock().ok().and_then(|slot| slot.clone())
+ }
+ 
+ /// 一个提供商插件宿主（对应一个已安装的包）。
+@@ -307,14 +347,6 @@
+     provider_settings: StdMutex<std::collections::BTreeMap<String, provider_settings::Schema>>,
+     /// 回调处理器（网关侧实现，见 [`GatewayCallbacks`]）。
+     callbacks: Arc<dyn GatewayCallbacks>,
+-    /// 远端宿主的出站口。
+-    ///
+-    /// ── 为什么需要它 ──────────────────────────────────────────────
+-    /// 正常情况下这个宿主是**子进程**：出站帧写它的 stdin。iOS 上没有 Bun，
+-    /// 宿主改在手机里跑，于是这里多一个出口 —— `write()` 有条远端就投远端。
+-    /// 只挂在 `write()`（网关主动发起）与远端帧的应答上，**不动 `write_for_run`**：
+-    /// 后者带 run 身份，是子进程路径的帧边界保证，不能兼作两条路。
+-    remote: StdMutex<Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>>>,
+ }
+ 
+ /// 子进程与它的管道。
+@@ -399,7 +431,6 @@
+             providers: StdMutex::new(Vec::new()),
+             provider_settings: StdMutex::new(std::collections::BTreeMap::new()),
+             callbacks,
+-            remote: StdMutex::new(None),
+         }
+     }
+ 
+@@ -636,7 +667,7 @@
+     async fn write(&self, frame: proto::Frame) -> std::io::Result<()> {
+         // 远端会话优先：它没有子进程，current_run() 必然是空的。
+         // 通道关闭（手机断开）时如实报断开，不静默丢弃 —— 上层据此收尾。
+-        let remote = self.remote.lock().ok().and_then(|slot| slot.as_ref().cloned());
++        let remote = self.remote_sender();
+         if let Some(sender) = remote {
+             return sender.send(frame).map_err(|_| process::disconnected());
+         }
+@@ -644,28 +675,21 @@
+         self.write_for_run(frame, run).await
+     }
+ 
+-    /// 挂上远端出站口（手机端宿主接入时调用），交出本会话的出站接收端。
++    /// 本宿主可用的远端出站口（脚本宿主专用，见 `attach_remote_session`）。
+     ///
+-    /// 重复挂载会替换旧会话：旧通道被丢弃后它的写入会失败（见 `write`），
+-    /// 不会与新会话串帧。
+-    pub(crate) fn attach_remote(
+-        &self,
+-    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>> {
+-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+-        let mut slot = self.remote.lock().ok()?;
+-        *slot = Some(sender);
+-        Some(receiver)
+-    }
+-
+-    /// 拆掉远端出站口；之后 `write()` 回到子进程路径。
+-    pub(crate) fn detach_remote(&self) {
+-        if let Ok(mut slot) = self.remote.lock() {
+-            *slot = None;
+-        }
++    /// ── 为什么按 `options.script` 收窄 ──────────────────────────────
++    /// 远端会话是给脚本宿主的：iOS 上没有 Bun，Magpie / OpenCode 宿主只能跑在手机里。
++    /// 原生插件包在 iOS 上本来就能起（执行体随包发布），出站口仍是子进程 stdin ——
++    /// 不收窄的话，一个手机面板接入会把原生宿主也拽到远端路径上去，那些包就全废了。
++    fn remote_sender(&self) -> Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>> {
++        if !self.options.script {
++            return None;
++        }
++        remote_sender()
+     }
+ 
+     pub(crate) fn has_remote(&self) -> bool {
+-        self.remote.lock().map(|slot| slot.is_some()).unwrap_or(false)
++        self.remote_sender().is_some()
+     }
+ 
+     /// 处理远端宿主发来的**一个帧**。
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -24,7 +24,7 @@
+ use serde::Deserialize;
+ use serde_json::json;
+ 
+-use crate::server::core::plugin_host::script;
++use crate::server::core::plugin_host::{self, script};
+ use crate::server::http::ok_json;
+ use crate::server::ServerState;
+ 
+@@ -80,20 +80,22 @@
+ }
+ 
+ /// 打开远端宿主会话：挂上出站口，交由手机发 `init` 完成握手。
++///
++/// ── 为什么不再要求"脚本宿主已存在" ──────────────────────────────
++/// 之前这里先取 `script_host()`（拿不到就 503）。可是脚本宿主实例**只在一次成功的
++/// `prepare` 之后才被登记**，而 `prepare` 又要求"有 Bun 或已接入远端宿主" ——
++/// 于是形成死锁：接入要宿主、宿主要有接入。iOS 上没有 Bun，这一步一次也没成功过，
++/// 每次安装都落到"起子进程"那条路（`spawn()` 空可执行文件 ⇒ ENOENT）。
++/// 现在会话挂在模块级（`plugin_host::attach_remote_session`），与宿主实例解耦：
++/// 谁先到都行 —— 手机先接入，安装时新建的宿主实例直接复用这条会话。
+ pub async fn open_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
+-    let host = match host_or_error() {
+-        Ok(host) => host,
+-        Err(response) => return response,
++    let Some(receiver) = plugin_host::attach_remote_session() else {
++        return error_response("远端宿主会话挂载失败", StatusCode::INTERNAL_SERVER_ERROR);
+     };
+-    match host.attach_remote() {
+-        Some(receiver) => {
+-            if let Ok(mut slot) = inbox().lock() {
+-                *slot = Some(receiver);
+-            }
+-            ok_json(json!({ "hostId": script::HOST_ID }))
+-        }
+-        None => error_response("插件宿主状态不可用", StatusCode::INTERNAL_SERVER_ERROR),
++    if let Ok(mut slot) = inbox().lock() {
++        *slot = Some(receiver);
+     }
++    ok_json(json!({ "hostId": script::HOST_ID }))
+ }
+ 
+ #[derive(Deserialize)]
+@@ -166,9 +168,7 @@
+ 
+ /// 关闭远端宿主会话（面板退出或手机断开）。
+ pub async fn close_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
+-    if let Some(host) = script::script_host() {
+-        host.detach_remote();
+-    }
++    plugin_host::detach_remote_session();
+     if let Ok(mut slot) = inbox().lock() {
+         *slot = None;
+     }

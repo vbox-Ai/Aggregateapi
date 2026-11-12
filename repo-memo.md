@@ -4928,3 +4928,35 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
 - **交付**：出包 #425（head `da148d06c`，含 0016）全绿 —— Plugins ✓ / iOS ✓（含「打补丁」✓、「编网关守护进程」✓、「打 IPA + 打包 deb」✓）/ Publish Release ✓ ⇒ release `ios-20261112-b425`，`Agent2API-3.5.0-beta.425-rootful-iphoneos-arm64e.deb`（41,238 KB）。
 - **教训（下载）**：本机直连 `release-assets.githubusercontent.com:443` 会失败（curl 28，84 秒超时）⇒ 取自己的发布产物也要走镜像：`https://gh-proxy.com/https://github.com/vbox-Ai/Aggregateapi/releases/download/<tag>/<file>`。
 - **教训（排查顺序）**：先看"失败原因有没有到界面"，再看"功能本身对不对"。这次三轮来回都卡在前者：网关侧其实一直有 `operation.error`，是前端把它吞了。
+
+### 步骤 133 · 补丁 0018：远端宿主会话挂到模块级（iOS 上"接入 → 安装"的死锁）
+
+**现象**（操作者真机 + 网关导出日志）：点「获取」→ 进度条一闪 → 无提示；卡片红字
+`启动插件进程失败（plugin）：No such file or directory (os error 2)；原安装记录已保留`。
+日志里同一句 **16 次**（11-11 21:40 → 11-12 22:42），伴随：
+
+- `Plugin 插件「plugin」不可用（连续失败 1 次）：启动插件进程失败（plugin）：No such file or directory (os error 2)`
+- `[Plugin] 插件启动结束：0 个已就绪，0 个失败，1 个等待恢复`
+
+**根因（是死锁，不是下载问题）**：下载、完整性校验、解包全都过了，死在"把宿主机跑起来"。
+
+1. `api/plugin_host.rs::open_remote` 先取 `script_host()`，拿不到就 503「这台网关没有脚本宿主（脚本插件可能未启用）」；
+2. `script::script_host()` = `plugin_host::runtime::host_for_pack(HOST_ID)`，而 `install_pack(HOST_ID, …)` **只在 `script/runtime.rs::prepare_inner` 里**调用；
+3. `prepare_inner` 要走到，先得有 Bun（`runtime.rs:168` 的启动路径 `bun::ensure()` 失败即 return）—— iOS 上没有 Bun（`bun.rs::asset()` 没有 ios 分支）；
+4. ⇒ 每次安装的 `switch` → `runtime::prepare` → `Host::ensure()` 都落到 `start()`，`spawn()` 空可执行文件 ⇒ `os error 2` ⇒ `switch` 失败、回滚（"原安装记录已保留"）。
+
+**接入要宿主，宿主要有接入。** 所以 0011 那条远端通道一次也没建立成功，插件一直显示「未安装」。
+
+**0018 改法（只动两个文件）**：
+
+- `core/plugin_host/mod.rs`：远端会话从 `Host` 字段改成**模块级** `static REMOTE_SESSION`，配 `attach_remote_session()` / `detach_remote_session()`；`Host::write()` 与 `has_remote()` 经 `Host::remote_sender()` 查它 —— **按 `options.script` 收窄**，原生插件包（iOS 上本来就能起）仍走子进程 stdin，不会被拽到远端路径上。
+  为什么必须模块级：`switch` 会先 `shutdown_packs(HOST_ID)` 换掉实例，而 `shutdown()` 把旧实例标成 `closing`（`ensure()` 拒绝复活）⇒ 会话存在实例上必然在新实例里丢失。
+- `api/plugin_host.rs`：`open_remote` 不再要求宿主已存在，直接挂会话（503 分支消失）；`close_remote` 拆会话。
+
+**校验**：锚点唯一性断言 + 两级干跑（上下文/删除行逐字匹配、施加结果 == 目标）通过；另用真 git（PortableGit 2.55.0）在只含两个基线文件的临时仓库里 `git apply --check` / `git apply` 均 rc=0，结果与目标逐字节一致。`_patchcheck` = 上游 `v3.5.0-beta.1` + 0001..0017，与 CI 的补丁链同形 ⇒ hunk 必然命中。
+
+**教训**：
+
+- 跨"实例重建"的东西不能挂在实例上（会话、句柄、锁都一样）：先问"这个对象在生命周期里会不会被换掉"。
+- 报错里的 `os error 2` 不是"路径写错"，而是"根本没有可执行文件"—— 这类**平台缺口**要先在源码里找分支表（`bun.rs::asset()`），再看调用链怎么兜。
+- 一个"没有就 503"的检查 + 一个"只在成功路径里登记"的句柄放在一起，就是死锁配方：凡"先检查资源存在、再从别处创建资源"的握手，都要问一句"两条路谁先谁后"。
