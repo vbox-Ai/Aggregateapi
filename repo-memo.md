@@ -4856,3 +4856,16 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
 
 教训：**「连接超时」与「传输静默」是两件事** —— 只设前者会让慢速大文件被误杀，
 只设后者会让「连上但不发数据」永远挂着（这正是 0012 修的那个 bug）。
+
+## 步骤 129：b423 交付 + 撤回「补丁 0003 只应用一半」的旧记录
+
+- 交付：release `ios-20261112-b423`（2026-11-12T08:38:46Z），deb `Agent2API-3.5.0-beta.423-rootful-iphoneos-arm64e.deb`（41233 KB），包内标记核对 **38/40**（两处 ❌ 为既定退役项 `U2 底栏占位`、`底栏加固(position:fixed!important)`）。
+  - deb：https://github.com/vbox-Ai/Aggregateapi/releases/download/ios-20261112-b423/Agent2API-3.5.0-beta.423-rootful-iphoneos-arm64e.deb
+  - 独立版 IPA：https://github.com/vbox-Ai/Aggregateapi/releases/download/ios-20261112-b423/Agent2API-standalone.ipa
+- 本版相对 b421 多**补丁 0015**（下载断点续传）：连接超时 `CONNECT_MS = 45s`、传输静默 `IDLE_MS = 60s`、最多 `ATTEMPTS = 4` 轮 `Range: bytes=<已收>-` 续传；206 续写、200（忽略 Range）清空重来、每片调 `operations::download_progress`，末尾校验 sha256。
+- **撤回旧记录**：此前备忘里写的「补丁 0003 只应用一半（`packages.rs` 成功、`update.rs:10` 失败）」是**误读**。CI 的打补丁循环用 `git apply --3way`，日志中的 `error: patch failed: …/update.rs:10` 属于 3-way 阶段噪音，紧接着 `Falling back to direct application...` 会成功应用；判据是**退出码**（失败会 `exit 1`）。
+  - 用本机 PortableGit（`C:\Users\Admin\AppData\Local\Programs\WorkBuddy\resources\vendor\PortableGit\cmd\git.exe`，2.55.0）克隆 `aimod-cc/Agent2API` tag `v3.5.0-beta.1`（aba5885），按 CI 的方式逐个 `git apply --3way`：**15 个补丁全部 rc=0**，终态 `update.rs:13-15` 确为 `INDEX_REPO` / `FALLBACK_REPO` 皆指 `vbox-Ai/Aggregateapi`，且**无冲突标记**。
+  - 发布产物级复核：解 b423 的 deb 取 `Applications/Agent2API.app/Agent2API`（66,915,952 字节），逐串命中 `vbox-Ai/Aggregateapi`(0003)、`serve_request`(0009)、`cdn.jsdelivr.net`(0012)、`magpie-dist-index.json`(0013)、`已判定为卡死`(0014)、`下载多次中断`(0015) ⇒ **0003–0015 全部真的进了发布产物**。
+  - 教训：不要用自写的 diff 施加器/序列模拟器判断补丁是否落地（`simulate_patches.py` 会误报：既不会建新文件、也误判部分 hunk），一律用真 `git apply`；判据永远看退出码，不看日志里的 error 行。
+  - 连带：黄条「GitHub 插件清单不是有效 JSON」**不是** 0003 半应用导致，仍未定位；仓库根确实有 `index.json`（1319 字节，sha `ad25d6df…`）。
+- 网页提供商（Tabbit / DeepSeek 网页 / 智谱清言）**不接受 tools**：助手若勾选了工具就会带 `tools` 发出，网页侧回「Tabbit 网页没有原生工具调用接口，请移除 tools / functions，或改用支持工具调用的提供商」。该文案逐字存在于 `agent2api-web-providers.exe`（3,236,768 字节，偏移 2286206）。出路：助手设置→工具→全部取消勾选（纯聊天），或换用支持工具调用的 API 提供商。
