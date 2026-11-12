@@ -4890,3 +4890,23 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
 - 顺带结论（给排查用）：
   - **手机的系统代理对网关无效** —— 网关有自己的出网设置（「设置 → 自动更新」）。下载走 `core::update::client`，`fetch_public`/`fetch_via_candidates` 都从 `resolve_egress_candidates()` 取候选，所以**配了节点就 index 与 tgz 都走节点**；不配就是直连（本线路直连会被 RST）。
   - 黄色横幅「GitHub 源「官方源」限流，请在 N 秒后重试」是 **api.github.com 的限流**（本机实测 `api.github.com` 可用、core 剩余 59/60），只影响"清单刷新"，与下载失败是两件事。
+
+## 步骤 131：出网代理文案改准（它其实也管插件下载）+ 脚本进度显示网关阶段文案 + 0016 出包
+
+- **0016 已推**（`da148d06c`：`0016-magpie-mirror-chain.diff` 5782 B + 本备忘 130）。CI **#424** 全绿：Android ✓ / Plugins ✓ / Web ✓ / **iOS ✓（20 步全过，含「打补丁」→ 0016 按序干净应用、含「编网关守护进程」→ Rust 编过）**；随后派发出包 **#425**（id 43194452172，`embed=1` / `only=store` / `publish=true`，09:46:36Z）。
+- **本机（与手机同一线路）实测下载目标**（结论固化，以后不用重测）：
+  | 目标 | 结果 |
+  |---|---|
+  | `raw.githubusercontent.com/…/dist/index.json` | ❌ 0.1–0.3 秒被重置（WinError 10054） |
+  | `cdn.jsdelivr.net/gh/magpie-community/plugins@dist/index.json` | ❌ 同样被重置 |
+  | `gh-proxy.com/https://raw.githubusercontent.com/…` | ✅ 索引 3,236,270 B / 6.4 秒；tgz 17,411 B / 2.1 秒 |
+  | `ghproxy.net/…` | ✅ 可用 |
+  | `ghfast.top` / `raw.gitmirror.com` / `hub.gitmirror.com` / `gitcdn.top` | ❌ 超时或 DNS 失败 |
+  | `api.github.com/rate_limit` | ✅ core 59/60 ⇒ 黄条「GitHub 源「官方源」限流」是 **API 限流**，与下载失败无关 |
+  端到端：`gh-proxy.com` 取索引（101 支）→ `@magpie-community/opencode-nous-auth` `0.1.3` → `tgz/magpie-community-opencode-nous-auth-0.1.3.tgz` → 本地 sha512 与索引 `integrity` 逐字一致。
+- **出网候选的代码事实**（决定"配节点管不管用"）：`core/update/client.rs::resolve_egress_candidates()`（45 行起）在 `config::update_proxy()` 有值时**只返回那一条候选**（没有直连兜底）；`fetch_public`(246) / `fetch_via_candidates`(265) / `fetch_github`(125，176 行取候选) 都从它取 ⇒ **「更新出网代理」同时作用于插件索引与 tgz 的下载**；而**手机的系统代理对网关无效**（请求由网关发出）。
+- 三处修复（本步改动）：
+  - `ui-shared/plugins-script-progress.tsx`：进度块里**显示 `operation.message`**（网关自己写的阶段文案，例如「正在下载 Magpie 社区脚本插件（gh-proxy 反代）」）。以前完全不显示 ⇒ 卡住时界面上只有一条不动的进度条，看不出卡在哪一步（0016 新写的阶段文案也因此才看得见）。
+  - `mobile/src/pages/update-proxy-sheet.tsx`：说明改成「网关自己发出的下载都走这条线：检查更新 / 下载更新包，以及插件与插件索引（Magpie 分发）的下载。给上游站点的请求走的是账号级的「出网代理」，不在这里；留空保存 = 直连。」—— 原文写「只影响「检查更新 / 下载更新包」」，会把用户往"这个设置救不了插件装不上"上带。
+  - `mobile/src/api/update-proxy.ts`：注释同步，并写明**指定后候选只有这一个**（节点不可用就没有兜底）。
+- 校验：`tsc --noEmit` **0** / `vite build` **0**（`ui/m/mobile.js` 1,685.75 → **1,685.97 kB**）/ `check-mobile-ui.py` **0**。

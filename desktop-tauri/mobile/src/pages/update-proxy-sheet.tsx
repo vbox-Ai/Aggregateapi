@@ -87,7 +87,7 @@ export function UpdateProxySheet({ onClose }: { onClose: () => void }) {
               </Card>
               <Alert variant='default'>
                 <AlertDescription>
-                  {t('只影响「检查更新 / 下载更新包」。网关转发上游走的是账号级的「出网代理」，不在这里。')}
+                  {t('网关自己发出的下载都走这条线：检查更新 / 下载更新包，以及插件与插件索引（Magpie 分发）的下载。给上游站点的请求走的是账号级的「出网代理」，不在这里；留空保存 = 直连。')}
                 </AlertDescription>
               </Alert>
             </>

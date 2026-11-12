@@ -26,6 +26,9 @@ export function ScriptOperationProgress({ operation, t }: { operation: ScriptOpe
         {((operation.received || 0) / 1024 / 1024).toFixed(1)} MiB
       </span> : null}
     </div>
+    {/* 网关自己写的阶段文案（例如"正在下载 Magpie 社区脚本插件（gh-proxy 反代）"）：
+        以前完全不显示 —— 于是"卡住"时界面上只有一条不动的进度条，看不出卡在哪一步。 */}
+    {operation.message ? <p className='m-0 break-words text-xs text-muted-foreground'>{operation.message}</p> : null}
     <Progress value={null} aria-label={stage} />
   </div>
 }
