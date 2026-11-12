@@ -4816,3 +4816,20 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
 后面对「第 295 行」的替换就落到了**原始第 311 行**上，把一行真代码覆盖掉了。发现后从远端重新同步该文件、
 把编辑排成严格降序（并在脚本里加了"顺序不是严格降序就拒绝执行"的断言）再跑一遍。
 教训：行号编辑的前提是"行号在编辑过程中不漂移"；做不到就用**字符串锚点**、别用行号。
+
+#### 记忆点 · 步骤 127（b421 交付：脚本插件任务卡死判定 + 手机端表单补齐）
+
+- `79bc5e199`（手机端补 鉴权 / User-Agent / 代理 + 抽出共用代理表单）推送后 run **#420** 全绿：
+  Android ✓、Plugins ✓、Web ✓、iOS ✓ —— iOS job 里含「构建手机面板 UI（从源码，覆盖上游预编译产物）」这一步 ✓
+  ⇒ 面板源码本身可构建（CI 会用源码覆盖仓库里那份预编译产物，所以提交产物只是给不走 CI 的路径用）。
+- 出包 run **#421**（embed=1 / only=store / publish=true）全绿 ⇒ release **`ios-20261112-b421`**，
+  deb `Agent2API-3.5.0-beta.421-rootful-iphoneos-arm64e.deb`（41233 KB），包内标记 **38/40**
+  （两处 ❌ 仍是既定退役项 `U2 底栏占位`、`底栏加固(position:fixed!important)`）。
+- b421 相对 b417 多两块：**0014**（脚本插件任务卡死判定 + 代际）与**手机端「新建自定义提供商」的三项字段**（鉴权 / User-Agent / 代理，含共用代理表单 hook）。
+- 交付直链：https://github.com/vbox-Ai/Aggregateapi/releases/download/ios-20261112-b421/Agent2API-3.5.0-beta.421-rootful-iphoneos-arm64e.deb
+- 值得记的一点：**0014 落地后，客户端「最近失败」自然就能显示卡死原因** —— 卡死的任务被网关改成
+  `active=false` + `stage=failed` + 带 error 文案，而面板「最近失败」只收 `active===false` 的操作
+  （`mobile/src/pages/PluginsPage.tsx:125` 的 `if (operation.active) continue`）⇒ 不必再改客户端。
+  原先的问题恰好相反：`active` 永远是 true，那条操作**永远进不了**这个列表，所以操作者只看到"一直转"。
+- 仍欠：② 断点续传（`Range`；现有 `client::fetch_*` 内部固定构造请求、带不了 Range 头 ⇒ 需自建 client）；
+  ④ 既有未修：补丁 0003 只应用一半（`packages.rs` 成功、`update.rs:10` 失败）。
