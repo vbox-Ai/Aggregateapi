@@ -4833,3 +4833,26 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
   原先的问题恰好相反：`active` 永远是 true，那条操作**永远进不了**这个列表，所以操作者只看到"一直转"。
 - 仍欠：② 断点续传（`Range`；现有 `client::fetch_*` 内部固定构造请求、带不了 Range 头 ⇒ 需自建 client）；
   ④ 既有未修：补丁 0003 只应用一半（`packages.rs` 成功、`update.rs:10` 失败）。
+
+#### 记忆点 · 步骤 128（补丁 0015：脚本插件下载断点续传）
+
+操作者问过「不能断续在继续进度下载吗？」—— 0012/0013 解决的是「别去下那 2.9 MB」（镜像 + 磁盘缓存），
+这次给**真的会断的场景**补上续传。
+
+`desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs`（只动这一个文件）：
+- 新增 `resumed(transport, url, limit, expected_sha256)`：每次失败都带 `Range: bytes=<已收>-` 重发，最多 4 次；
+  服务端回 **206** 就接着已收字节往后写，回 **200**（忽略 Range）就清空重来；
+  拿到 `Content-Length` 时按「总字节够不够」判定这次是否传完，不够就再续一次。
+- **两个上限分开设**：建连 45 秒（`CONNECT_MS`：镜像「连上但不发数据」就卡在这里）、
+  传输中静止 60 秒（`IDLE_MS`）。都不设成"总时长" —— Bun 运行时那类包有 200 MB，
+  总时长上限会把正常但慢的下载误判成失败。
+- `drain()` 每个分片都调 `operations::download_progress(已收字节)` ⇒ 进度条会动，
+  顺带喂饱 0014 的卡死判定（有进展就不会被判卡死）。
+- 三个入口都改走续传：`bytes()`（Bun 运行时 / models.dev / npm tarball / 图标）、`public_bytes()`（镜像）、
+  `github_bytes()`（GitHub raw）；`npm_metadata()` 与 `read()` 保持原样。
+- 传输通道用 `enum Transport { Public, Official }` 区分（两条路的客户端/凭证/候选逻辑不同，共用的只有续传循环）。
+
+校验：两级干跑 True、交叉校验「原始 → 0012 → 0015 == 目标」True；补丁 8862 字节 / 201 行 diff / 新增 117 行。
+
+教训：**「连接超时」与「传输静默」是两件事** —— 只设前者会让慢速大文件被误杀，
+只设后者会让「连上但不发数据」永远挂着（这正是 0012 修的那个 bug）。

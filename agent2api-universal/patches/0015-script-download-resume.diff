@@ -1,0 +1,201 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
+@@ -3,21 +3,54 @@
+ 
+ use crate::server::core::update::client;
+ 
++/// 建连 / 等响应头的上限：镜像（jsDelivr）在国内有时**连上但不发数据**，
++/// 实测「一直进行中、点了没反应」就是这么来的。45 秒足够下完 2.9 MB 的索引。
++const CONNECT_MS: u64 = 45_000;
++/// 传输中「多久没有新数据」就断开这一次、带上已收字节续传。
++/// 比建连阶段宽一些：慢速线路上两个分片之间隔几十秒是正常的，不该当成断流。
++const IDLE_MS: u64 = 60_000;
++/// 一次下载最多尝试几次（每次失败都从已收字节续传，见 `resumed`）。
++const ATTEMPTS: u32 = 4;
++
++/// 下载通道。两条路的客户端、凭证与候选逻辑都不一样，共用的只有「续传循环」。
++#[derive(Clone, Copy)]
++enum Transport {
++    /// 公网端点（镜像、npm、models.dev…）：复用出网代理，不带 GitHub 凭证。
++    Public,
++    /// GitHub 官方源：走候选源 / 限速冷却 / 镜像切换的专用客户端。
++    Official,
++}
++
++fn user_agent() -> Vec<(String, String)> {
++    vec![(
++        "User-Agent".to_string(),
++        "Agent2API-script-plugins".to_string(),
++    )]
++}
++
++async fn fetch(
++    transport: Transport,
++    url: &str,
++    headers: &[(String, String)],
++) -> Result<reqwest::Response, String> {
++    match transport {
++        Transport::Public => client::fetch_public(url, headers, None).await,
++        Transport::Official => client::fetch_official(url, headers, None)
++            .await
++            .map_err(|error| error.message),
++    }
++}
++
+ pub async fn bytes(
+     url: &str,
+     limit: usize,
+     expected_sha256: Option<&str>,
+ ) -> Result<Vec<u8>, String> {
+-    let headers = vec![(
+-        "User-Agent".to_string(),
+-        "Agent2API-script-plugins".to_string(),
+-    )];
+-    let response = client::fetch_public(url, &headers, None).await?;
+-    read(response, limit, expected_sha256).await
++    resumed(Transport::Public, url, limit, expected_sha256).await
+ }
+ 
+ pub(super) async fn npm_metadata(url: &str) -> Result<Option<Vec<u8>>, String> {
+-    let headers = vec![("User-Agent".to_string(), "Agent2API-script-plugins".to_string())];
++    let headers = user_agent();
+     let response = client::fetch_public(url, &headers, None).await?;
+     if response.status() == reqwest::StatusCode::NOT_FOUND {
+         return Ok(None);
+@@ -28,30 +61,114 @@
+ /// 取一个**非 GitHub** 地址的字节（例如 jsDelivr 这类镜像）。
+ ///
+ /// 为什么不能用 `github_bytes`：那条路走的是 GitHub 专用客户端（候选源 / 限速冷却 / 镜像切换），
+-/// 对第三方域名不适用。这里用通用的 `fetch_public`，仍然带 UA 与状态码检查。
++/// 对第三方域名不适用。这里用通用的 `fetch_public`，仍然带 UA 与状态码检查；
++/// 走 `resumed` ⇒ 被掐断时带 `Range` 续传，不必从 0 重来。
+ pub(super) async fn public_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
+-    let headers = vec![("User-Agent".to_string(), "agent2api".to_string())];
+-    // ⚠️ 必须带超时：镜像（jsDelivr）在国内有时会**连上但不发数据**。
+-    // 传 None 时这条请求会一直等 ⇒ 安装操作卡在"进行中"、面板上既不报错也不结束
+-    // （实测到的"点了直接装不了、没反应"）。45 秒足够下完 2.9 MB 索引。
+-    let response = client::fetch_public(url, &headers, Some(45_000)).await?;
+-    if !response.status().is_success() {
+-        return Err(format!("镜像返回 HTTP {}", response.status().as_u16()));
+-    }
++    resumed(Transport::Public, url, limit, None).await
++}
++
++pub(super) async fn github_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
++    resumed(Transport::Official, url, limit, None).await
++}
++
++/// 带断点续传的下载：每次被掐断都发 `Range: bytes=<已收>-` 接着往后传。
++///
++/// 为什么需要它：这份分发索引约 2.9 MB，`raw.githubusercontent.com` 在部分网络会
++/// 在 2.5–2.8 MiB 处被掐断（实测进度条停在那儿、随后整条操作消失）。没有续传时
++/// 重试只能从 0 开始，于是「获取」看起来永远停在"下载中"。
++///
++/// 收尾判定：拿得到 `Content-Length` 时按"总字节是否够"判断，不够就再续一次；
++/// 拿不到（分块传输）只能认流结束为完成 —— 那种情况至少还有 sha256（若给定）兜底。
++async fn resumed(
++    transport: Transport,
++    url: &str,
++    limit: usize,
++    expected_sha256: Option<&str>,
++) -> Result<Vec<u8>, String> {
++    let mut result: Vec<u8> = Vec::new();
++    let mut last_error = String::new();
++    for _ in 0..ATTEMPTS {
++        let mut headers = match transport {
++            Transport::Official => client::github_headers(),
++            Transport::Public => user_agent(),
++        };
++        if !result.is_empty() {
++            headers.push(("Range".to_string(), format!("bytes={}-", result.len())));
++        }
++        // 建连阶段也要有上限：镜像会"连上但不发数据"，不设上限这里就会一直等。
++        let response = match tokio::time::timeout(
++            std::time::Duration::from_millis(CONNECT_MS),
++            fetch(transport, url, &headers),
++        )
++        .await
++        {
++            Ok(Ok(response)) => response,
++            Ok(Err(error)) => {
++                last_error = error;
++                continue;
++            }
++            Err(_) => {
++                last_error = format!("连接后 {} 秒没有响应", CONNECT_MS / 1000);
++                continue;
++            }
++        };
++        let status = response.status();
++        if !status.is_success() {
++            return Err(format!("下载失败：HTTP {}", status.as_u16()));
++        }
++        if status != reqwest::StatusCode::PARTIAL_CONTENT {
++            // 服务端忽略了 Range（回 200 ⇒ 从头传）：丢掉已收部分，这次的结果为准。
++            result.clear();
++        }
++        let remaining = response.content_length();
++        if remaining.is_some_and(|length| (result.len() as u64).saturating_add(length) > limit as u64)
++        {
++            return Err("下载文件超过允许大小".into());
++        }
++        let target = remaining.map(|length| result.len() as u64 + length);
++        if let Err(error) = drain(response, &mut result, limit).await {
++            last_error = error;
++            continue;
++        }
++        let complete = match target {
++            Some(value) => result.len() as u64 >= value,
++            None => true,
++        };
++        if complete {
++            if let Some(expected) = expected_sha256 {
++                if format!("{:x}", Sha256::digest(&result)) != expected {
++                    return Err("下载文件校验失败，未安装或运行".into());
++                }
++            }
++            return Ok(result);
++        }
++        last_error = format!("传输中断，已收到 {} 字节", result.len());
++    }
++    Err(format!(
++        "下载多次中断（已收到 {} 字节）：{last_error}",
++        result.len()
++    ))
++}
++
++/// 把响应体收进 `result`；每个分片都报一次进度（面板的进度条和"卡死判定"都靠它）。
++async fn drain(
++    response: reqwest::Response,
++    result: &mut Vec<u8>,
++    limit: usize,
++) -> Result<(), String> {
+     let mut stream = response.bytes_stream();
+-    let mut bytes = Vec::new();
+-    while let Some(chunk) = stream.next().await {
+-        let chunk = chunk.map_err(|error| error.to_string())?;
+-        if bytes.len() + chunk.len() > limit { return Err("镜像内容超出大小上限".into()); }
+-        bytes.extend_from_slice(&chunk);
+-    }
+-    Ok(bytes)
+-}
+-
+-pub(super) async fn github_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
+-    let headers = client::github_headers();
+-    let response = client::fetch_official(url, &headers, None).await.map_err(|error| error.message)?;
+-    read(response, limit, None).await
++    loop {
++        let next = tokio::time::timeout(std::time::Duration::from_millis(IDLE_MS), stream.next())
++            .await
++            .map_err(|_| format!("{} 秒没有收到新数据", IDLE_MS / 1000))?;
++        let Some(chunk) = next else { return Ok(()) };
++        let chunk = chunk.map_err(|error| format!("读取下载内容失败：{error}"))?;
++        if result.len().saturating_add(chunk.len()) > limit {
++            return Err("下载文件超过允许大小".into());
++        }
++        result.extend_from_slice(&chunk);
++        super::operations::download_progress(result.len());
++    }
+ }
+ 
+ async fn read(
