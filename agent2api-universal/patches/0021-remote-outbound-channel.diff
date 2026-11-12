@@ -1,0 +1,78 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
+@@ -607,15 +607,23 @@
+         };
+         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+         let (tx, rx) = oneshot::channel();
+-        let run = {
++        let (run, remote) = {
+             let _state = self.lifecycle.lock().unwrap_or_else(|error| error.into_inner());
+             let run = self.current_run().filter(|run| self.is_current_run(run)
+                 && self.running.load(Ordering::Acquire) && !run.failed.load(Ordering::Acquire)
+-                && (!run.is_expected_exit() || method == proto::methods::gateway::SHUTDOWN))
+-                .ok_or_else(|| proto::WireError::with_code("插件进程不可用", proto::WireError::INTERNAL))?;
++                && (!run.is_expected_exit() || method == proto::methods::gateway::SHUTDOWN));
++            // ── 没有子进程时退到远端会话（iOS 上的脚本宿主）─────────────────
++            // iOS 没有 Bun 可执行体，脚本宿主跑在手机里，`current_run()` 永远是空的。
++            // 以前这里只认子进程（`ok_or_else("插件进程不可用")`），于是握手的第一个
++            // `init` 就死在那句话上 —— 而远端会话其实早就接通了。远端只在这时兜底：
++            // 有子进程仍然走子进程，免得手机面板把原生插件包的出站口拽到远端去。
++            let remote = run.is_none() && self.remote_sender().is_some();
++            if run.is_none() && !remote {
++                return Err(proto::WireError::with_code("插件进程不可用", proto::WireError::INTERNAL));
++            }
+             self.pending.lock().map_err(|_| proto::WireError::with_code("回调表被污染", proto::WireError::INTERNAL))?
+                 .insert(id, PendingCall { tx, _lease: lease });
+-            run
++            (run, remote)
+         };
+         let frame = proto::Frame {
+             id,
+@@ -623,7 +631,11 @@
+             params: Some(params),
+             ..Default::default()
+         };
+-        if let Err(e) = self.write_for_run(frame, run).await {
++        let written = match run {
++            Some(run) => self.write_for_run(frame, run).await,
++            None => self.write(frame).await,
++        };
++        if let Err(e) = written {
+             if let Ok(mut map) = self.pending.lock() {
+                 map.remove(&id);
+             }
+@@ -744,14 +756,18 @@
+         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+ 
+-        let run = {
++        let (run, remote) = {
+             let _state = self.lifecycle.lock().unwrap_or_else(|error| error.into_inner());
+             let run = self.current_run().filter(|run| self.is_current_run(run) && self.ready()
+-                && !run.failed.load(Ordering::Acquire) && !run.is_expected_exit())
+-                .ok_or_else(|| "插件进程不可用".to_string())?;
++                && !run.failed.load(Ordering::Acquire) && !run.is_expected_exit());
++            // 与 `call_coded` 同理：没有子进程时走远端会话（iOS 脚本宿主在手机里）。
++            let remote = run.is_none() && self.remote_sender().is_some();
++            if run.is_none() && !remote {
++                return Err("插件进程不可用".to_string());
++            }
+             self.streams.lock().map_err(|_| "流式表被污染".to_string())?
+                 .insert(id, StreamState { tx: event_tx, _lease: lease, closed: false });
+-            run
++            (run, remote)
+         };
+ 
+         let (written, write_result) = oneshot::channel();
+@@ -766,7 +782,10 @@
+         };
+         let host = self.clone();
+         let write = crate::spawn_task(async move {
+-            let result = host.write_for_run(frame, run).await;
++            let result = match run {
++                Some(run) => host.write_for_run(frame, run).await,
++                None => host.write(frame).await,
++            };
+             let _ = written.send(result.is_ok());
+             result
+         }).await.map_err(|error| std::io::Error::other(format!("插件写入任务中断：{error}")))

@@ -5054,3 +5054,41 @@ options.transport.send(line)
 - **"一行一个 JSON"的协议里，行尾是协议的一部分。** 任何"先拼起来再喂给解析器"的地方都得自己补行尾 —— `join` 不会替你补，而缺了行尾在 `read_frame` 眼里不是"少一行"，是**坏帧**。
 - 中间层（手机面板）要么是**纯管道**，要么**明确它替谁处理**。宿主是"网关的宿主"，帧必须回到网关；面板顺手把它消费掉，等于把网关的应答偷走了 —— 症状是网关侧超时，而面板这边看起来一切正常。
 - **端到端链条验证值得每次都做**：一次同时证明"补丁能按序应用"和"最终落在我要的文本上"，比逐个人工核对可靠得多（这次 20 个补丁、3 个文件，一条命令给结论）。
+### 步骤 136 · 补丁 0021：出站通道在「没有子进程」时退到远端会话
+
+现象（真机，2026-11-13 04:19 操作者报）：`插件握手失败：插件进程不可用；原安装记录已保留`。
+
+**逐字定位**（在上游 + 0001..0020 的树上按字符串搜，共 3 处构造这句话）：
+
+- `plugin_host/lifecycle.rs:304`：`start_remote()` 里包住 `call_coded(INIT)` 的那一句 —— `.and_then(|result| result.map_err(|error| format!("插件握手失败：{}", error.message)))`
+- `plugin_host/mod.rs:615`：`call_coded` 里 —— `self.current_run().filter(...).ok_or_else(|| proto::WireError::with_code("插件进程不可用", proto::WireError::INTERNAL))?`
+- `plugin_host/mod.rs:751`：`open_stream` 里同款 —— `.ok_or_else(|| "插件进程不可用".to_string())?`
+
+⇒ 这条错误同时证明两件事：**① 手机面板确实接入了**（`start_remote()` 被执行 ⇒ `has_remote() == true`）；**② 我 0011/0018 留了一个真缺口** —— **出站**（网关 → 宿主）这一路只认子进程 `current_run()`，而 iOS 上脚本宿主跑在手机里、根本没有 `ProcessRun`，于是握手的第一个 `init` 就死在这一句上。（`Host::write` 早就支持远端会话，只是 `call_coded` / `open_stream` 没走它。）
+
+**改法**（`core/plugin_host/mod.rs`，4 个锚点 / 2 个函数）
+
+```rust
+let remote = run.is_none() && self.remote_sender().is_some();
+if run.is_none() && !remote {
+    return Err(proto::WireError::with_code("插件进程不可用", proto::WireError::INTERNAL));
+}
+…
+let written = match run {
+    Some(run) => self.write_for_run(frame, run).await,
+    None => self.write(frame).await,
+};
+```
+
+`open_stream` 同型（`host.write_for_run` / `host.write`）。**远端只做兜底**：有子进程仍然走子进程，免得手机面板把原生插件包的出站口拽到远端去。
+
+**校验**
+
+- 锚点各自唯一 + 两级干跑（上下文/删除行逐字匹配、施加结果 == 目标）；
+- **端到端链条**（`verify_chain21.py`：真 git + `gh-proxy` clone 上游 `v3.5.0-beta.1`）：**21 个补丁按序 `git apply --3way` 全部 rc=0**；归一化行尾后逐字节比对 —— `core/plugin_host/mod.rs` == `_patch21_target_plugin_host_mod.rs` ✓、`script/host/main.mjs` == `_patch19_target_main.mjs` ✓、`api/plugin_host.rs` == `_patch20_target_api_plugin_host.rs` ✓。
+
+**教训**
+
+- **"出站"和"入站"要一起改。** 0009–0020 把"手机 → 网关"这条**上行**做通了（远端桥、会话挂载、帧容忍、行尾、面板 relay），但"网关 → 宿主"这条**出站**还写死走子进程 —— 半条通道等于全不通，而且症状出现在最后一步（握手），前面的修复看起来全都"没效果"。
+- **一句错误文案能直接定位到一行代码**，前提是那句文案只在一处构造：这次 `插件进程不可用` 全仓只有 3 处，其中只有 `call_coded` 那一处会出现在握手失败路径上，所以拿到用户那一句话就等于拿到了行号。
+- **PortableGit 全局 `core.autocrlf=true`** ⇒ clone 出来的工作树是 **CRLF**，而我生成补丁用的文本是 **LF**（仓库 blob 也是 LF）。比对必须归一化行尾或加 `-c core.autocrlf=false`，否则满屏假差异（`verify_p19_git.py` 当时带了那个参数，所以没踩到；这次 `verify_chain21.py` 忘了，白查一轮）。
