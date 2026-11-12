@@ -1,0 +1,116 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/host/main.mjs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/host/main.mjs
+@@ -1,6 +1,6 @@
+ import { listen, makeCall, forgetCall, cancelAll, send } from "./wire.mjs"
+ import { scope, installFetch, cleanup } from "./fetch.mjs"
+-import { load, provider, packages, packageList } from "./loader.mjs"
++import { load, provider, providers, packages, packageList } from "./loader.mjs"
+ import { updateSettings } from "./environment.mjs"
+ import { dispatch, safeMessage } from "./provider.mjs"
+ import { stop } from "./login.mjs"
+@@ -38,7 +38,24 @@
+       try {
+         let result
+         if (frame.method === "init") {
+-          if (initialized) throw new Error("Script host is already initialized")
++          // ── 为什么允许"重新初始化" ─────────────────────────────────────
++          // 子进程形态下，网关每次配置变更都会换一个新进程（`init` 只会来一次）；
++          // 远端宿主形态（iOS：宿主跑在手机 Worker 里）是**长驻**的，网关会为每次
++          // 配置变更重新握手 —— 这正是"装第二支插件 / 改一次插件设置"要走的路径。
++          // 这里按「先释放上一批，再加载新的」处理，清理动作与 shutdown 分支一致，
++          // 只是不退出进程：宿主在手机里没有"再启一个"的机会。
++          if (initialized) {
++            for (const record of packages) {
++              for (const id of record.providers) providers.delete(id)
++              record.controller.abort()
++            }
++            stop()
++            cancelAll()
++            stopLocalProcesses()
++            packages.length = 0
++            providers.clear()
++            initialized = false
++          }
+           result = await load(params.packages, { ...params, dataDir: params.env?.data_dir })
+           initialized = true
+         } else if (!initialized) throw new Error("Script host is not initialized")
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -70,15 +70,6 @@
+     REMOTE_INBOX.get_or_init(|| std::sync::Mutex::new(None))
+ }
+ 
+-fn host_or_error() -> Result<std::sync::Arc<crate::server::core::plugin_host::Host>, Response> {
+-    script::script_host().ok_or_else(|| {
+-        error_response(
+-            "这台网关没有脚本宿主（脚本插件可能未启用）",
+-            StatusCode::SERVICE_UNAVAILABLE,
+-        )
+-    })
+-}
+-
+ /// 打开远端宿主会话：挂上出站口，交由手机发 `init` 完成握手。
+ ///
+ /// ── 为什么不再要求"脚本宿主已存在" ──────────────────────────────
+@@ -105,27 +96,44 @@
+ }
+ 
+ /// 上行：把手机端宿主发出的帧交给同一套回调处理。
++///
++/// ── 为什么宿主实例缺席时也能走到这里 ────────────────────────────
++/// 手机刚接入、安装还没开始时，手机上那份宿主已经在发启动日志与启动进度事件
++/// （`main.mjs` 把 `console.*` 改写成 `send({ id: 0, event: "log" })`）。这些帧
++/// 没有宿主实例可以投递 —— 事件帧按丢失处理即可；若为此回 503，手机侧会把整条
++/// 上行通道判成失败，接入也跟着失败。
+ pub async fn frames(
+     State(_state): State<ServerState>,
+     _headers: HeaderMap,
+     Json(body): Json<FramesBody>,
+ ) -> Response {
+-    let host = match host_or_error() {
+-        Ok(host) => host,
+-        Err(response) => return response,
+-    };
++    let host = script::script_host();
+     // 拼成一个流再按帧读：proto 的读取接口吃的是 AsyncRead（lifecycle.rs:238 就是这么用的），
+     // 逐行自己解析等于重写一遍协议。
+     let payload = body.lines.join("\n");
+     let bytes = payload.as_bytes();
+     let mut reader = tokio::io::BufReader::new(bytes);
+     let mut accepted = 0usize;
++    let mut ignored = 0usize;
+     loop {
+         match proto::read_frame(&mut reader).await {
+-            Ok(Some(frame)) => {
+-                host.serve_remote_frame(frame).await;
+-                accepted += 1;
+-            }
++            Ok(Some(frame)) => match &host {
++                Some(host) => {
++                    host.serve_remote_frame(frame).await;
++                    accepted += 1;
++                }
++                None => {
++                    if matches!(frame.kind(), proto::FrameKind::Event) {
++                        // 启动期的 log / startup 事件：没有宿主可投递，按丢失计
++                        ignored += 1;
++                    } else {
++                        return error_response(
++                            "这台网关还没有脚本宿主实例（脚本插件未启用或尚未开始安装）",
++                            StatusCode::SERVICE_UNAVAILABLE,
++                        );
++                    }
++                }
++            },
+             Ok(None) => break,
+             Err(error) => {
+                 return error_response(
+@@ -135,7 +143,7 @@
+             }
+         }
+     }
+-    ok_json(json!({ "accepted": accepted }))
++    ok_json(json!({ "accepted": accepted, "ignored": ignored }))
+ }
+ 
+ /// 下行：把网关（与插件）发出的帧流给手机。

@@ -4960,3 +4960,51 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
 - 跨"实例重建"的东西不能挂在实例上（会话、句柄、锁都一样）：先问"这个对象在生命周期里会不会被换掉"。
 - 报错里的 `os error 2` 不是"路径写错"，而是"根本没有可执行文件"—— 这类**平台缺口**要先在源码里找分支表（`bun.rs::asset()`），再看调用链怎么兜。
 - 一个"没有就 503"的检查 + 一个"只在成功路径里登记"的句柄放在一起，就是死锁配方：凡"先检查资源存在、再从别处创建资源"的握手，都要问一句"两条路谁先谁后"。
+
+### 步骤 134 · 补丁 0019：远端宿主允许"重新初始化" + 上行帧在无宿主实例时不再 503
+
+0018 只解决了死锁的一半（"接入要宿主"）。顺着同一条链再查，还有两处会让真机上**第二次操作**失败：
+
+**问题一：长驻宿主被第二次 `init` 打回。**
+上游 `host/main.mjs` 的 `init` 分支写死：
+
+```js
+if (frame.method === "init") {
+  if (initialized) throw new Error("Script host is already initialized")
+  …
+}
+```
+
+子进程形态下这没问题 —— 网关每次配置变更（安装 / 启用 / 改插件设置）都会**换一个新进程**，`init` 只会来一次。
+但远端宿主（iOS：宿主跑在手机 Worker 里）是**长驻**的，网关会为每次配置变更重新握手 ⇒
+"装第二支插件 / 改一次插件设置"必然回「Script host is already initialized」。
+
+**问题二：宿主实例还没建起来时，手机上那份宿主的启动帧会把整条上行通道打回 503。**
+`main.mjs` 启动时把 `console.*` 改写成 `send({ id: 0, event: "log" })`，`load()` 还会发 `{ event: "startup" }`。
+手机刚接入、安装还没开始时，这些帧到达 `api/plugin_host.rs::frames`，而那里先 `host_or_error()` ⇒
+**503「这台网关没有脚本宿主」** ⇒ 手机侧把上行判成失败，接入跟着失败。
+
+**0019 改法（两个文件）**
+
+- `core/plugin_host/script/host/main.mjs`：`init` 分支支持「释放再加载」——
+  照 `shutdown` 分支的清理动作（`record.controller.abort()` + `stop()` + `cancelAll()` + `stopLocalProcesses()`），
+  外加 `packages.length = 0` 与 `providers.clear()`、`initialized = false`，**但不退出进程**。
+  子进程形态每次都是新进程，走不到这条分支 ⇒ 行为不变（只多了一次"本来不会发生"的清理）。
+- `api/plugin_host.rs`：`frames` 不再要求宿主实例；实例缺席时**事件帧按丢失计**（回执里给 `ignored` 计数），
+  其余帧仍回 503（应答不能静默丢，否则网关侧会一直等）；`host_or_error()` 随之删除。
+
+**校验**：锚点唯一性断言 + 两级干跑（上下文/删除行逐字匹配、施加结果 == 目标）通过；
+真 git（PortableGit 2.55.0，`-c core.autocrlf=false` 模拟 CI 的 Linux 克隆）在只含两份基线的临时仓库里
+`git apply --check` / `git apply` 均 rc=0，结果与目标逐字节一致；
+另做残留检查（`already initialized` 已消失、`providers.length = 0` / `providers.clear()` 在位、
+`host_or_error` 已删净、`FrameKind::Event` 分支在位、503 文案仍在）。
+
+**教训**：
+
+- **行尾**也是补丁的一部分：PortableGit 全局 `core.autocrlf=true`，工作树里 `main.mjs` 是 CRLF，而仓库 blob 是 LF。
+  生成 hunk 前必须按 LF 归一，否则锚点全部命中 0 次（这次就踩了：`js:init … 命中 0 次`）。
+  归一后与上游解包副本逐字比对一次，才算基准可信。
+- 上游若把某个对象当成"每次都换新的"（子进程），把它搬到长驻容器里（Worker）就必须**连它的初始化契约一起搬**：
+  `init` 只许一次这件事是子进程语义，不是协议语义。
+- 一个"没有就 503"的前置检查，会把"还没到那一步"和"真的不可用"混成同一件事。
+  只要那条通道上还有**可以静默丢弃**的信息（日志、进度事件），就按"分类型处理"而不是"一刀切失败"。
