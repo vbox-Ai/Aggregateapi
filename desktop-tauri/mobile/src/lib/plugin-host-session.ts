@@ -163,6 +163,11 @@ export async function startPluginHost(options: {
     if (data.kind === 'out') {
       for (const line of String(data.text).split('\n')) {
         if (!line.trim()) continue
+        // 宿主 stdout 上的每一行就是协议帧，而远端宿主（iOS）的对端是**网关** ——
+        // 网关发来的 `init` 由宿主应答，应答只有送回网关，握手才会完成。
+        // 曾经这里只把帧喂给面板自己的 handlers：帧被面板吞掉，网关一直等不到应答，
+        // `start_remote` 直到超时，整次安装以「启动插件进程失败」收场。
+        options.transport.send(line)
         let frame: Record<string, unknown>
         try { frame = JSON.parse(line) } catch { continue }
         if (frame.method) {

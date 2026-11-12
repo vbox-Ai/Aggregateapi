@@ -5008,3 +5008,49 @@ if (frame.method === "init") {
   `init` 只许一次这件事是子进程语义，不是协议语义。
 - 一个"没有就 503"的前置检查，会把"还没到那一步"和"真的不可用"混成同一件事。
   只要那条通道上还有**可以静默丢弃**的信息（日志、进度事件），就按"分类型处理"而不是"一刀切失败"。
+### 步骤 135 · 补丁 0020 + 手机端：上行帧补行尾 & 宿主出站帧真正上行（远端宿主握手的最后两刀）
+
+0018 / 0019 修掉了「接入要宿主、宿主要有接入」的死锁，但把整条链从头到尾串起来读一遍，还有两处**必然**让握手走不完 —— 它们都不在下载、不在安装，而在"帧怎么过线"：
+
+**一、网关侧：批量上行帧缺行尾（补丁 0020）**
+
+`proto::read_frame` 的语义是「读到 `\n` 才算一帧」，而且 **EOF 时缓冲区还剩半截数据会直接报错**：
+
+```rust
+// crates/provider-protocol/src/frame.rs（v3.4.0，Cargo.lock 指向的真身）
+if piece.last() == Some(&b'\n') { break }              // 有换行 → 这一帧完整
+if n == 0 { return Err(UnexpectedEof, "帧在中途被截断（对端未发完就关闭了）") }
+```
+
+手机端是把宿主 stdout 的每一行**剥掉 `\n`** 之后 POST 上来的（`plugin-host-session.ts`：`String(data.text).split('\n')`），网关收到后 `body.lines.join("\n")` —— **最后一行没有行尾**。于是每批上行都以 `Err(UnexpectedEof)` 收场 ⇒ 端点回 400 ⇒ 客户端把整条通道判死。
+
+改法（`api/plugin_host.rs`）：
+
+```rust
+let payload = format!("{}\n", body.lines.join("\n"));
+```
+
+**二、手机端：宿主的出站帧被面板吞掉，从不上行**
+
+`plugin-host-session.ts` 收到 Worker 的 `{ kind: 'out' }` 后，只把帧喂给面板自己的 handlers（`requestHandlers` / `eventHandlers` / `pending`），**从不调用 `transport.send`**。
+
+远端宿主模式下，宿主的对端是**网关**：网关发来的 `init` 由宿主应答，而这条应答被面板吞掉 ⇒ 网关的 `start_remote` 一直等到 60 秒超时，整次安装最后以「启动插件进程失败」收场。
+
+改法：解析前先原样上行 ——
+
+```ts
+// 宿主 stdout 上的每一行就是协议帧，而远端宿主（iOS）的对端是**网关**。
+options.transport.send(line)
+```
+
+**校验**
+
+- 0020：锚点唯一断言 + 两级干跑（上下文/删除行逐字匹配、施加结果 == 目标）；
+- **端到端链条验证**（`verify_chain20.py`，真 git）：全新 clone 上游 `v3.5.0-beta.1`，把 `agent2api-universal/patches/*.diff` 按序 `git apply --3way` ⇒ **20 个补丁全部 rc=0**，应用结果与我的目标文本**逐字节一致**（`api/plugin_host.rs` 189 行、`core/plugin_host/mod.rs` 847 行、`script/host/main.mjs` 101 行）；
+- 手机端：`tsc --noEmit` 0 / `vite build` 0（`ui/m/mobile.js` 1,686,725 → 1,686,745 B）/ `check-mobile-ui.py` 0。
+
+**教训**
+
+- **"一行一个 JSON"的协议里，行尾是协议的一部分。** 任何"先拼起来再喂给解析器"的地方都得自己补行尾 —— `join` 不会替你补，而缺了行尾在 `read_frame` 眼里不是"少一行"，是**坏帧**。
+- 中间层（手机面板）要么是**纯管道**，要么**明确它替谁处理**。宿主是"网关的宿主"，帧必须回到网关；面板顺手把它消费掉，等于把网关的应答偷走了 —— 症状是网关侧超时，而面板这边看起来一切正常。
+- **端到端链条验证值得每次都做**：一次同时证明"补丁能按序应用"和"最终落在我要的文本上"，比逐个人工核对可靠得多（这次 20 个补丁、3 个文件，一条命令给结论）。

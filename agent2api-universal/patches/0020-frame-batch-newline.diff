@@ -1,0 +1,15 @@
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -110,7 +110,11 @@
+     let host = script::script_host();
+     // 拼成一个流再按帧读：proto 的读取接口吃的是 AsyncRead（lifecycle.rs:238 就是这么用的），
+     // 逐行自己解析等于重写一遍协议。
+-    let payload = body.lines.join("\n");
++    // 每帧都要带行尾：`proto::read_frame` 读到 EOF 时若缓冲区还剩半截数据，会直接判
++    // 「帧在中途被截断（对端未发完就关闭了）」—— 手机端是把宿主 stdout 的每一行**剥掉 `\n`**
++    // 之后 POST 上来的，`join` 出来的最后一行没有行尾，于是每次上行都以 400 收场
++    // （客户端据此把整条通道判死）。这里统一补一个行尾，与子进程路径逐字节等价。
++    let payload = format!("{}\n", body.lines.join("\n"));
+     let bytes = payload.as_bytes();
+     let mut reader = tokio::io::BufReader::new(bytes);
+     let mut accepted = 0usize;
