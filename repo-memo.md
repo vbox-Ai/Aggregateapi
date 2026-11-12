@@ -4785,3 +4785,34 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
 
 **与 0012/0013 的关系**：0012 修的是"镜像请求没超时"（卡死的**因**），0014 修的是
 "不管什么原因卡住都得让用户看见并能重试"（**兜底**）。两者互补，都要。
+
+#### 记忆点 · 步骤 126（手机端补齐「鉴权 / User-Agent / 代理」：先抽出共用代理表单）
+
+这三项是桌面端「新建自定义提供商」本来就有、手机端缺的字段（b417 交付时列的待办③）。本次只动手机端。
+
+**先抽共用件**（否则这套代理逻辑要在手机端抄第二份）：新增
+`desktop-tauri/mobile/src/components/account-proxy-fields.tsx`，把动态登录表单里那套代理表单**原样抽出**成
+`useAccountProxy({ locked, label?, formatError? })` ⇒ `{ payload(), node, reading, reset() }`；
+`AccountProxyPayload = null | { source:'pool';proxyId } | { source:'custom';protocol;host;port;username;password }`。
+要点：只在选「已保存的代理」时才拉代理池（默认直连的用户不该为此多打一次请求）；池里那条
+`enabled === false || resolveError` 当场抛错（免得把已知坏的代理存进账号，之后每次请求都失败还查不出原因）；
+「填入系统代理」读的是**网关那台机器**的系统代理 —— 出网请求由网关发出，手机上的代理设置跟这条链路无关。
+
+**调用方一 · 动态登录表单**（`pages/add-account-dynamic-sheet.tsx`）：改用这个 hook —— 删掉 16 个 state、
+`importSystemProxy()`、代理池 effect、`proxyPayload()` 与 36 行 JSX；四处 `setPassword('')` 换成 `proxy.reset()`；
+`locked` 改成 `busy || Boolean(flow) || proxy.reading`。文件 712 → 606 行。
+
+**调用方二 · 新建自定义提供商**（`pages/CustomProvidersPage.tsx` 的 `CreateProviderSheet`）补三项，
+并对齐网关契约（`api/custom_providers.rs`、`account_store/custom_accounts.rs`）：
+1. 「该上游无需鉴权（不发送鉴权头）」开关 ⇒ 提交体 `noAuth: true`，**与 `apiKey` 互斥**
+   （勾了就不再要求填 Key，也不建带 Key 的账号；网关侧这两个字段本来就是二选一归一）；
+2. `User-Agent`（可选，非空才写 `userAgent`，只作用于这一家的账号）；
+3. 代理块（提交体 `proxy: null | {…}`，与桌面端同形态）。
+
+**验证**：`tsc --noEmit` 0 · `vite build` 0（mobile.js 1,686.58 → **1,685.75 kB**，变小与"抽出一份共用件、删掉一份重复表单"一致）
+· `scripts/check-mobile-ui.py` 0。同次提交重建产物 `desktop-tauri/ui/m/{mobile.js,mobile.css}`。
+
+**踩过的坑（值得记）**：做**行号级**替换时**必须按起始行号严格降序执行** —— 这次我先删了 260-275 行（16 行），
+后面对「第 295 行」的替换就落到了**原始第 311 行**上，把一行真代码覆盖掉了。发现后从远端重新同步该文件、
+把编辑排成严格降序（并在脚本里加了"顺序不是严格降序就拒绝执行"的断言）再跑一遍。
+教训：行号编辑的前提是"行号在编辑过程中不漂移"；做不到就用**字符串锚点**、别用行号。

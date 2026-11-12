@@ -1,7 +1,7 @@
 /** 动态登录入口；列表只从 session 实际运行时摘要派生，不登记第二份 provider。 */
 import { useEffect, useRef, useState } from 'react'
 import {
-  Alert, AlertDescription, AlertTitle, Badge, Button, Card, Input, Label, Select,
+  Alert, AlertDescription, AlertTitle, Badge, Button, Input, Label, Select,
   SelectContent, SelectItem, SelectTrigger, SelectValue, Sheet, SheetBody, SheetContent,
   SheetHeader, SheetTitle, Spinner,
 } from '@ui'
@@ -24,10 +24,9 @@ import {
 import { hasStaticConfig } from '../lib/add-account-static'
 import { AddAccountStaticSheet } from './add-account-static-sheet'
 import { apiCall } from '../api/client'
-import { fetchProxyPool, type PoolItem } from '../api/gateway'
-import { readSystemProxy } from '../../../ui-shared/proxy-system'
 import { PluginLoginInteraction } from '../../../ui-shared/plugin-login-interaction'
 import { requestProviderPreset } from '../lib/preset-request'
+import { useAccountProxy } from '../components/account-proxy-fields'
 import { t } from '../i18n'
 
 /** 桌面端 `ui/preset-providers.js` 暴露的预置清单（同一份文件，见 apk.html 的 script 标签） */
@@ -257,22 +256,6 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
   const [selected, setSelected] = useState('')
   const [values, setValues] = useState<Record<string, Record<string, string>>>({})
   const [name, setName] = useState('')
-  const [proxyMode, setProxyMode] = useState('direct')
-  /** 正在读取网关所在机器的系统代理（点了「填入系统代理」之后） */
-  const [readingSystemProxy, setReadingSystemProxy] = useState(false)
-  const [systemProxyError, setSystemProxyError] = useState('')
-  /** 选中的「已保存的代理」id（网关代理池里的那一条） */
-  const [proxyId, setProxyId] = useState('')
-  /** 代理池快照；null = 还没读到 */
-  const [proxyPool, setProxyPool] = useState<PoolItem[] | null>(null)
-  const [proxyPoolError, setProxyPoolError] = useState('')
-  /** 手动「重新读取」计数：加一就重新拉一次代理池 */
-  const [poolReload, setPoolReload] = useState(0)
-  const [protocol, setProtocol] = useState('http')
-  const [host, setHost] = useState('')
-  const [port, setPort] = useState('')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [progress, setProgress] = useState('')
@@ -292,7 +275,11 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
   const method = methods.methods.find(item => item.id === selected) || methods.methods[0]
   const inputs = method ? values[method.id] || {} : {}
   const hasNamePrompt = Boolean(method?.prompts.some(prompt => prompt.key === 'name'))
-  const locked = busy || Boolean(flow) || readingSystemProxy
+  /** 出网线路是**网关那台机器**的（请求由网关发出），与手机自身代理无关；表单与校验由共用 hook 提供 */
+  const proxy = useAccountProxy({
+    locked: busy || Boolean(flow), label: t('账号 / 登录出网代理'), formatError: dynamicLoginError,
+  })
+  const locked = busy || Boolean(flow) || proxy.reading
 
   function clearCallback(): void {
     if (callbackInputRef.current) callbackInputRef.current.value = ''
@@ -374,7 +361,7 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
         flowRef.current = ''
         clearCallback()
         setValues({})
-        setPassword('')
+        proxy.reset()
         setFlow(null)
         setProgress('')
         setError(dynamicLoginError(failure))
@@ -385,70 +372,10 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
     return () => { live = false; if (timer) clearTimeout(timer) }
   }, [flow, identity, provider])
 
-  /**
-   * 把网关所在机器的系统代理填进表单。读的是**网关机器**的代理（不是手机的），
-   * 因为出网请求由网关发出 —— 手机上的代理设置跟这条链路无关。
-   */
-  async function importSystemProxy() {
-    if (locked || submitting.current) return
-    submitting.current = true
-    setReadingSystemProxy(true)
-    setSystemProxyError('')
-    try {
-      const proxy = readSystemProxy(await apiCall('/api/proxies/system'), t)
-      if (!mounted.current || serverIdentity() !== identity) return
-      setProxyMode('custom')
-      setProtocol(proxy.protocol)
-      setHost(proxy.host)
-      setPort(String(proxy.port))
-      setUsername(proxy.username)
-      setPassword(proxy.password)
-    } catch (failure) {
-      if (mounted.current && serverIdentity() === identity) setSystemProxyError(dynamicLoginError(failure))
-    } finally {
-      submitting.current = false
-      if (mounted.current && serverIdentity() === identity) setReadingSystemProxy(false)
-    }
-  }
-
-  // 只有真的选了「已保存的代理」才去读代理池 —— 默认直连的用户不该为此多打一次请求。
-  useEffect(() => {
-    if (proxyMode !== 'pool') return
-    const controller = new AbortController()
-    setProxyPoolError('')
-    void fetchProxyPool(controller.signal).then(result => {
-      if (!controller.signal.aborted && serverIdentity() === identity) setProxyPool(result.items || [])
-    }).catch(failure => {
-      if (!controller.signal.aborted && serverIdentity() === identity) {
-        setProxyPool([])
-        setProxyPoolError(dynamicLoginError(failure))
-      }
-    })
-    return () => controller.abort()
-  }, [proxyMode, identity, poolReload])
-
-  function proxyPayload(): unknown {
-    if (proxyMode === 'direct') return null
-    if (proxyMode === 'pool') {
-      // 池里那一条自己带着是否启用、解析是否失败 —— 不可用的**当场拦下**，
-      // 否则会把一个已知坏的代理存进账号，之后每次请求都失败还查不出原因。
-      if (!proxyId) throw new Error(t('请先选择已保存的代理'))
-      const selected = proxyPool?.find(item => item.id === proxyId)
-      if (!selected || selected.enabled === false || selected.resolveError) {
-        throw new Error(t('当前代理不可用，请重新选择'))
-      }
-      return { source: 'pool', proxyId }
-    }
-    const number = Number(port)
-    if (!host.trim()) throw new Error(t('请填写代理主机地址'))
-    if (!Number.isInteger(number) || number < 1 || number > 65535) throw new Error(t('代理端口必须是 1-65535 的整数'))
-    return { source: 'custom', protocol, host: host.trim(), port: number, username: username.trim(), password }
-  }
-
   async function finish(warning = '') {
     clearCallback()
     setValues({})
-    setPassword('')
+    proxy.reset()
     setProgress('')
     await store.refresh(true)
     if (serverIdentity() !== identity) return
@@ -467,8 +394,8 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
     clearCallback()
     try {
       const fields = readInputs(method, inputs)
-      const proxy = proxyPayload()
-      const input = { provider, methodIndex: method.methodIndex!, inputs: fields, proxy }
+      const proxyBody = proxy.payload()
+      const input = { provider, methodIndex: method.methodIndex!, inputs: fields, proxy: proxyBody }
       if (method.type === 'api') {
         if (method.localOnly) throw new Error(t('插件返回了无效的登录方式，请更新插件或联系作者'))
         const remark = hasNamePrompt ? fields.name : name.trim()
@@ -520,7 +447,7 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
     const state = flow.state
     clearCallback()
     setValues({})
-    setPassword('')
+    proxy.reset()
     setCanceling(true)
     try {
       await cancelDynamicLogin(state)
@@ -612,7 +539,7 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
       <AlertDescription>{methods.reason}</AlertDescription></Alert> : null}
     {method ? <>
       {hideMethodPicker ? null : <Select value={method.id} disabled={locked} onValueChange={value => {
-        setSelected(value || ''); setValues({}); setPassword(''); clearCallback(); setError('')
+        setSelected(value || ''); setValues({}); proxy.reset(); clearCallback(); setError('')
       }}>
         <SelectTrigger className='w-full' aria-label={t('账号登录方式')}><SelectValue>{methodLabel(method)}</SelectValue></SelectTrigger>
         <SelectContent>{methods.methods.map(item => <SelectItem key={item.id} value={item.id}>{methodLabel(item)}</SelectItem>)}</SelectContent>
@@ -642,42 +569,8 @@ function DynamicForm({ provider, label, source, onAdded, onStaticFallback, hideM
       {method.type === 'api' && !hasNamePrompt ? <Label className='flex flex-col items-start gap-1.5'>{t('备注名')}
         <Input value={name} maxLength={100} disabled={locked} onChange={event => setName(event.currentTarget.value)} placeholder={t('可选，留空使用账号昵称')} />
       </Label> : method.type === 'oauth' && !hasNamePrompt ? <p className='text-xs text-subtle'>{t('账号名由插件自动获取，添加后可修改。')}</p> : null}
-      <Label>{t('账号 / 登录出网代理')}</Label>
-      <Select value={proxyMode} disabled={locked} onValueChange={value => setProxyMode(value || 'direct')}>
-        <SelectTrigger className='w-full'><SelectValue>{proxyMode === 'pool' ? t('已保存的代理') : proxyMode === 'custom' ? t('自定义') : t('无代理（直连）')}</SelectValue></SelectTrigger>
-        <SelectContent><SelectItem value='direct'>{t('无代理（直连）')}</SelectItem><SelectItem value='pool'>{t('已保存的代理')}</SelectItem><SelectItem value='custom'>{t('自定义')}</SelectItem></SelectContent>
-      </Select>
-      <Button size='sm' variant='outline' disabled={locked} className='self-start'
-        onClick={() => void importSystemProxy()}>
-        {readingSystemProxy ? <Spinner /> : null}{t('填入系统代理')}
-      </Button>
-      <p className='text-xs text-subtle'>{t('读取网关电脑当前的 HTTPS 系统代理，填入自定义地址；后续系统设置变化不会自动同步。')}</p>
-      {systemProxyError ? <p className='text-xs text-destructive' role='alert'>{systemProxyError}</p> : null}
-      {proxyMode === 'pool' ? <div className='flex flex-col gap-2'>
-        <Select value={proxyId} disabled={locked || !proxyPool?.length} onValueChange={value => setProxyId(value || '')}>
-          <SelectTrigger className='w-full' aria-label={t('代理')}><SelectValue>{proxyPool?.find(item => item.id === proxyId)?.name
-            || (proxyId ? t('当前代理不可用，请重新选择') : proxyPool === null ? t('正在读取…') : t('请选择代理'))}</SelectValue></SelectTrigger>
-          <SelectContent>{(proxyPool || []).map(item => <SelectItem key={item.id} value={item.id}
-            disabled={item.enabled === false || Boolean(item.resolveError)}>{item.name}</SelectItem>)}</SelectContent>
-        </Select>
-        {proxyPoolError ? <p className='text-xs text-destructive'>{proxyPoolError}</p>
-          : proxyPool?.length === 0 ? <p className='text-xs text-subtle'>{t('还没有保存的代理')}</p> : null}
-        <Button size='sm' variant='outline' disabled={locked} className='self-start'
-          onClick={() => setPoolReload(value => value + 1)}>{t('重新读取')}</Button>
-      </div> : null}
-      {proxyMode === 'custom' ? <Card className='flex flex-col gap-2 p-3'>
-        <Select value={protocol} disabled={locked} onValueChange={value => setProtocol(value || 'http')}>
-          <SelectTrigger className='w-full' aria-label={t('协议')}><SelectValue>{protocol === 'socks5' ? 'SOCKS5' : 'HTTP'}</SelectValue></SelectTrigger>
-          <SelectContent><SelectItem value='http'>HTTP</SelectItem><SelectItem value='socks5'>SOCKS5</SelectItem></SelectContent>
-        </Select>
-        <Label className='flex flex-col items-start gap-1'>{t('主机')}<Input value={host} disabled={locked} onChange={event => setHost(event.currentTarget.value)} /></Label>
-        <Label className='flex flex-col items-start gap-1'>{t('端口')}<Input value={port} type='number' min={1} max={65535} disabled={locked} onChange={event => setPort(event.currentTarget.value)} /></Label>
-        <Label className='flex flex-col items-start gap-1'>{t('用户名')}<Input value={username} disabled={locked} autoComplete='off' onChange={event => setUsername(event.currentTarget.value)} /></Label>
-        <Label className='flex flex-col items-start gap-1'>{t('密码')}<Input value={password} type='password' disabled={locked} autoComplete='new-password' onChange={event => setPassword(event.currentTarget.value)} /></Label>
-      </Card> : null}
-      <Button disabled={locked || Boolean(method.reason)} onClick={() => void submit()}>{busy ? <Spinner /> : null}{method.type === 'api' ? t('添加账号') : t('登录并添加')}</Button>
+      {proxy.node}
       {method.type === 'api' ? <p className='text-xs text-subtle'>{t('新网关确认代理同次保存后不再重复提交；旧网关使用兼容保存并提示核查，失败不会撤销已添加的账号。')}</p> : null}
-      <p className='text-xs text-subtle'>{t('所选代理会保存到账号设置，后续请求继续使用。')}</p>
     </> : null}
     {/* 插件驱动的登录交互（验证码 / 二次确认等），由共享组件按 flow 状态渲染 */}
     {flow?.state ? <PluginLoginInteraction key={flow.state} flow={flow.state} t={t}

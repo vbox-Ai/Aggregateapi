@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Input, Label, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea } from '@ui'
+import { Button, Card, Input, Label, Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Textarea } from '@ui'
 import { PageHead, Empty, ErrorNote, SectionHead } from '../components/ui'
 import { Icon } from '../components/Icon'
 import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
@@ -8,6 +8,7 @@ import { serverIdentity } from '../lib/servers'
 import { store } from '../state/store'
 import { t } from '../i18n'
 import { formProtocol, takeProviderPreset, type ProviderPreset } from '../lib/preset-request'
+import { useAccountProxy } from '../components/account-proxy-fields'
 import { confirmDialog } from '@ui'
 import {
   PROTOCOL_OPTIONS,
@@ -173,19 +174,31 @@ function CreateProviderSheet({ initial, onClose, onCreated }: {
   const [protocol, setProtocol] = useState<string>(initial ? formProtocol(initial.protocol) : 'openai')
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '')
   const [apiKey, setApiKey] = useState('')
+  /** 该上游无需鉴权：不发送鉴权头，也就不需要（也不该）填 API Key */
+  const [noAuth, setNoAuth] = useState(false)
+  const [userAgent, setUserAgent] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const identity = serverIdentity()
+  /** 出网线路是**网关那台机器**的（请求由网关发出），与手机自身代理无关 */
+  const proxy = useAccountProxy({ locked: busy })
 
   const save = async () => {
     if (busy) return
     if (!name.trim()) { setError(t('请填写提供商名称')); return }
     if (!baseUrl.trim()) { setError(t('请填写 Base URL')); return }
-    if (!apiKey.trim()) { setError(t('请填写 API Key（会作为该家第一个账号的凭证）')); return }
+    // 网关侧 `noAuth` 与 `apiKey` 互斥：无需鉴权的上游不该被逼着填一个假 Key
+    if (!noAuth && !apiKey.trim()) { setError(t('请填写 API Key（会作为该家第一个账号的凭证）')); return }
     setBusy(true)
     setError('')
     try {
-      await createCustomProvider({ name: name.trim(), protocol, baseUrl: baseUrl.trim(), apiKey: apiKey.trim() })
+      const proxyBody = proxy.payload()
+      await createCustomProvider({
+        name: name.trim(), protocol, baseUrl: baseUrl.trim(),
+        ...(noAuth ? { noAuth: true } : { apiKey: apiKey.trim() }),
+        ...(userAgent.trim() ? { userAgent: userAgent.trim() } : {}),
+        proxy: proxyBody,
+      })
       if (serverIdentity() !== identity) return
       store.toast(t('已创建自定义提供商「{name}」并添加账号', { name: name.trim() }))
       await onCreated()
@@ -228,10 +241,22 @@ function CreateProviderSheet({ initial, onClose, onCreated }: {
               <Label htmlFor='cp-baseurl'>{t('Base URL')}</Label>
               <Input id='cp-baseurl' value={baseUrl} onChange={event => setBaseUrl(event.currentTarget.value)} placeholder='https://api.example.com/v1' />
             </div>
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <Label htmlFor='cp-noauth'>{t('该上游无需鉴权（不发送鉴权头）')}</Label>
+              <Switch id='cp-noauth' checked={noAuth} disabled={busy} aria-label={t('该上游无需鉴权（不发送鉴权头）')}
+                onCheckedChange={value => setNoAuth(value === true)} />
+            </div>
+            {noAuth ? <p style={{ fontSize: 12, color: 'var(--m-subtle)' }}>
+              {t('选了「无需鉴权」就不会创建带 Key 的账号，也不需要填 API Key。')}
+            </p> : <div>
               <Label htmlFor='cp-apikey'>{t('API Key')}</Label>
               <Input id='cp-apikey' type='password' value={apiKey} onChange={event => setApiKey(event.currentTarget.value)} placeholder={t('这把 Key 会成为该家第一个账号的凭证')} />
+            </div>}
+            <div>
+              <Label htmlFor='cp-ua'>{t('User-Agent（可选）')}</Label>
+              <Input id='cp-ua' value={userAgent} spellCheck={false} autoComplete='off' onChange={event => setUserAgent(event.currentTarget.value)} placeholder={t('留空用默认；只作用于这一家的账号')} />
             </div>
+            {proxy.node}
             {error ? <p style={{ fontSize: 12, color: 'var(--m-danger)' }}>{error}</p> : null}
           </div>
         </SheetBody>
