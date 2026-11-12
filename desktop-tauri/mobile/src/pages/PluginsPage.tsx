@@ -104,6 +104,8 @@ export function PluginsPage() {
   const locked = useRef(false)
   const signature = useRef('')
   const seenOperations = useRef(new Set<string>())
+  /** 脚本插件操作的失败只报一次（脚本操作不进「最近失败」，那条线只管提供商插件包） */
+  const seenScriptOperations = useRef(new Set<string>())
   const identity = serverIdentity()
 
   const load = useCallback(async () => {
@@ -129,6 +131,18 @@ export function PluginsPage() {
         if (Date.now() - operation.updatedAt > 30_000) continue
         if (operation.error || operation.hostError) store.toast(pluginErrorMessage(operation.error || operation.hostError), 'err')
         else if (operation.done) store.toast(t('插件包已安装到 v{version}', { version: operation.version }))
+      }
+      // 脚本插件（Magpie 那套）的安装失败以前**没有任何地方会弹** —— 它不进「最近失败」，
+      // 进度条又会随操作结束消失，于是界面上只剩"点了没反应"。这里补一次 toast。
+      const scriptOperation = data.scripts?.operation
+      if (scriptOperation && !scriptOperation.active) {
+        const target = scriptOperation.target
+        const label = target?.id || target?.source || target?.name || ''
+        const key = `script:${label}:${scriptOperation.updatedAt}`
+        if (!seenScriptOperations.current.has(key)) {
+          seenScriptOperations.current.add(key)
+          if (scriptOperation.error) store.toast(pluginErrorMessage(scriptOperation.error), 'err')
+        }
       }
     } catch (cause) {
       if (serverIdentity() === identity) setError(pluginErrorMessage(cause))

@@ -4910,3 +4910,21 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
   - `mobile/src/pages/update-proxy-sheet.tsx`：说明改成「网关自己发出的下载都走这条线：检查更新 / 下载更新包，以及插件与插件索引（Magpie 分发）的下载。给上游站点的请求走的是账号级的「出网代理」，不在这里；留空保存 = 直连。」—— 原文写「只影响「检查更新 / 下载更新包」」，会把用户往"这个设置救不了插件装不上"上带。
   - `mobile/src/api/update-proxy.ts`：注释同步，并写明**指定后候选只有这一个**（节点不可用就没有兜底）。
 - 校验：`tsc --noEmit` **0** / `vite build` **0**（`ui/m/mobile.js` 1,685.75 → **1,685.97 kB**）/ `check-mobile-ui.py` **0**。
+
+## 步骤 132：补丁 0017 让 Magpie 下载走网关自己的「GitHub 访问方式」+ 三处可诊断性修复 + 「GitHub 访问方式」在插件设置里置顶
+
+- **根因定案（上游缺口）**：`plugin_host/script/download.rs::github_bytes` 用的是 `client::fetch_official(url, headers, None)`，而 `fetch_official` 就是 `fetch_github(url, headers, timeout, false)` —— **`allow_mirror = false`**。于是 Magpie 的 dist 索引与 tgz **绕开了网关自己的「GitHub 访问方式」**（内置反代表、每个源的开关、Auto 模式下的探测择优全都不参与）。这也解释了操作者的观察：「电脑端插件索引 120 毫秒可用，手机装插件却秒失败」——电脑端那条 120 ms 是「检查更新/清单刷新」走 `fetch_public`（`is_resource` 为真 ⇒ `fetch_github(…, true)` ⇒ 镜像/探测都参与），而插件下载走了另一条把镜像关掉的路。
+- **网关本来就有内置源**（不需要任何人手填节点）：`config/github_access.rs` 的 `DEFAULT_GITHUB_MIRROR = "https://gh-proxy.com/"`，默认镜像表 `[gh-proxy.com, cdn.gh-proxy.org, ghproxy.net]`，默认模式 `GithubAccessMode::Auto`；`update/source.rs::is_resource()` 对 `raw.githubusercontent.com` 返回 **true** ⇒ 同一批 URL 只要走 `fetch_github(..., true)` 就能吃到镜像与择优。
+- **本步改动（只动 `distribution.rs` 一个文件）**：`dist_bytes()` 的**第一顺位**换成网关自己的通路 ——
+  `let url = format!("{BASE}{path}"); super::operations::stage("package", &format!("正在下载{what}（自动选择最快可用源）")); match super::download::bytes(&url, limit, None).await { Ok(bytes) => return Ok(bytes), Err(error) => reasons.push(format!("自动选源：{error}")) }`，
+  然后才走 0016 的 `MIRRORS` 反代链，最后退官方 `github_bytes`；文档注释同步说明"第一顺位是网关的 GitHub 访问方式，反代链只是兜底"。
+- 产出：`0017-magpie-use-gateway-sources.diff`（**2348 字节 / 35 行 diff / 新增 19 行**，2 个文件里的 1 个 = distribution.rs）。校验：链条「原始 → 0012 → 0013 → 0016 == 0016 目标（144 行）」✓ / 两级干跑 ✓ / 链条「… → 0017 == 0017 目标（163 行）」✓。
+- **三处可诊断性修复**（"点了获取没反应、也看不到原因"）：
+  - `ui-shared/plugins-script-progress.tsx`：用 `stage:received` 指纹 + `useRef/useState/useEffect` 做**客户端侧"已 N 秒没有进展"计时**（`STALL_HINT_SECONDS = 20`）并渲染；新增 `scriptOperationTargets(operation, item)`（同一套匹配但**不要求 active**），`scriptOperationMatches` = `operation.active === true && scriptOperationTargets(...)` —— 以前操作一结束进度条就消失，失败原因随之不可见。
+  - `ui-shared/plugins-scripts.tsx`：`const failure = error || state.error || state.operation.error || (!starting && (state.hostError || state.runtime.error))` —— 以前 `state.operation.error` 被 `!starting` 吞掉，脚本插件装失败的真正原因到不了那根红条；另加 `cardFailure(item)`，操作已结束且带 `operation.error` 时把原因以 `text-destructive` **留在该插件的卡片上**。
+  - `mobile/src/pages/PluginsPage.tsx`：轮询里对**已结束且有 error 的脚本操作**弹一次 toast（按 `script:{target}:{updatedAt}` 去重）—— 以前只对提供商插件包操作弹 toast，「最近失败」也不收脚本插件。
+- `mobile/src/pages/plugins/PluginSettingsSheet.tsx`：把 `<GithubAccessSettingsPanel />`（「GitHub 访问方式」）从 sheet **最底部挪到最上面**（紧跟「以下设置属于所连接网关…」那句）。原因：它排在「GitHub 令牌」之后，手机上一屏放不下、不往下滑就看不到 —— 操作者就因此找不到这个开关。已核对 b423 包内 `ui/m/mobile.js` 确实带这些文案（「GitHub 访问方式」3 次、「自动选择最快可用源」1 次），所以是排版问题不是缺功能。
+- 校验：`tsc --noEmit` **0** / `vite build` **0**（`ui/m/mobile.js` → **1,686,725 B**）/ `check-mobile-ui.py` **0**。
+- **交付**：出包 #425（head `da148d06c`，含 0016）全绿 —— Plugins ✓ / iOS ✓（含「打补丁」✓、「编网关守护进程」✓、「打 IPA + 打包 deb」✓）/ Publish Release ✓ ⇒ release `ios-20261112-b425`，`Agent2API-3.5.0-beta.425-rootful-iphoneos-arm64e.deb`（41,238 KB）。
+- **教训（下载）**：本机直连 `release-assets.githubusercontent.com:443` 会失败（curl 28，84 秒超时）⇒ 取自己的发布产物也要走镜像：`https://gh-proxy.com/https://github.com/vbox-Ai/Aggregateapi/releases/download/<tag>/<file>`。
+- **教训（排查顺序）**：先看"失败原因有没有到界面"，再看"功能本身对不对"。这次三轮来回都卡在前者：网关侧其实一直有 `operation.error`，是前端把它吞了。

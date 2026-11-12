@@ -1,0 +1,35 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+@@ -33,12 +33,31 @@
+ const INDEX_FILE: &str = "magpie-dist-index.json";
+ static INDEX_CACHE: std::sync::Mutex<Option<(i64, Value)>> = std::sync::Mutex::new(None);
+ 
+-/// 按 `BASE` 的相对路径取字节：依次试每个镜像，最后退回 GitHub raw。
++/// 按 `BASE` 的相对路径取字节。
++///
++/// 第一顺位是**网关自己的「GitHub 访问方式」**：raw 属于受支持的资源域名
++/// （`update::source::is_resource`），`download::bytes` 走 `fetch_public`
++/// → `fetch_github(…, allow_mirror = true)` —— 与「检查更新」同一条通路，
++/// 内置源（gh-proxy.com / cdn.gh-proxy.org / ghproxy.net）、用户的源开关、
++/// 以及 Auto 模式下的探测排序全都在那里生效。
++///
++/// 2026-11 之前这里走的是 `github_bytes`（`fetch_official` ⇒ `allow_mirror = false`），
++/// 插件下载因此**绕开了那套源**：电脑端「插件索引 可用 120 毫秒」，手机上装插件仍秒失败。
++///
++/// 只有这条整体失败，才退回本文件写死的反代链与官方 raw —— 那是给"源被全部关掉"
++/// 或旧配置留的兜底，正常情况下走不到。
+ ///
+ /// 每换一条线路都报一次阶段：面板上看得见"正在走哪条线"，
+ /// 同时让任务保持"有进展"（任务卡死判定按"多久没有进展"算，见 `operations::stalled`）。
+ async fn dist_bytes(path: &str, limit: usize, what: &str) -> Result<Vec<u8>, String> {
+     let mut reasons: Vec<String> = Vec::new();
++    let url = format!("{BASE}{path}");
++    // ① 网关的「GitHub 访问方式」：官方源 + 已启用的镜像，Auto 模式按探测速度排序。
++    super::operations::stage("package", &format!("正在下载{what}（自动选择最快可用源）"));
++    match super::download::bytes(&url, limit, None).await {
++        Ok(bytes) => return Ok(bytes),
++        Err(error) => reasons.push(format!("自动选源：{error}")),
++    }
+     for (label, prefix) in MIRRORS {
+         super::operations::stage("package", &format!("正在下载{what}（{label}）"));
+         match super::download::public_bytes(&format!("{prefix}{path}"), limit).await {

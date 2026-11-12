@@ -71,6 +71,8 @@ export function PluginSettingsSheet({ onClose, onChanged }: { onClose: () => voi
       <SheetHeader><SheetTitle>{t('插件设置')}</SheetTitle></SheetHeader>
       <SheetBody>
         <p className='m-ck-note'>{t('以下设置属于所连接网关，不是手机本地设置。')}</p>
+        {/* GitHub 访问方式：插件下载走的就是这条线，放在顶部先看到，不用往下找。 */}
+        <GithubAccessSettingsPanel />
         <div className='m-ck-title'>{t('检查计划')}</div>
         <Select value={settings?.checkMode || 'follow'} disabled={busy || !settings}
           onValueChange={value => void save({ checkMode: value as PluginSettings['checkMode'] })}>
@@ -124,7 +126,6 @@ export function PluginSettingsSheet({ onClose, onChanged }: { onClose: () => voi
         </div>)}
         {error ? <p className='m-ck-error'>{error}</p> : null}
         <GithubTokenSettings />
-        <GithubAccessSettingsPanel />
       </SheetBody>
     </SheetContent>
   </Sheet>

@@ -5,7 +5,7 @@ import {
 } from '@ui'
 import type { ScriptOperation, ScriptPackage, ScriptPluginsState, ScriptRecommendation } from './plugins'
 import { matchesPluginStatus, matchesScriptPublisher, scriptPublisher, type PluginStatusFilter, type ScriptPublisherFilter } from './plugins-filters'
-import { ScriptOperationCard, ScriptOperationProgress, scriptOperationMatches } from './plugins-script-progress'
+import { ScriptOperationCard, ScriptOperationProgress, scriptOperationMatches, scriptOperationTargets } from './plugins-script-progress'
 import { PluginGetButton, PluginSectionHeading, PluginSettingsButton, PluginStoreCard, type PluginTranslate } from './plugins-store'
 import { ScriptPluginSettings } from './plugins-script-settings'
 import { ScriptPluginInstallNotice } from './plugins-script-install-notice'
@@ -144,7 +144,16 @@ export function ScriptPluginsPanel({ state, request, refresh, t, disabled = fals
   }
 
   const starting = state.packages.some(pack => pluginPending(startupForPack(pack.id, pack.startup)))
-  const failure = error || state.error || (!starting && (state.hostError || state.runtime.error || state.operation.error))
+  // 安装/更新这类**操作**的失败要无条件显示：以前它被 `!starting` 挡着 ——
+  // 只要还有任何一个已装插件处于"正在启动"，失败原因就整条被吞掉，
+  // 界面上于是"什么反应都没有"。
+  const failure = error || state.error || state.operation.error
+    || (!starting && (state.hostError || state.runtime.error))
+  // 操作已结束但错了：把原因留在它对应的那张卡片上（进度条这时已经没了）。
+  const cardFailure = (item: ScriptPackage | ScriptRecommendation): React.ReactNode =>
+    operation && !operation.active && operation.error && scriptOperationTargets(operation, item)
+      ? <p className='m-0 break-words text-xs text-destructive'>{operation.error}</p>
+      : null
 
   return <>
     {failure ? <Alert variant='destructive' className='whitespace-pre-wrap break-words'>{failure}</Alert> : null}
@@ -174,7 +183,7 @@ export function ScriptPluginsPanel({ state, request, refresh, t, disabled = fals
               highlightedSource={scriptOfficialBadge(item)} sourceLabel={scriptSourceLabel(item, t)}
               icon={iconUrl(item.icon)} status='missing' providerCount={item.providers.length || undefined}
               metadata={<ScriptRepository item={item} onOpenExternal={onOpenExternal} t={t} />}
-              feedback={<>{unavailable ? <p className='m-0 break-words text-xs text-muted-foreground'>{unavailable}</p> : null}{progress}</>}
+              feedback={<>{unavailable ? <p className='m-0 break-words text-xs text-muted-foreground'>{unavailable}</p> : null}{cardFailure(item)}{progress}</>}
               actions={unavailable ? <Badge variant='secondary' shape='tag'>{t('暂不可安装')}</Badge>
                 : <PluginGetButton t={t} disabled={locked} onClick={() => openInstall({ name: item.source || item.name, version: item.selector ?? item.version })} />} />
           }
@@ -198,6 +207,7 @@ export function ScriptPluginsPanel({ state, request, refresh, t, disabled = fals
             </>}
             feedback={<>
               {(startup ? pluginFailed(startup) && startup.error : pack.error) ? <p className='m-0 break-words text-xs text-destructive'>{startup?.error || pack.error}</p> : null}
+              {cardFailure(pack)}
               {progress}
             </>} />
         })}
