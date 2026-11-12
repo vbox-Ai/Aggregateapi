@@ -1,0 +1,88 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+@@ -3,13 +3,27 @@
+ use super::storage::{Package, PackageSource};
+ 
+ const BASE: &str = "https://raw.githubusercontent.com/magpie-community/plugins/dist/";
+-/// 同一份内容的镜像（jsDelivr 的 GitHub 代理）：路径规则与 raw 一致，只是前缀不同。
++/// 同一份内容的多个镜像前缀，按顺序尝试；路径规则与 raw 一致，只是前缀不同。
+ ///
+-/// 为什么要它：`raw.githubusercontent.com` 在部分网络（典型是国内直连）会被中途掐断 ——
+-/// 实测「获取」的进度停在 2.5–2.8 MiB 之间反复飘然后断掉，而这份索引约 2.9 MB，
+-/// 正好对上。取不到索引，目录里所有 Magpie 插件就会退化成"从 npm 装"
+-/// （npm tarball 大得多，而且需要运行时解析依赖 —— 手机上根本没有）。
+-const MIRROR: &str = "https://cdn.jsdelivr.net/gh/magpie-community/plugins@dist/";
++/// 为什么是"多个"：`raw.githubusercontent.com` 在部分网络（典型是国内直连）会被**直接 RST**。
++/// 2026-11 实测（同一运营商线路）：官方 raw 与 jsDelivr 都在 0.1–0.3 秒内被重置，
++/// 而两个 GitHub 反代能稳定取到 3.2 MB 的索引（6–7 秒）与逐个 tgz（2 秒）。
++/// 上一版只挂了 jsDelivr —— 在那条线路上照样装不上，表现就是「点获取 → 进度闪一下 → 没反应」。
++/// 取不到索引，目录里所有 Magpie 插件还会退化成"从 npm 装"（大包 + 需要运行时解析依赖）。
++const MIRRORS: &[(&str, &str)] = &[
++    (
++        "gh-proxy 反代",
++        "https://gh-proxy.com/https://raw.githubusercontent.com/magpie-community/plugins/dist/",
++    ),
++    (
++        "ghproxy.net 反代",
++        "https://ghproxy.net/https://raw.githubusercontent.com/magpie-community/plugins/dist/",
++    ),
++    (
++        "jsDelivr 镜像",
++        "https://cdn.jsdelivr.net/gh/magpie-community/plugins@dist/",
++    ),
++];
+ /// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
+ /// TTL 取 10 分钟 —— 足够覆盖"刷新后连着装几支"，又不会让版本信息长时间陈旧。
+ /// 类型跟 `crate::server::logging::now_ms()` 一致（i64）—— CI 第一次就是在这里报的 E0308。
+@@ -19,13 +33,26 @@
+ const INDEX_FILE: &str = "magpie-dist-index.json";
+ static INDEX_CACHE: std::sync::Mutex<Option<(i64, Value)>> = std::sync::Mutex::new(None);
+ 
+-/// 按 `BASE` 的相对路径取字节：先试镜像，再退回 GitHub raw。
+-async fn dist_bytes(path: &str, limit: usize) -> Result<Vec<u8>, String> {
+-    let mirror = super::download::public_bytes(&format!("{MIRROR}{path}"), limit).await;
+-    match mirror {
++/// 按 `BASE` 的相对路径取字节：依次试每个镜像，最后退回 GitHub raw。
++///
++/// 每换一条线路都报一次阶段：面板上看得见"正在走哪条线"，
++/// 同时让任务保持"有进展"（任务卡死判定按"多久没有进展"算，见 `operations::stalled`）。
++async fn dist_bytes(path: &str, limit: usize, what: &str) -> Result<Vec<u8>, String> {
++    let mut reasons: Vec<String> = Vec::new();
++    for (label, prefix) in MIRRORS {
++        super::operations::stage("package", &format!("正在下载{what}（{label}）"));
++        match super::download::public_bytes(&format!("{prefix}{path}"), limit).await {
++            Ok(bytes) => return Ok(bytes),
++            Err(error) => reasons.push(format!("{label}：{error}")),
++        }
++    }
++    super::operations::stage("package", &format!("正在下载{what}（官方源）"));
++    match super::download::github_bytes(&format!("{BASE}{path}"), limit).await {
+         Ok(bytes) => Ok(bytes),
+-        Err(mirror_error) => super::download::github_bytes(&format!("{BASE}{path}"), limit).await
+-            .map_err(|error| format!("镜像与官方源都取不到（镜像：{mirror_error}；官方：{error}）")),
++        Err(error) => {
++            reasons.push(format!("官方源：{error}"));
++            Err(format!("镜像与官方源都取不到（{}）", reasons.join("；")))
++        }
+     }
+ }
+ const INDEX_LIMIT: usize = 16 * 1024 * 1024;
+@@ -41,7 +68,7 @@
+     }
+     // 磁盘缓存优先：网关重启后仍然有效（手机上的网关会随 App 重启）。
+     if let Some(cached) = read_cached_index(now) { return Ok(cached); }
+-    let bytes = dist_bytes("index.json", INDEX_LIMIT).await?;
++    let bytes = dist_bytes("index.json", INDEX_LIMIT, "Magpie 社区分发索引").await?;
+     let index: Value = serde_json::from_slice(&bytes).map_err(|_| "Magpie 社区索引无法解析")?;
+     if index["version"].as_u64() != Some(1) {
+         return Err("Magpie 社区分发索引版本暂不兼容".into());
+@@ -110,7 +137,7 @@
+         value.starts_with("sha512-") && !value.chars().any(char::is_whitespace)
+     }).ok_or("Magpie 插件缺少 SHA-512 完整性校验值")?;
+     super::operations::stage("package", "正在下载 Magpie 社区脚本插件");
+-    let archive = dist_bytes(file, super::packages::MAX_PACKAGE_BYTES).await?;
++    let archive = dist_bytes(file, super::packages::MAX_PACKAGE_BYTES, "Magpie 社区脚本插件").await?;
+     super::packages::verify_integrity(&archive, integrity)?;
+     let source = PackageSource::Magpie { file: file.into(), integrity: integrity.into() };
+     super::packages::store_archive(archive, Some((name.into(), version.into())), Some(source)).await

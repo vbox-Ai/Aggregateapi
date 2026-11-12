@@ -4869,3 +4869,24 @@ release **`ios-20261112-b417`**（7 个资产）：4 个 deb **41,231 KB** + `Ag
   - 教训：不要用自写的 diff 施加器/序列模拟器判断补丁是否落地（`simulate_patches.py` 会误报：既不会建新文件、也误判部分 hunk），一律用真 `git apply`；判据永远看退出码，不看日志里的 error 行。
   - 连带：黄条「GitHub 插件清单不是有效 JSON」**不是** 0003 半应用导致，仍未定位；仓库根确实有 `index.json`（1319 字节，sha `ad25d6df…`）。
 - 网页提供商（Tabbit / DeepSeek 网页 / 智谱清言）**不接受 tools**：助手若勾选了工具就会带 `tools` 发出，网页侧回「Tabbit 网页没有原生工具调用接口，请移除 tools / functions，或改用支持工具调用的提供商」。该文案逐字存在于 `agent2api-web-providers.exe`（3,236,768 字节，偏移 2286206）。出路：助手设置→工具→全部取消勾选（纯聊天），或换用支持工具调用的 API 提供商。
+
+## 步骤 130：补丁 0016 —— Magpie 分发改成"多镜像依次尝试"（诊断出 jsDelivr 在这条线路上也被 RST）
+
+- **现象仍在**：b423 上点「获取」仍是「进度闪一下 → 没反应」。在本机（与手机同一运营商线路）实测下载目标：
+  | 目标 | 结果 |
+  |---|---|
+  | `raw.githubusercontent.com/…/dist/index.json` | ❌ 0.1–0.3 秒被重置（WinError 10054） |
+  | `cdn.jsdelivr.net/gh/magpie-community/plugins@dist/index.json` | ❌ 同样被重置 |
+  | `gh-proxy.com/https://raw.githubusercontent.com/…/index.json` | ✅ 200，3,236,270 字节 / 6.4 秒 |
+  | `ghproxy.net/…` | ✅ 200，读数正常 |
+  | `ghfast.top` / `raw.gitmirror.com` / `hub.gitmirror.com` / `gitcdn.top` | ❌ 超时或 DNS 失败 |
+  ⇒ **上一版 0012 只挂 jsDelivr 这一个镜像，在这条线路上等于没有镜像**，所以仍然装不上。
+- 端到端复验（走 `gh-proxy.com`）：索引 `packages` 101 支 → `@magpie-community/opencode-nous-auth` latest `0.1.3` → `tgz/magpie-community-opencode-nous-auth-0.1.3.tgz` 17,411 字节 / 2.1 秒 → 本地 sha512 与索引 `integrity`（`sha512-+cUtxPqu…`）**逐字一致**，包内 `index.mjs`/`oauth.mjs`/`opencode.mjs` 齐备。
+- **补丁 0016**（`0016-magpie-mirror-chain.diff`，5782 字节 / 4 hunks）：
+  - `const MIRROR: &str` 换成 `const MIRRORS: &[(&str, &str)]`，顺序 = gh-proxy 反代 → ghproxy.net 反代 → jsDelivr 镜像，最后才落回官方 raw。
+  - `dist_bytes(path, limit)` 改成 `dist_bytes(path, limit, what)`：逐条试，**每换一条线路先 `operations::stage("package", "正在下载{what}（{label}）")`** —— 面板上看得见当前走的是哪条线，同时让任务保持"有进展"（0014 的卡死判定按"多久没有进展"算，否则多线路重试可能被误判为卡死）。
+  - 全部失败时把**每条线路各自的原因**拼进错误文案，不再只报最后一条。
+- 校验：两级干跑（上下文逐字匹配 + 施加结果 == 目标）✓；交叉校验（原始 → 0012 → 0013 → 0016 == 目标）✓。
+- 顺带结论（给排查用）：
+  - **手机的系统代理对网关无效** —— 网关有自己的出网设置（「设置 → 自动更新」）。下载走 `core::update::client`，`fetch_public`/`fetch_via_candidates` 都从 `resolve_egress_candidates()` 取候选，所以**配了节点就 index 与 tgz 都走节点**；不配就是直连（本线路直连会被 RST）。
+  - 黄色横幅「GitHub 源「官方源」限流，请在 N 秒后重试」是 **api.github.com 的限流**（本机实测 `api.github.com` 可用、core 剩余 59/60），只影响"清单刷新"，与下载失败是两件事。
