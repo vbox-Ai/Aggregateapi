@@ -5092,3 +5092,31 @@ let written = match run {
 - **"出站"和"入站"要一起改。** 0009–0020 把"手机 → 网关"这条**上行**做通了（远端桥、会话挂载、帧容忍、行尾、面板 relay），但"网关 → 宿主"这条**出站**还写死走子进程 —— 半条通道等于全不通，而且症状出现在最后一步（握手），前面的修复看起来全都"没效果"。
 - **一句错误文案能直接定位到一行代码**，前提是那句文案只在一处构造：这次 `插件进程不可用` 全仓只有 3 处，其中只有 `call_coded` 那一处会出现在握手失败路径上，所以拿到用户那一句话就等于拿到了行号。
 - **PortableGit 全局 `core.autocrlf=true`** ⇒ clone 出来的工作树是 **CRLF**，而我生成补丁用的文本是 **LF**（仓库 blob 也是 LF）。比对必须归一化行尾或加 `-c core.autocrlf=false`，否则满屏假差异（`verify_p19_git.py` 当时带了那个参数，所以没踩到；这次 `verify_chain21.py` 忘了，白查一轮）。
+
+## 步骤 137 · 手机端「模型管理」补齐桌面功能（能力位 / 映射 / 试跑 / 工具条 / 批量）
+
+**由来**：操作者要求「模型管理页面里面的功能好像和电脑端的功能不全，有很多缺失的功能，你仔细分析下，把它们补齐，算是重构ui也行」。清点后桌面 `ui-islands/src/islands/models-page.tsx`（681 行）比手机 `mobile/src/pages/ModelsPage.tsx`（497 行）多 57 条文案，缺的是：能力位编辑、映射管理、模型试跑、来源筛选/排序/计数、批量启停、获取模型、自定义提供商入口。
+
+**这一批做了什么**（全部在手机端，桌面端文件未动）：
+
+1. **三个 API 包装**（`mobile/src/api/gateway.ts`）：
+   - `addModelMapping({ alias, target, provider?, reasoning? })` → `POST /api/models/mappings`
+   - `setModelCapabilities({ provider, id, capabilities })` → `POST /api/models/capabilities`
+   - `testModel({ provider, model, prompt? })` → `POST /api/models/test`（**字段叫 `model` 不是 `id`**，照 `api/model_test.rs` 的 `text_field(&payload, "model", 128)`）
+   - `ManageModel` 补两个字段：`capOverrides`（被覆盖过的键）与 `capSources`（每个键的值来自 upstream / modelsdev / user）。
+
+2. **三个底部抽屉**（新文件，对应桌面端三个弹窗）：
+   - `pages/models-capability-sheet.tsx` · 六个键（上下文窗口 / 最大输出 / 工具 / 图片 / 视频 / 思考）三态（支持 / 不支持 / 未声明）分开显示，并标出每个值的来源（继承上游 / models.dev 补齐 / 已手动覆盖）；**六个键全量提交**，留空或选「未声明」= 传 null = 恢复。
+   - `pages/models-mapping-sheet.tsx` · 列出这个模型行上的映射（默认映射 / 额外别名 / 未挂载），可增可删；新增带可选的固定思考档位（`POSITIVE_REASONING_LEVELS`）。
+   - `pages/models-test-sheet.tsx` · 用网关自己的 Key 打一次上游，验证凭证 / 连通性 / 模型 ID；返回体字段不稳定 ⇒ 认不出文本时原样打 JSON。
+
+3. **工具条与批量**（`pages/ModelsPage.tsx`）：来源筛选（全部 / 内置 / 远程 / 手动登记）、排序四档（按提供商分组 / 按模型 ID / 已启用在前 / 上下文从大到小）、`{n} 个模型 · 已启用 {m}` 计数、以及「批量」模式（每行勾选框 + 底部操作条：全选当前筛选 / 清空 / 批量启用 / 批量停用 / 完成）。
+
+4. **「新建自定义提供商（可从上游拉取模型清单）」入口**：跳到 `custom-providers` 页 —— 「获取模型」那条流是自定义提供商的两步式（`POST /api/custom-providers/fetch-models` 拉清单 → 前端并进草稿 → `POST /api/custom-providers/models` 整表保存），它属于那一页，不属于模型页。
+
+**校验**：`tsc --noEmit` 0 · `vite build` 0（`ui/m/mobile.js` 1,686,725 → 1,700,880 B / `mobile.css` 102,552 B）· `check-mobile-ui.py --root …\main-latest` 0。
+
+**三条教训**：
+- **三态、两个来源，别合并**：布尔能力位有「支持 / 明确不支持 / 未声明」三态，值还有「上游声明 / models.dev 补齐 / 用户覆盖」三种来源。把它们压成一个"开/关"之后，用户会把"不知道"当成"不支持"照着抄。
+- **没有批量接口就串行 + 用最后一次整表视图刷新**：`POST /api/models/state` 每次回整表视图，并发调用会互相覆盖（后到的视图把前一次的写入盖掉）；批量启停因此逐条串行，成功后只应用最后一次返回。
+- **ui-kit 的细节要在真源码里核**：`SelectTrigger` 没有 `size` 属性（只有 `className`）、`ErrorNote` 的 prop 是 `text` 不是 `message`、`SheetContent` 不用传 `side` —— 这三处是第一版写错、被 `tsc` 抓出来的。

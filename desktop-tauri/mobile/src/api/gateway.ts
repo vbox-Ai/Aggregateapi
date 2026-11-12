@@ -419,6 +419,10 @@ export type ManageModel = {
   visibility?: string | null
   upstreamStatus?: 'undeployed' | null
   capabilities?: unknown
+  /** 被用户覆盖过的能力键（`capOverrides`，只有内建家会非空）*/
+  capOverrides?: unknown
+  /** 每个能力键的值来自哪里：upstream / modelsdev / user（`capSources`）*/
+  capSources?: unknown
   reasoningLevels?: unknown
   reasoningDefaultLevel?: unknown
   reasoningFixedLevel?: unknown
@@ -470,6 +474,63 @@ export function removeModelMapping(payload: {
   provider?: string
 }): Promise<ManageView> {
   return apiCall<ManageView>('/api/models/mappings/remove', { method: 'POST', body: payload })
+}
+
+/**
+ * 新增一条映射：`POST /api/models/mappings { alias, target, provider?, reasoning? }`。
+ *
+ * 契约取自 `api/model_manage.rs::add_mapping`：
+ * · `alias`（对外名）与 `target`（上游模型 ID）都必填，等值即"原始 ID 的默认映射"；
+ * · `provider` 省掉 = 全局别名；
+ * · `reasoning` 传档位字符串 = 固定思考档位，传 `null` 或空串 = 不注入。
+ *
+ * 返回整表视图（`models` + `mappings`），可直接替换前端 state。
+ */
+export function addModelMapping(payload: {
+  alias: string
+  target: string
+  provider?: string
+  reasoning?: string | null
+}): Promise<ManageView> {
+  return apiCall<ManageView>('/api/models/mappings', { method: 'POST', body: payload })
+}
+
+/**
+ * 改写一个模型的能力位：`POST /api/models/capabilities { provider, id, capabilities }`。
+ *
+ * 键必须落在后端 `core::capability::KEYS` 里（与 `CAPABILITY_KEYS` 逐字一致：
+ * 两个 token 数 + 四个布尔）；值为 `null` = 恢复「未声明」（回到上游 / models.dev
+ * 的推断）。**自定义提供商走不了这条路** —— 那家的清单是整表保存的。
+ */
+export function setModelCapabilities(payload: {
+  provider: string
+  id: string
+  capabilities: Record<string, number | boolean | null>
+}): Promise<ManageView> {
+  return apiCall<ManageView>('/api/models/capabilities', { method: 'POST', body: payload })
+}
+
+/**
+ * 试跑结果。网关把上游那一次对话的关键事实回给我们，**字段不保证稳定**
+ * （上游直通），所以认不出来的键就原样展示，不做美化式猜测。
+ */
+export type ModelTestResult = {
+  content?: unknown
+  model?: unknown
+  id?: unknown
+  usage?: unknown
+  [key: string]: unknown
+}
+
+/**
+ * 试跑一个模型：`POST /api/models/test { provider, model, prompt? }`。
+ *
+ * 注意字段名：模型字段叫 **`model`**（不是 `id`）—— 照 `api/model_test.rs` 的
+ * `text_field(&payload, "model", 128)`。网关先用这把 Key 的可用范围校验
+ * （模型不在范围 ⇒ 404、provider 不在范围 ⇒ 403），再拿真实凭证打上游。
+ */
+export function testModel(payload: { provider: string; model: string; prompt?: string }): Promise<ModelTestResult> {
+  return apiCall<ModelTestResult>('/api/models/test', { method: 'POST', body: payload })
 }
 
 export function refreshModels(): Promise<unknown> {
