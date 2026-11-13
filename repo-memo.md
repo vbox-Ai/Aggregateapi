@@ -5232,3 +5232,34 @@ let written = match run {
 ### 四、校验
 - `tsc --noEmit` 0；`vite build` 0（`desktop-tauri/ui/m/mobile.js` **1,713.00 kB**、`mobile.css` 102.60 kB）；`check-mobile-ui.py --root …\main-latest` 0。
 - 沙盘 init 通过（用上线垫片）；链条 0001..0023 在整棵树上 0 失败。
+
+## 步骤 141 · 0023 的 `Self::`（CI 编不过的第二次）
+
+### 现象
+`#441`（head `43afbcf72`）的「打补丁」**过了**（0023 的路径修对了），但紧接着的 **「编网关守护进程（Mach-O）」失败**：
+
+```
+error[E0425]: cannot find value `no_host_at_all` in this scope
+   --> …/core/plugin_host/mod.rs:733:49
+733 |         let run = self.current_run().ok_or_else(no_host_at_all)?;
+    |                                                 ^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `remote_session_lost` in this scope
+   --> …/core/plugin_host/mod.rs:731:51
+731 |             return sender.send(frame).map_err(|_| remote_session_lost());
+```
+
+### 根因
+我在 `write()` 里把两个辅助函数当**自由函数**调用，但它们定义在 `impl Host { … }` 里、是**关联函数** ⇒ 必须写 `Self::remote_session_lost()` / `Self::no_host_at_all`（或 `self.…`，但这两个不接 `&self`）。
+
+### 修法与复核（已过）
+- 生成器改成 `Self::` 调用，重新生成 ⇒ `0023-remote-session-liveness.diff` **10102 字节**；补丁自检：`Self::remote_session_lost()` 1 处、`Self::no_host_at_all` 1 处、裸调用残留 0。
+- 整棵树复核（干净克隆 `_chain23_1` + `git apply --3way` 0001..0023）⇒ **23 个补丁、失败 0**；`core/plugin_host/mod.rs`、`api/plugin_host.rs` 与目标**逐字节一致**；落地后 `Self::` 计数 1/1、裸调用残留 0。
+
+### 新增的本地护栏（`push_step141.py` 里先跑，不过就不推）
+- 从目标文本里收集 `impl` 块内定义的函数名（`^    (?:pub…)?(?:async )?fn name`），再扫补丁**新增行**里的 `name(` 调用：若该名字是关联函数、而调用处既没有 `Self::name` 也没有 `self.name` ⇒ 判定为可疑并**中止推送**。
+- 这是为「本地没有 Rust 工具链、只能靠 CI 编译」补的一道静态闸：两轮 CI（路径前缀、`Self::`）都是这类"肉眼看得见、本地不验"的低级错。
+
+### 教训
+- **本地没有编译器时，凡新增调用都要回头确认"这个名字在我这个位置可见吗"**：自由函数 / 关联函数 / 方法，三种调用形式不能混。
+- 复核脚本要**断言得比"能 apply"更细**：这次除了 apply 成功，还顺手数了 `Self::` 与裸调用，否则同样的错会再溜过去。

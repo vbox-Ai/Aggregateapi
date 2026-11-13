@@ -100,10 +100,10 @@
          let remote = self.remote_sender();
          if let Some(sender) = remote {
 -            return sender.send(frame).map_err(|_| process::disconnected());
-+            return sender.send(frame).map_err(|_| remote_session_lost());
++            return sender.send(frame).map_err(|_| Self::remote_session_lost());
          }
 -        let run = self.current_run().ok_or_else(process::disconnected)?;
-+        let run = self.current_run().ok_or_else(no_host_at_all)?;
++        let run = self.current_run().ok_or_else(Self::no_host_at_all)?;
          self.write_for_run(frame, run).await
 +    }
 +
