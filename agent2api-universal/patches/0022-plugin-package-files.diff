@@ -1,0 +1,124 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/mod.rs
+@@ -34,6 +34,9 @@
+ // 远端宿主（手机本地运行）需要脚本宿主句柄，而上面那行是 pub(super)（api/ 看不到）。
+ // 只**新增**一个 pub(crate) 别名，不改原可见性，避免动到既有引用面。
+ pub(crate) use runtime::host as script_host;
++// 插件文件桥（0022）：手机里的宿主读不到网关本机的插件目录，需要按包 id 取文件，
++// 而 `storage` 是 pub(super)（api/ 看不到）。同样只加别名，不动既有可见性。
++pub(crate) use storage::{directory as package_directory, read as read_registry};
+ pub use runtime::{concurrency_default, known_provider, provider_icons, provider_state, snapshot, start};
+ pub use updates::check as check_updates;
+ pub fn refresh_catalog() -> serde_json::Value {
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -178,6 +178,95 @@
+         .unwrap_or_else(|_| error_response("下行流构造失败", StatusCode::INTERNAL_SERVER_ERROR))
+ }
+ 
++// ── 插件文件桥（iOS：宿主跑在手机里，插件的文件却在这台网关上）──────────────
++//
++// 手机里的宿主收到 init 之后，会用 `entry.directory` 去读插件的 `package.json` 与入口
++// 文件，而那个目录是**网关本机**的路径（`script/storage.rs::directory`）—— 手机读不到。
++// 所以在把 init 交给宿主之前，手机按包 id 把这些文件取回去、登记进自己的文件表。
++//
++// 只回文本：脚本插件是 JS 包，图标是 URL，不需要字节流；二进制文件（解不出来）与
++// 超出预算的文件直接跳过 —— 漏文件的表现是宿主报错，不是静默成功。
++
++/// 单包最多回多少文件（正常包几十个）
++const PACKAGE_FILES_MAX: usize = 4096;
++/// 单包最多回多少字节（正常包几百 KB）
++const PACKAGE_BYTES_MAX: usize = 8 << 20;
++
++#[derive(Deserialize)]
++pub struct PackageFilesBody {
++    /// 插件包 id（`script/storage.rs` 里的 `Package::id`）
++    id: String,
++}
++
++/// 按包 id 返回该插件包的全部文本文件（相对包根目录的路径 + 内容）。
++pub async fn package_files(
++    State(_state): State<ServerState>,
++    _headers: HeaderMap,
++    Json(body): Json<PackageFilesBody>,
++) -> Response {
++    let id = body.id.trim().to_string();
++    if id.is_empty() {
++        return error_response("缺少插件包 id", StatusCode::BAD_REQUEST);
++    }
++    let registry = match script::read_registry() {
++        Ok(registry) => registry,
++        Err(error) => {
++            return error_response(
++                &format!("读取脚本插件注册表失败：{error}"),
++                StatusCode::INTERNAL_SERVER_ERROR,
++            )
++        }
++    };
++    let Some(package) = registry.packages.iter().find(|package| package.id == id) else {
++        return error_response(&format!("没有这支脚本插件：{id}"), StatusCode::NOT_FOUND);
++    };
++    let directory = match script::package_directory(package) {
++        Ok(directory) => directory,
++        Err(error) => return error_response(&error, StatusCode::INTERNAL_SERVER_ERROR),
++    };
++    let mut files: Vec<serde_json::Value> = Vec::new();
++    let mut budget = PACKAGE_BYTES_MAX;
++    if let Err(error) = collect_package_files(&directory, &directory, &mut files, &mut budget) {
++        return error_response(
++            &format!("读取插件文件失败：{error}"),
++            StatusCode::INTERNAL_SERVER_ERROR,
++        );
++    }
++    ok_json(json!({ "id": id, "files": files }))
++}
++
++/// 递归收文本文件：`path` 是相对包根目录的路径（手机按 `packages/<id>/<path>` 登记）。
++fn collect_package_files(
++    root: &std::path::Path,
++    directory: &std::path::Path,
++    files: &mut Vec<serde_json::Value>,
++    budget: &mut usize,
++) -> Result<(), String> {
++    let entries = std::fs::read_dir(directory).map_err(|error| error.to_string())?;
++    for entry in entries {
++        if files.len() >= PACKAGE_FILES_MAX || *budget == 0 {
++            break;
++        }
++        let entry = entry.map_err(|error| error.to_string())?;
++        let path = entry.path();
++        if path.is_dir() {
++            collect_package_files(root, &path, files, budget)?;
++            continue;
++        }
++        let Ok(relative) = path.strip_prefix(root) else { continue };
++        let relative = relative.to_string_lossy().replace('\\', "/");
++        let Ok(bytes) = std::fs::read(&path) else { continue };
++        if bytes.len() > *budget {
++            continue;
++        }
++        // 文本才收：二进制（图标、字体）在这里解不出来，跳过而不是塞乱码
++        let Ok(text) = String::from_utf8(bytes) else { continue };
++        *budget -= text.len();
++        files.push(json!({ "path": relative, "text": text }));
++    }
++    Ok(())
++}
++
+ /// 关闭远端宿主会话（面板退出或手机断开）。
+ pub async fn close_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
+     plugin_host::detach_remote_session();
+--- a/desktop-tauri/src-tauri/server/src/server/http.rs
++++ b/desktop-tauri/src-tauri/server/src/server/http.rs
+@@ -722,6 +722,11 @@
+         .route("/api/plugins/host/frames", post(api::plugin_host::frames))
+         .route("/api/plugins/host/stream", get(api::plugin_host::stream))
+         .route("/api/plugins/host/close", post(api::plugin_host::close_remote))
++        // 插件文件桥：手机里的宿主读不到网关本机的插件目录，按包 id 把文件取回去
++        .route(
++            "/api/plugins/host/package-files",
++            post(api::plugin_host::package_files),
++        )
+         .route(
+             "/api/plugins/install",
+             post(api::plugins::install).route_layer(axum::extract::DefaultBodyLimit::max(

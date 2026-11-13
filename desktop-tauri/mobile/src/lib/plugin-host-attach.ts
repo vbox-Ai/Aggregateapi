@@ -58,10 +58,15 @@ async function loadHostFiles(): Promise<HostFile[]> {
  * 用网关的**纯 HTTP 端点**当传输层（与 0009 的实现一致；axum 未开 ws 特性）。
  * 上行合并成批（端点收 `{ lines }`）；`open` 必须先于 `stream`（下行端点会取走接收端，且只能取一次）。
  */
-function httpTransport(onNotice: (text: string) => void): HostTransport {
+function httpTransport(onNotice: (text: string) => void): HostTransport & {
+  packageFiles: (id: string) => Promise<HostFile[]>
+} {
   const lineHandlers: Array<(line: string) => void> = []
   const closeHandlers: Array<(reason: string) => void> = []
   const outbox: string[] = []
+  // 下行帧可能在 onLine 注册前就到达（open/stream 是异步的，会话建得比界面订阅快）：
+  // 先攒着、注册时补发，否则第一帧（往往就是 init）直接丢 —— 表现是"宿主一声不吭、网关超时"。
+  const pending: string[] = []
   let flushing = false
   let closed = false
 
@@ -120,7 +125,10 @@ function httpTransport(onNotice: (text: string) => void): HostTransport {
         for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
           const line = buffer.slice(0, at)
           buffer = buffer.slice(at + 1)
-          if (line.trim()) for (const handler of lineHandlers) handler(line)
+          if (line.trim()) {
+            if (lineHandlers.length) for (const handler of lineHandlers) handler(line)
+            else pending.push(line)
+          }
         }
       }
       finish('与网关的连接已断开')
@@ -130,12 +138,39 @@ function httpTransport(onNotice: (text: string) => void): HostTransport {
     }
   })()
 
+  /**
+   * 把某个已装插件包的文件取回手机（iOS 上插件在网关那台机器上，宿主读不到它的盘）。
+   * 网关按包 id 在它自己的 packages 目录里读，回 [{ path, text }]。
+   */
+  const packageFiles = async (id: string): Promise<HostFile[]> => {
+    const response = await fetch(url('/api/plugins/host/package-files'), {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    const payload = (await response.json().catch(() => null)) as
+      | { data?: { files?: unknown }; files?: unknown }
+      | null
+    if (!response.ok) {
+      onNotice(`取插件文件失败（HTTP ${response.status}）`)
+      throw new Error(`取插件文件失败（HTTP ${response.status}）`)
+    }
+    const raw = (payload?.data?.files ?? payload?.files ?? []) as Array<{ path?: unknown; text?: unknown }>
+    return raw
+      .map(file => ({ path: String(file?.path ?? ''), text: String(file?.text ?? '') }))
+      .filter(file => file.path)
+  }
+
   return {
+    packageFiles,
     send(line) {
       outbox.push(line)
       void flush()
     },
-    onLine(handler) { lineHandlers.push(handler) },
+    onLine(handler) {
+      lineHandlers.push(handler)
+      while (pending.length) handler(pending.shift() as string)
+    },
     onClose(handler) { closeHandlers.push(handler) },
     teardown() {
       finish('插件会话已关闭')
@@ -181,7 +216,7 @@ export function useScriptHostAttach(options: {
         if (cancelled) return
         const transport = httpTransport(onNotice)
         transportRef.current = transport
-        const session = await startPluginHost({ hostFiles, pluginFiles: [], transport })
+        const session = await startPluginHost({ hostFiles, pluginFiles: [], transport, packageFiles: transport.packageFiles })
         sessionRef.current = session
         // **不要在这里发 init**：`init` 是网关发给宿主的方法（host/main.mjs 里 `frame.method === "init"`
         // 由宿主自己应答），方向是 网关 → 宿主。宿主主动发 init 只会等一个不会来的回复，

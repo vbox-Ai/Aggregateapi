@@ -5120,3 +5120,32 @@ let written = match run {
 - **三态、两个来源，别合并**：布尔能力位有「支持 / 明确不支持 / 未声明」三态，值还有「上游声明 / models.dev 补齐 / 用户覆盖」三种来源。把它们压成一个"开/关"之后，用户会把"不知道"当成"不支持"照着抄。
 - **没有批量接口就串行 + 用最后一次整表视图刷新**：`POST /api/models/state` 每次回整表视图，并发调用会互相覆盖（后到的视图把前一次的写入盖掉）；批量启停因此逐条串行，成功后只应用最后一次返回。
 - **ui-kit 的细节要在真源码里核**：`SelectTrigger` 没有 `size` 属性（只有 `className`）、`ErrorNote` 的 prop 是 `text` 不是 `message`、`SheetContent` 不用传 `side` —— 这三处是第一版写错、被 `tsc` 抓出来的。
+
+﻿## 步骤 138 · iOS 脚本插件握手修好（缺行尾 + Buffer 垫片）＋ 插件文件桥 0022
+
+**现象**（操作者真机，b435 = 含 0018/0019/0020/relay/0021）：点「获取」后脚本区显示「正在加载脚本插件 · 已 42 秒没有进展」，随后卡片红字「远端插件握手失败： 插件调用超时（ init ）； 原安装记录已保留」；网关日志里最新一条正是这句，更早的才是「插件进程不可用」。
+
+**定位**（`_chain21` = 上游 v3.5.0-beta.1 + 0001..0021 的真实等价源码 + 三个探针脚本）：
+1. 宿主 `main.mjs::handle` 在 `load()` 抛错时会回一个 **error 帧** ⇒ 若宿主跑起来并报错，网关收到的是「错误」而不是「超时」⇒ **超时 = 帧根本没被宿主处理**。
+2. 宿主 `wire.mjs::listen` 靠 `remainder.indexOf(10)` 切行、再 `line.toString("utf8")` + `JSON.parse`。
+3. 手机端 `plugin-host-session.ts` 把下行文本喂进 Worker 时是 `pushLine(data.text)` —— **不带行尾**；Buffer 垫片返回的是**普通 Uint8Array**，`toString('utf8')` 退化成 `"123,34,105,…"`。
+4. 探针（`probe_wire4.mjs`，Node 里复现手机 Worker 的全局垫片）：真 Buffer + 带 `\n` ⇒ handler 收到 `{"id":1,"method":"init"}` ✓；**我们的 Buffer 垫片 + 带 `\n` ⇒ `Unexpected non-whitespace character after JSON at position 3`**；不带 `\n` ⇒ `indexOf(10)` 找不到行尾、帧被攒着 ⇒ 同样收不到。
+⇒ 两个真 bug 并存（行尾 + 垫片编码），正好解释「帧发出去了、宿主一声不吭、60 秒后网关报超时」。
+
+**修复（纯前端，四处）**：
+- `mobile/src/lib/plugin-host-session.ts`：收帧改成 `pushLine(data.text + '\n')`；Buffer 垫片换成 `Uint8Array` 子类 `MiniBuffer`（`toString('utf8'|'base64'|'hex')` / `alloc` / `from`（含 base64、hex）/ `concat` / `byteLength`）；`process.exit(code)` 改为 `postMessage({kind:'exit', code})` 并在会话里抛「插件宿主已退出（code N）」——**静默退出必须看得见**。
+- `mobile/src/lib/plugin-host.ts`：`path` 垫片重写（真正的 `relative` 前缀比较，否则每个插件都会被判成「入口在包外」）；`pathToFileURL` 改为「整条路径 → 文件名 → 后缀」三级命中。
+- `mobile/src/lib/plugin-host-attach.ts`：传输层补 `pending` 队列（`onLine` 注册前到达的下行帧不丢）；实现 `packageFiles(id)`（`POST /api/plugins/host/package-files {id}`）并交给宿主会话。
+
+**补丁 0022（插件文件桥）**：手机里的宿主读不到**网关本机**的插件目录（`init` 里的 `entry.directory` 是网关路径），所以需要一个按包 id 取文件的端点。三个文件各 1 hunk：
+- `core/plugin_host/script/mod.rs`：加 `pub(crate) use storage::{directory as package_directory, read as read_registry};`（`storage` 是 `pub(super)`，只加别名不改可见性）。
+- `api/plugin_host.rs`：`package_files` handler（`read_registry` → 按 id 找包 → `package_directory` → 递归收**文本**文件，`PACKAGE_FILES_MAX = 4096` 个 / `PACKAGE_BYTES_MAX = 8 MiB`，二进制与超预算的跳过）。
+- `http.rs`：`.route("/api/plugins/host/package-files", post(...))`。
+
+**校验**：两级干跑 ✓；真 git（PortableGit，`-c core.autocrlf=false`）`git apply --check` rc=0、`git apply` rc=0，三文件与目标**逐字节一致**；端到端链条「fresh clone 上游 v3.5.0-beta.1 → 按序应用 0001..0022 → 与全部目标逐字节比对」见 `_chain22.log`。面板：`tsc --noEmit` 0 / `vite build` 0（`ui/m/mobile.js` 1,703.93 kB）/ `check-mobile-ui.py` 0。
+
+**教训**：
+1. **补丁不要锚在文件末尾** —— 追加型 hunk 会碰上"以换行结尾的文件没有尾随空行"的行模型歧义；改成在稳定锚点**之前**插入，两侧都有上下文。
+2. 对侧（手机）修的同类错，要在对侧里找 —— 0019 在网关侧补了 `\n`，手机侧还在丢行尾。
+3. 垫片要按**真实语义**实现：`toString('utf8')` 不是 `String(bytes)`。
+4. PowerShell `Set-Content -Encoding utf8` 写的文件带 BOM，`exec(compile(...))` 会报 `U+FEFF`；用 `encoding='utf-8-sig'` 读。

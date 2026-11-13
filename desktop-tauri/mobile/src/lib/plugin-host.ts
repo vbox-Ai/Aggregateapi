@@ -145,22 +145,68 @@ export default new Proxy({ randomUUID: uuid, randomBytes }, {
   enterWith(store) { this.#stack[this.#stack.length - 1] = store }
 }
 export default { AsyncLocalStorage }`
-    case 'path':
-      return `const norm = parts => parts.filter(p => p !== '' && p !== '.').join('/')
-export const join = (...parts) => norm(parts)
-export const resolve = (...parts) => norm(parts)
-export const dirname = value => { const at = String(value).replace(/\\\\/g, '/').lastIndexOf('/'); return at <= 0 ? '' : String(value).replace(/\\\\/g, '/').slice(0, at) }
-export const basename = value => String(value).replace(/\\\\/g, '/').split('/').pop()
-export const isAbsolute = value => /^(\\/|[A-Za-z]:[\\\\/])/.test(String(value))
-export const relative = (from, to) => String(to)
+      return `// 宿主的 entries.mjs 用 relative(root, file) + isAbsolute 判断「入口是否在包内」；
+// 以前 relative 直接返回 to、isAbsolute 又把绝对路径判成 true ⇒ **每个插件**都被判成
+// "Plugin entry is outside its package"。这里给出真正的最小语义（POSIX 风格）。
+// 注意：这段是模板字符串里的 JS，所以一个反斜杠都不能写（会被模板吃掉），统一用 code 92 切分。
+const slash = String.fromCharCode(92)
+const toSlashes = value => String(value).split(slash).join('/')
+export const normalize = value => {
+  const text = toSlashes(value)
+  const absolute = text.startsWith('/')
+  const out = []
+  for (const part of text.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (out.length && out[out.length - 1] !== '..') out.pop()
+      else if (!absolute) out.push('..')
+      continue
+    }
+    out.push(part)
+  }
+  return (absolute ? '/' : '') + out.join('/')
+}
+export const join = (...parts) => normalize(parts.filter(part => part !== '').join('/'))
+export const resolve = (...parts) => {
+  let out = ''
+  for (const part of parts) {
+    if (part === '') continue
+    const text = String(part)
+    out = normalize(text.startsWith('/') ? text : (out + '/' + text))
+  }
+  return out || '/'
+}
+export const dirname = value => {
+  const text = normalize(value)
+  const at = text.lastIndexOf('/')
+  if (at < 0) return ''
+  return at === 0 ? '/' : text.slice(0, at)
+}
+export const basename = value => normalize(value).split('/').pop()
+export const isAbsolute = value => toSlashes(value).startsWith('/')
+export const relative = (from, to) => {
+  const base = normalize(from).split('/').filter(Boolean)
+  const target = normalize(to).split('/').filter(Boolean)
+  let at = 0
+  while (at < base.length && at < target.length && base[at] === target[at]) at += 1
+  return [...Array(base.length - at).fill('..'), ...target.slice(at)].join('/')
+}
 export const sep = '/'
-export default { join, resolve, dirname, basename, isAbsolute, relative, sep }`
+export default { join, resolve, dirname, basename, isAbsolute, relative, sep, normalize }`
     case 'url':
       return `// 关键：把「文件路径」映射回我们登记过的 Blob URL，宿主因此不必改一行
 export function pathToFileURL(value) {
-  const key = String(value).replace(/\\\\/g, '/').replace(/^\\.\\//, '')
+  // 远端宿主拿到的是**网关本机**绝对路径，而我们登记的是 packages/<包 id>/<相对路径>：
+  // 既要能按整条路径命中，也要能按后缀（含文件名）命中，否则 import 找不到模块。
+  const key = String(value).split(String.fromCharCode(92)).join('/').replace(/^[.][/]/, '')
   const table = globalThis.__hostModuleUrls
-  const url = table && (table.get(key) || table.get(key.replace(/^.*\\//, '')))
+  const leaf = key.split('/').pop()
+  let url = table && (table.get(key) || table.get(leaf))
+  if (!url && table) {
+    for (const [path, candidate] of table) {
+      if (path === leaf || key.endsWith(path) || path.endsWith(key)) { url = candidate; break }
+    }
+  }
   if (!url) throw new Error('host module is not registered: ' + key)
   return { href: url, toString: () => url }
 }
