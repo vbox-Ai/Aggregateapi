@@ -1,5 +1,5 @@
---- a/core/plugin_host/mod.rs
-+++ b/core/plugin_host/mod.rs
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
 @@ -269,35 +269,82 @@
  /// 丢失：新实例既没有远端、又起不了子进程（iOS 上没有 Bun，`spawn()` 必然 ENOENT）。
  /// 会话是**面板级**的（一台网关同一时刻只服务一个面板），放这里之后谁先到都行：
@@ -124,8 +124,8 @@
      }
  
      /// 本宿主可用的远端出站口（脚本宿主专用，见 `attach_remote_session`）。
---- a/api/plugin_host.rs
-+++ b/api/plugin_host.rs
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
 @@ -62,11 +62,19 @@
  // 一台网关同一时刻只服务一个面板（宿主本身也是单实例），所以用一个全局槽持有
  // 出站接收端，由 `GET /stream` 取走。重复 open 会替换旧会话。

@@ -5201,3 +5201,34 @@ let written = match run {
 2. **主动断开与被动断开要在同一层区分**：否则"关页面"那次拆除会被当成断线，进而触发无意义的重连。
 3. 生成器两个老坑再确认：`difflib` 的组下标是 **0 基**、unified diff 头行是 **1 基**（漏了 `+1` 时两级干跑全灭）；
    "施加结果 vs 目标"要按**行数组**比较，别拿带尾换行的字符串去比 rstrip 过的文本。
+
+## 步骤 140 · 补丁 0023 路径修正 + 手机端宿主垫片收敛为唯一真身
+
+### 一、0023 在 CI 上没打上（真失败原因）
+- CI 的「打补丁」步骤报：`error: core/plugin_host/mod.rs: does not exist in index`、`error: api/plugin_host.rs: does not exist in index`，随后 `❌ 补丁未应用（上游已变，需要重新生成这个补丁）` ⇒ iOS job 失败、`编网关守护进程` 起全被跳过。
+- 根因：`gen_patch23.py` 里两份文件写的是**相对 server 根**的路径（`core/plugin_host/mod.rs`、`api/plugin_host.rs`），缺前缀 `desktop-tauri/src-tauri/server/src/server/`。补丁里的 `a/`+`b/` 路径必须是**仓库根相对**。
+- 更值得记的是**我上次的"真 git 复核"为什么放过了它**：那个临时仓库（`_p23check`）里只放了「`core/plugin_host/mod.rs`」「`api/plugin_host.rs`」两份基线 —— 恰好和补丁里的错误路径同名 ⇒ 在错误的根上验证，得到的是假的"通过"。
+- 修法与复核（已过）：
+  - 生成器补前缀，重新生成 ⇒ `0023-remote-session-liveness.diff` **10090 字节**，头行是 `a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs`。
+  - 复核改成**整棵仓库树**：`git clone --depth 1 --branch v3.5.0-beta.1`（gh-proxy 前缀）到 `_chain23`，按序 `git apply --3way` **0001..0023 ⇒ 23 个补丁、失败 0 个**；两份文件与目标**逐字节一致**。
+- 教训（三条）：① 补丁的 `a/`+`b/` 路径一律仓库根相对；② 复核必须在**整棵树上跑**，临时仓库要用**真实相对路径**；③ 看到"通过"先问一句"它到底跑在哪棵树上"。
+
+### 二、手机端宿主垫片收敛为唯一真身
+- 新增 `desktop-tauri/mobile/src/lib/plugin-host-shims.mjs`（导出 `NODE_SHIMS` 与 `shimSource(name)`）与同名 `.d.mts` 声明；`plugin-host.ts` 删掉内联实现、改为 `import { NODE_SHIMS, shimSource } from './plugin-host-shims.mjs'` 并再导出 ⇒ **11432 → 5341 字节**。
+- 顺手修掉两个真缺陷（都会让宿主在手机里直接卡死）：
+  - `switch` 里 **`case 'path':` 标签缺失** ⇒ 那段 path 实现是死代码，`node:path` 落到 default 桩，`resolve/relative/isAbsolute/join` 全 undefined（宿主 `entries.mjs` 判入口、`loader.mjs` 拼 `work/` 目录都要用）。
+  - `crypto` 只给 `randomUUID/randomBytes`，而宿主 `identity.mjs:18` 等多处**同步**用 `createHash('sha256')` ⇒ 补了一份**纯 JS 同步 SHA-256**（`createHash().update().digest('hex'|'base64')`）。
+  - 另补：`stream` 的 `Duplex/PassThrough/Transform`、`events` 的 `EventEmitter` + `once`（target 没有 `once` 时直接放行，避免吊死发送方）、`fs/promises.readFile` 按「整条后缀或文件名」命中 `__hostFiles`。
+- `.mjs` 必须是纯 JS：`] as const` 与 `(label: string)` 这类 TS 语法会让 Rollup 报 `Expected a semicolon`（第 16 行 / 第 88 行各踩一次）。
+
+### 三、本地沙盘：宿主在 Node 里跑通了整条 init
+- `_hostprobe/`：用**上线的那份垫片工厂**生成 15 个垫片（`gen_probe_shims.mjs` 直接 import `plugin-host-shims.mjs`）+ 上游 29 个宿主模块 + 一支真插件（`opencode-nous-auth`，解出 `index.mjs/oauth.mjs/package.json/README.md`），再推一帧 `init`。
+- 结果：`init` 回帧是**真的提供商描述** —— `{"id":"nous-portal","label":"Nous Portal (OAuth)",…,"login_methods":[{"kind":"browser","button":"Nous Portal (device code)"}],"default_models":[{"id":"Hermes-4-70B",…}]}`；过程中还有 `{"event":"startup","params":{"phase":"loading"}}`、`{"phase":"registering"}` 两帧 ⇒ **宿主真把插件加载并注册成功了**。
+- 沙盘自己的三个坑（记下来省下次的时间）：
+  1. **不能 `await import(宿主 main.mjs)`** —— 它末行是顶层 `await listen(handle)`，会一直挂着，驱动脚本自己卡死（Node 报 *Detected unsettled top-level await*）。做法：先挂 promise，再推帧。
+  2. 替换 `globalThis.process` **之前**必须先抓一份真 `stdout.write`，否则 `console.log` 会走垫片再回调自己 ⇒ `Maximum call stack size exceeded`。
+  3. `init` 载荷形状要照网关给：`providers: []`、`reserved: []`（HashSet 序列化成数组，不是 `{}`）、`claimed: {}`、`packages[].options/providerOptions/aliases`、`env.data_dir`、`catalogPath`；给错会得到 `object is not iterable`。
+
+### 四、校验
+- `tsc --noEmit` 0；`vite build` 0（`desktop-tauri/ui/m/mobile.js` **1,713.00 kB**、`mobile.css` 102.60 kB）；`check-mobile-ui.py --root …\main-latest` 0。
+- 沙盘 init 通过（用上线垫片）；链条 0001..0023 在整棵树上 0 失败。

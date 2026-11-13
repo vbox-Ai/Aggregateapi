@@ -28,11 +28,13 @@
  *                + login.start / login.poll / login.callback / login.cancel / provider.info
  */
 
-/** 宿主与插件里会被改写的 `node:*` 说明符 → 我方 shim 的模块名 */
-export const NODE_SHIMS = [
-  'async_hooks', 'child_process', 'crypto', 'events', 'fs', 'fs/promises',
-  'http2', 'net', 'os', 'path', 'stream', 'string_decoder', 'tls', 'url', 'worker_threads',
-] as const
+/**
+ * 垫片只有一份真身：`plugin-host-shims.mjs`。
+ * 桌面上的本地沙盘（`_hostprobe/`）也用同一份工厂生成垫片 ⇒ 沙盘里跑的就是这里上线的代码。
+ */
+import { NODE_SHIMS, shimSource } from './plugin-host-shims.mjs'
+
+export { NODE_SHIMS, shimSource }
 
 export type HostFile = { path: string; text: string }
 
@@ -109,139 +111,4 @@ function resolveSpecifier(
     return null
   }
   return null
-}
-
-/** `node:*` 的最小实现；重能力（net/tls/http2/child_process）留桩：真用了才报错 */
-function shimSource(name: string): string {
-  const stub = (why: string) => `export default new Proxy({}, { get() { throw new Error(${JSON.stringify(why)}) } })`
-  switch (name) {
-    case 'events':
-      return `export function once(target, event) {
-  return new Promise((resolve, reject) => {
-    const onEvent = (...args) => { cleanup(); resolve(args) }
-    const onError = error => { cleanup(); reject(error) }
-    const cleanup = () => { target.removeListener?.(event, onEvent); target.removeListener?.('error', onError) }
-    target.once?.(event, onEvent); target.once?.('error', onError)
-  })
-}
-export default { once }`
-    case 'crypto':
-      return `const uuid = () => globalThis.crypto.randomUUID()
-export const randomUUID = uuid
-export function randomBytes(size) {
-  const bytes = new Uint8Array(size); globalThis.crypto.getRandomValues(bytes); return bytes
-}
-// createHash 等属于 Node 专有：真的用到才失败，而不是静默给出错的结果
-export default new Proxy({ randomUUID: uuid, randomBytes }, {
-  get(target, key) { if (key in target) return target[key]
-    throw new Error('node:crypto.' + String(key) + ' is unavailable in this runtime') },
-})`
-    case 'async_hooks':
-      return `export class AsyncLocalStorage {
-  #stack = []
-  getStore() { return this.#stack[this.#stack.length - 1] }
-  run(store, callback, ...rest) { this.#stack.push(store)
-    try { return callback(...rest) } finally { this.#stack.pop() } }
-  enterWith(store) { this.#stack[this.#stack.length - 1] = store }
-}
-export default { AsyncLocalStorage }`
-      return `// 宿主的 entries.mjs 用 relative(root, file) + isAbsolute 判断「入口是否在包内」；
-// 以前 relative 直接返回 to、isAbsolute 又把绝对路径判成 true ⇒ **每个插件**都被判成
-// "Plugin entry is outside its package"。这里给出真正的最小语义（POSIX 风格）。
-// 注意：这段是模板字符串里的 JS，所以一个反斜杠都不能写（会被模板吃掉），统一用 code 92 切分。
-const slash = String.fromCharCode(92)
-const toSlashes = value => String(value).split(slash).join('/')
-export const normalize = value => {
-  const text = toSlashes(value)
-  const absolute = text.startsWith('/')
-  const out = []
-  for (const part of text.split('/')) {
-    if (!part || part === '.') continue
-    if (part === '..') {
-      if (out.length && out[out.length - 1] !== '..') out.pop()
-      else if (!absolute) out.push('..')
-      continue
-    }
-    out.push(part)
-  }
-  return (absolute ? '/' : '') + out.join('/')
-}
-export const join = (...parts) => normalize(parts.filter(part => part !== '').join('/'))
-export const resolve = (...parts) => {
-  let out = ''
-  for (const part of parts) {
-    if (part === '') continue
-    const text = String(part)
-    out = normalize(text.startsWith('/') ? text : (out + '/' + text))
-  }
-  return out || '/'
-}
-export const dirname = value => {
-  const text = normalize(value)
-  const at = text.lastIndexOf('/')
-  if (at < 0) return ''
-  return at === 0 ? '/' : text.slice(0, at)
-}
-export const basename = value => normalize(value).split('/').pop()
-export const isAbsolute = value => toSlashes(value).startsWith('/')
-export const relative = (from, to) => {
-  const base = normalize(from).split('/').filter(Boolean)
-  const target = normalize(to).split('/').filter(Boolean)
-  let at = 0
-  while (at < base.length && at < target.length && base[at] === target[at]) at += 1
-  return [...Array(base.length - at).fill('..'), ...target.slice(at)].join('/')
-}
-export const sep = '/'
-export default { join, resolve, dirname, basename, isAbsolute, relative, sep, normalize }`
-    case 'url':
-      return `// 关键：把「文件路径」映射回我们登记过的 Blob URL，宿主因此不必改一行
-export function pathToFileURL(value) {
-  // 远端宿主拿到的是**网关本机**绝对路径，而我们登记的是 packages/<包 id>/<相对路径>：
-  // 既要能按整条路径命中，也要能按后缀（含文件名）命中，否则 import 找不到模块。
-  const key = String(value).split(String.fromCharCode(92)).join('/').replace(/^[.][/]/, '')
-  const table = globalThis.__hostModuleUrls
-  const leaf = key.split('/').pop()
-  let url = table && (table.get(key) || table.get(leaf))
-  if (!url && table) {
-    for (const [path, candidate] of table) {
-      if (path === leaf || key.endsWith(path) || path.endsWith(key)) { url = candidate; break }
-    }
-  }
-  if (!url) throw new Error('host module is not registered: ' + key)
-  return { href: url, toString: () => url }
-}
-export class URL extends globalThis.URL {}
-export default { pathToFileURL, URL: globalThis.URL }`
-    case 'fs/promises':
-      return `const table = () => globalThis.__hostFiles
-export async function readFile(value) {
-  const key = String(value).replace(/\\\\/g, '/')
-  const files = table() || new Map()
-  for (const [path, text] of files) if (key.endsWith(path) || path.endsWith(key.replace(/^.*\\//, ''))) return text
-  throw new Error('ENOENT: ' + key)
-}
-export async function realpath(value) { return String(value).replace(/\\\\/g, '/') }
-export async function stat() { return { isFile: () => true } }
-export async function mkdir() {}
-export default { readFile, realpath, stat, mkdir }`
-    case 'fs':
-      return `export * from 'node:fs/promises'
-export default {}`
-    case 'stream':
-      return `export class Readable { pipe() { return this } }
-export class Writable {}
-export default { Readable, Writable }`
-    case 'string_decoder':
-      return `export class StringDecoder { constructor(encoding) { this.encoding = encoding }
-  write(buffer) { return new TextDecoder(this.encoding || 'utf-8').decode(buffer) } }
-export default { StringDecoder }`
-    case 'os':
-      return `export const homedir = () => '/'
-export const platform = () => 'ios'
-export const tmpdir = () => '/tmp'
-export default { homedir, platform, tmpdir }`
-    default:
-      return `${stub(`node:${name} is unavailable on this platform`)}
-`
-  }
 }
