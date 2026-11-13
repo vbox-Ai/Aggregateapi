@@ -1,0 +1,56 @@
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
+@@ -8,9 +8,14 @@
+ const CONNECT_MS: u64 = 45_000;
+ /// 传输中「多久没有新数据」就断开这一次、带上已收字节续传。
+ /// 比建连阶段宽一些：慢速线路上两个分片之间隔几十秒是正常的，不该当成断流。
+-const IDLE_MS: u64 = 60_000;
++const IDLE_MS: u64 = 25_000;
+ /// 一次下载最多尝试几次（每次失败都从已收字节续传，见 `resumed`）。
+ const ATTEMPTS: u32 = 4;
++
++// 单条 URL 上"累计停顿"的预算：超过就把错误交还给调用方。
++// 上层（Magpie 分发）有镜像链，换一条线路重来比在同一条死线路上
++// 把 ATTEMPTS 次续传都用光更划算 —— 否则界面看起来就是"卡死不动"。
++const STALL_BUDGET_MS: u64 = 60_000;
+ 
+ /// 下载通道。两条路的客户端、凭证与候选逻辑都不一样，共用的只有「续传循环」。
+ #[derive(Clone, Copy)]
+@@ -87,6 +92,7 @@
+ ) -> Result<Vec<u8>, String> {
+     let mut result: Vec<u8> = Vec::new();
+     let mut last_error = String::new();
++    let mut stalled_ms: u64 = 0;
+     for _ in 0..ATTEMPTS {
+         let mut headers = match transport {
+             Transport::Official => client::github_headers(),
+@@ -105,10 +111,18 @@
+             Ok(Ok(response)) => response,
+             Ok(Err(error)) => {
+                 last_error = error;
++                stalled_ms += CONNECT_MS;
++                if stalled_ms >= STALL_BUDGET_MS {
++                    return Err(last_error);
++                }
+                 continue;
+             }
+             Err(_) => {
+                 last_error = format!("连接后 {} 秒没有响应", CONNECT_MS / 1000);
++                stalled_ms += CONNECT_MS;
++                if stalled_ms >= STALL_BUDGET_MS {
++                    return Err(last_error);
++                }
+                 continue;
+             }
+         };
+@@ -128,6 +142,10 @@
+         let target = remaining.map(|length| result.len() as u64 + length);
+         if let Err(error) = drain(response, &mut result, limit).await {
+             last_error = error;
++            stalled_ms += IDLE_MS;
++            if stalled_ms >= STALL_BUDGET_MS {
++                return Err(last_error);
++            }
+             continue;
+         }
+         let complete = match target {
