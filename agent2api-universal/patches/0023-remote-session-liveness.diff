@@ -1,0 +1,194 @@
+--- a/core/plugin_host/mod.rs
++++ b/core/plugin_host/mod.rs
+@@ -269,35 +269,82 @@
+ /// 丢失：新实例既没有远端、又起不了子进程（iOS 上没有 Bun，`spawn()` 必然 ENOENT）。
+ /// 会话是**面板级**的（一台网关同一时刻只服务一个面板），放这里之后谁先到都行：
+ /// 手机先接入，之后新建的宿主实例照常看得见这条会话。
+-static REMOTE_SESSION: std::sync::OnceLock<
+-    StdMutex<Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>>>,
+-> = std::sync::OnceLock::new();
++type RemoteSender = tokio::sync::mpsc::UnboundedSender<proto::Frame>;
+ 
+-fn remote_session() -> &'static StdMutex<Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>>> {
++static REMOTE_SESSION: std::sync::OnceLock<StdMutex<Option<(u64, RemoteSender)>>> =
++    std::sync::OnceLock::new();
++
++fn remote_session() -> &'static StdMutex<Option<(u64, RemoteSender)>> {
+     REMOTE_SESSION.get_or_init(|| StdMutex::new(None))
+ }
+ 
+-/// 挂上远端宿主会话，交出本会话的出站接收端（由 `GET /api/plugins/host/stream` 取走）。
++/// 会话代次：每挂载一次加一。
+ ///
++/// ── 为什么要它 ──────────────────────────────────────────────────
++/// 会话会结束（手机离开插件页、页面重载、宿主崩掉），而"谁先到都行"的全局槽本身
++/// 没有生命周期。手机在一次停留里可能重连多次，旧会话的守卫**不能**把后来者清掉，
++/// 所以守卫只认自己那一代。
++fn next_session() -> u64 {
++    static SESSIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++    SESSIONS.fetch_add(1, Ordering::Relaxed) + 1
++}
++
++/// 会话守卫：跟着下行流一起活着；流结束（手机断开）时自动清槽。
++///
++/// ── 为什么必须有 ────────────────────────────────────────────────
++/// 没有它会留下"僵尸会话"：手机走了，槽里的发送端还在 ⇒ `has_remote()` 说"有远端"，
++/// 而每一次写入都失败。表现就是点安装立刻报
++/// 「写插件失败: 插件进程已退出或正在关闭」，而且**重进页面照样如此** ——
++/// 槽里躺着的始终是那条死会话。
++pub(crate) struct RemoteSessionGuard(u64);
++
++impl Drop for RemoteSessionGuard {
++    fn drop(&mut self) {
++        detach_session(self.0);
++    }
++}
++
++fn detach_session(generation: u64) {
++    if let Ok(mut slot) = remote_session().lock() {
++        if slot.as_ref().is_some_and(|(id, _)| *id == generation) {
++            *slot = None;
++        }
++    }
++}
++
++/// 挂上远端宿主会话，交出（守卫, 出站接收端）。
++///
++/// 接收端由 `GET /api/plugins/host/stream` 取走；守卫由那条下行流持有。
+ /// 重复挂载会替换旧会话：旧通道被丢弃后它的写入会失败（见 `Host::write`），
+ /// 不会与新会话串帧。
+-pub(crate) fn attach_remote_session(
+-) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>> {
++pub(crate) fn attach_remote_session() -> Option<(RemoteSessionGuard, tokio::sync::mpsc::UnboundedReceiver<proto::Frame>)> {
+     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
++    let generation = next_session();
+     let mut slot = remote_session().lock().ok()?;
+-    *slot = Some(sender);
+-    Some(receiver)
++    *slot = Some((generation, sender));
++    Some((RemoteSessionGuard(generation), receiver))
+ }
+ 
+-/// 拆掉远端宿主会话；之后脚本宿主回到子进程路径。
++/// 拆掉远端宿主会话（面板显式关闭）；之后脚本宿主回到子进程路径。
+ pub(crate) fn detach_remote_session() {
+     if let Ok(mut slot) = remote_session().lock() {
+         *slot = None;
+     }
+ }
+ 
+-fn remote_sender() -> Option<tokio::sync::mpsc::UnboundedSender<proto::Frame>> {
+-    remote_session().lock().ok().and_then(|slot| slot.clone())
++/// 远端出站口。**顺手做活性检查**：接收端已经没了（手机走了）就清槽并如实返回 `None`，
++/// 让上层回到"没有远端"的分支，而不是往一条死通道里写。
++fn remote_sender() -> Option<RemoteSender> {
++    let (generation, sender) = {
++        let slot = remote_session().lock().ok()?;
++        let (generation, sender) = slot.as_ref()?;
++        (*generation, sender.clone())
++    };
++    if sender.is_closed() {
++        detach_session(generation);
++        return None;
++    }
++    Some(sender)
+ }
+ 
+ /// 一个提供商插件宿主（对应一个已安装的包）。
+@@ -681,10 +728,26 @@
+         // 通道关闭（手机断开）时如实报断开，不静默丢弃 —— 上层据此收尾。
+         let remote = self.remote_sender();
+         if let Some(sender) = remote {
+-            return sender.send(frame).map_err(|_| process::disconnected());
++            return sender.send(frame).map_err(|_| remote_session_lost());
+         }
+-        let run = self.current_run().ok_or_else(process::disconnected)?;
++        let run = self.current_run().ok_or_else(no_host_at_all)?;
+         self.write_for_run(frame, run).await
++    }
++
++    /// 远端会话在写完之前断掉了：手机离开了插件页，或宿主已经退出。
++    fn remote_session_lost() -> std::io::Error {
++        std::io::Error::new(
++            std::io::ErrorKind::NotConnected,
++            "远端宿主会话已断开（手机离开了插件页，或宿主已退出）；回插件页会自动重连，再试即可",
++        )
++    }
++
++    /// 既没有子进程、也没有远端会话：这台网关上脚本宿主一次都没起来过。
++    fn no_host_at_all() -> std::io::Error {
++        std::io::Error::new(
++            std::io::ErrorKind::NotConnected,
++            "网关没有可用的脚本宿主进程，也没有接入远端宿主；回插件页会自动重连，再试即可",
++        )
+     }
+ 
+     /// 本宿主可用的远端出站口（脚本宿主专用，见 `attach_remote_session`）。
+--- a/api/plugin_host.rs
++++ b/api/plugin_host.rs
+@@ -62,11 +62,19 @@
+ // 一台网关同一时刻只服务一个面板（宿主本身也是单实例），所以用一个全局槽持有
+ // 出站接收端，由 `GET /stream` 取走。重复 open 会替换旧会话。
+ 
+-static REMOTE_INBOX: std::sync::OnceLock<
+-    std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>>>,
+-> = std::sync::OnceLock::new();
++/// 待取用的下行接收端，连同**会话守卫**：
++/// 守卫随这条接收端一起被 `GET /stream` 取走，再由那条流的闭包持有 ——
++/// 流一结束（手机断开或页面离开），守卫 Drop ⇒ `plugin_host` 里的会话槽被清空。
++/// 不这么做就会留下僵尸会话：槽里有会话、写进去必失败（见 `Host::write`）。
++type RemoteInbox = (
++    plugin_host::RemoteSessionGuard,
++    tokio::sync::mpsc::UnboundedReceiver<proto::Frame>,
++);
+ 
+-fn inbox() -> &'static std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<proto::Frame>>> {
++static REMOTE_INBOX: std::sync::OnceLock<std::sync::Mutex<Option<RemoteInbox>>> =
++    std::sync::OnceLock::new();
++
++fn inbox() -> &'static std::sync::Mutex<Option<RemoteInbox>> {
+     REMOTE_INBOX.get_or_init(|| std::sync::Mutex::new(None))
+ }
+ 
+@@ -80,11 +88,11 @@
+ /// 现在会话挂在模块级（`plugin_host::attach_remote_session`），与宿主实例解耦：
+ /// 谁先到都行 —— 手机先接入，安装时新建的宿主实例直接复用这条会话。
+ pub async fn open_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
+-    let Some(receiver) = plugin_host::attach_remote_session() else {
++    let Some((guard, receiver)) = plugin_host::attach_remote_session() else {
+         return error_response("远端宿主会话挂载失败", StatusCode::INTERNAL_SERVER_ERROR);
+     };
+     if let Ok(mut slot) = inbox().lock() {
+-        *slot = Some(receiver);
++        *slot = Some((guard, receiver));
+     }
+     ok_json(json!({ "hostId": script::HOST_ID }))
+ }
+@@ -153,18 +161,22 @@
+ /// 下行：把网关（与插件）发出的帧流给手机。
+ pub async fn stream(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
+     let taken = inbox().lock().ok().and_then(|mut slot| slot.take());
+-    let Some(mut receiver) = taken else {
+-        return error_response("远端宿主会话还没打开", StatusCode::CONFLICT);
++    let Some((guard, receiver)) = taken else {
++        return error_response(
++            "远端宿主会话还没打开（手机端要先 POST /api/plugins/host/open）",
++            StatusCode::CONFLICT,
++        );
+     };
+-    let body = Body::from_stream(futures::stream::unfold(receiver, |mut receiver| async move {
++    // 守卫跟着这条流的闭包：客户端断开 ⇒ 流被丢弃 ⇒ 会话槽自动清空。
++    let body = Body::from_stream(futures::stream::unfold((guard, receiver), |(guard, mut receiver)| async move {
+         match receiver.recv().await {
+             Some(frame) => {
+                 // 用同一套写入器编码，保证与子进程路径逐字节一致
+                 let mut out: Vec<u8> = Vec::new();
+                 match proto::write_frame(&mut out, &frame).await {
+-                    Ok(()) => Some((Ok::<_, std::io::Error>(Bytes::from(out)), receiver)),
++                    Ok(()) => Some((Ok::<_, std::io::Error>(Bytes::from(out)), (guard, receiver))),
+                     // 编码失败：不静默丢帧，把原因作为流错误交给客户端
+-                    Err(error) => Some((Err(std::io::Error::other(error.to_string())), receiver)),
++                    Err(error) => Some((Err(std::io::Error::other(error.to_string())), (guard, receiver))),
+                 }
+             }
+             None => None,

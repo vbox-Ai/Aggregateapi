@@ -286,8 +286,10 @@ export function PluginsPage() {
           onSettings={() => setPackSettings({ id: pack.id, server: serverIdentity() })} />)}
         {!packs.length ? <Card className='m-card'><Empty text={payload ? t('这台网关还没有安装插件') : t('正在读取插件列表…')} /></Card> : null}
       </div>
-      {/* 脚本插件：上游 v3.5.0 新增的第二类插件（Bun 脚本），与上面的进程插件并列展示；
-          iOS 沙盒下调不起来，脚本面板的安装动作会被网关的宿主闸门拒绝，属预期行为。 */}
+      {/* 脚本插件：上游 v3.5.0 新增的第二类插件（Bun 脚本），与上面的进程插件并列展示。
+          iOS 上没有 Bun，宿主改由手机跑（补丁 0011 的远端宿主）⇒ 这一区块要保证"接入是活的"：
+          补丁 0023 让网关能认出已经死掉的会话，面板这一侧断线自动重连 —— 两边都做，
+          才不会把「点获取」发到一条已经断了的通道上（那正是"点一下立刻失败"的由来）。 */}
       {payload?.scripts ? <div className='m-section'>
         <SectionHead title={t('脚本插件')} />
         {/* 网关这台机器没有可用的脚本运行时时（iOS：bun.rs 的 asset() 没有 ios 分支），
@@ -295,10 +297,15 @@ export function PluginsPage() {
             插件设置与各提供商的登录流程都照常工作 —— 它们本来就经网关走同一套 RPC。 */}
         {hostAttach.state !== 'idle' ? <Card className='m-card m-card-pad'>
           <div className='m-ck-note'>
-            {hostAttach.state === 'attaching' ? t('正在接入手机端宿主…')
+            {hostAttach.state === 'attaching' ? t('正在接入手机端宿主…（断开会自动重连）')
               : hostAttach.state === 'attached' ? t('手机端宿主已接入：脚本插件可安装并使用。')
                 : t('手机端宿主接入失败：{reason}', { reason: attachReason })}
           </div>
+          {hostAttach.state === 'unavailable' ? (
+            <Button variant='outline' size='sm' onClick={() => hostAttach.retry()}>
+              {t('重试接入')}
+            </Button>
+          ) : null}
         </Card> : null}
         <Card className='m-card m-card-pad'>
           {/* 搜索框：共享面板本来就支持 query（按名称/简介/provider 过滤），只是调用方一直没传

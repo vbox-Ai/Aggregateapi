@@ -14,6 +14,14 @@
  * `init` 是**网关发给宿主**的方法（上游 `host/main.mjs` 里 `frame.method === "init"` 由宿主应答）。
  * 所以面板**不能**主动发 init —— 那样它只会等一个不会来的回复。面板只负责把宿主跑起来并接上。
  *
+ * ── 为什么必须自己重连（踩过一次）──────────────────────────────
+ * 连接会**静默死掉**：手机切到后台、页面重载、宿主 Worker 崩掉、下行流被中间层掐断。
+ * 网关那边的会话槽是"谁先到都行"的全局状态，一旦手机侧接收端没了而槽里还留着发送端，
+ * 之后**每一次安装都会立刻失败**（「写插件失败: 插件进程已退出或正在关闭」），而且重进
+ * 页面也不见好 —— 因为面板自己以为"已接入"，不再 open。补丁 0023 让网关能把这种死会话
+ * 认出来（`is_closed()` + 守卫自动清槽），这一侧则负责**断线自动重连**：只有两边都做，
+ * 「点获取」才不会是"一条已经断了的通道"上的第一次写。
+ *
  * ── 与"每支插件一个 Worker"的关系 ──────────────────────────────
  * 宿主本身**只有一份**（它是"共享的运行时"，桌面端也如此）；隔离发生在插件之间，
  * 而插件是由宿主在自己的上下文里装载的。所以这里只需要**一个** Worker。
@@ -24,6 +32,12 @@ import type { HostFile, HostTransport } from './plugin-host'
 import { startPluginHost, type PluginHostSession } from './plugin-host-session'
 
 export type AttachState = 'idle' | 'attaching' | 'attached' | 'unavailable'
+
+/** 断线后的重连节奏；用尽即判定接入失败（可由界面上的「重试接入」手工重置） */
+const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000]
+
+/** 主动拆除会话时的原因文案：命中它就不重连（不然关页面会触发一轮无意义的重连） */
+const DELIBERATE_REASON = '插件会话已关闭'
 
 /** 取网关侧的宿主源码（与网关版本一致的那一份；手机不自带，避免协议漂移） */
 async function loadHostFiles(): Promise<HostFile[]> {
@@ -57,8 +71,11 @@ async function loadHostFiles(): Promise<HostFile[]> {
 /**
  * 用网关的**纯 HTTP 端点**当传输层（与 0009 的实现一致；axum 未开 ws 特性）。
  * 上行合并成批（端点收 `{ lines }`）；`open` 必须先于 `stream`（下行端点会取走接收端，且只能取一次）。
+ *
+ * `onStreamEnd` 只在**非主动**断开时调用（下行流结束、open/stream 失败、上行写失败），
+ * 由调用方决定要不要重连。
  */
-function httpTransport(onNotice: (text: string) => void): HostTransport & {
+function httpTransport(onNotice: (text: string) => void, onStreamEnd: (reason: string) => void): HostTransport & {
   packageFiles: (id: string) => Promise<HostFile[]>
 } {
   const lineHandlers: Array<(line: string) => void> = []
@@ -70,10 +87,11 @@ function httpTransport(onNotice: (text: string) => void): HostTransport & {
   let flushing = false
   let closed = false
 
-  const finish = (reason: string) => {
+  const finish = (reason: string, deliberate = false) => {
     if (closed) return
     closed = true
     for (const handler of closeHandlers) handler(reason)
+    if (!deliberate) onStreamEnd(reason)
   }
 
   const flush = async () => {
@@ -88,14 +106,15 @@ function httpTransport(onNotice: (text: string) => void): HostTransport & {
           body: JSON.stringify({ lines: batch }),
         })
         if (!response.ok) {
-          onNotice(`上行失败（HTTP ${response.status}）`)
-          finish('与网关的插件通道已断开')
+          const body = await response.text().catch(() => '')
+          onNotice(`上行走不通（HTTP ${response.status}）：${body.slice(0, 160)}`)
+          finish('上行通道不可用')
           return
         }
       }
     } catch (error) {
       onNotice(error instanceof Error ? error.message : String(error))
-      finish('与网关的插件通道已断开')
+      finish('上行通道不可用')
     } finally {
       flushing = false
     }
@@ -173,14 +192,15 @@ function httpTransport(onNotice: (text: string) => void): HostTransport & {
     },
     onClose(handler) { closeHandlers.push(handler) },
     teardown() {
-      finish('插件会话已关闭')
+      finish(DELIBERATE_REASON, true)
       void fetch(url('/api/plugins/host/close'), { method: 'POST', headers: authHeaders() }).catch(() => {})
     },
   }
 }
 
 /**
- * 在页面挂载期间保持宿主接入。返回当前状态与一句可读的原因（失败时）。
+ * 在页面挂载期间保持宿主接入；断线自动重连。返回状态与一句可读的原因（失败时），
+ * 以及一个手工重试入口（界面上的「重试接入」）。
  *
  * 只在"这台网关的脚本运行时不可用"时才介入：桌面端/服务端有 Bun，走原生路径即可，
  * 这里接入反而是多余的第二次握手。判据用网关给的 runtime.installed。
@@ -189,54 +209,110 @@ export function useScriptHostAttach(options: {
   /** 只在网关侧没有可用脚本运行时（iOS）时介入 */
   enabled: boolean
   onNotice: (text: string) => void
-}): { state: AttachState } {
+}): { state: AttachState; retry: () => void } {
   const { enabled, onNotice } = options
   // 状态必须走 useState：用 ref 的话界面不会跟着更新（"正在接入"永远不变）
   const [state, setState] = useState<AttachState>('idle')
   const sessionRef = useRef<PluginHostSession | null>(null)
   const transportRef = useRef<HostTransport | null>(null)
+  const timerRef = useRef<number | null>(null)
+  const attemptRef = useRef(0)
+  const aliveRef = useRef(false)
+  /** 每次接入一个代号：异步过程中被取代的接入不许再改状态 */
+  const runRef = useRef(0)
+
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }, [])
 
   const stop = useCallback(() => {
+    runRef.current += 1
+    clearTimer()
     sessionRef.current?.close()
     sessionRef.current = null
     transportRef.current?.teardown?.()
     transportRef.current = null
-  }, [])
+  }, [clearTimer])
+
+  const connect = useCallback(async (): Promise<void> => {
+    const run = runRef.current + 1
+    runRef.current = run
+    /** 本次接入失败/断线：排队重连，用尽则报失败 */
+    const schedule = (reason: string) => {
+      if (!aliveRef.current || runRef.current !== run) return
+      const index = Math.min(attemptRef.current, RECONNECT_DELAYS.length - 1)
+      const wait = RECONNECT_DELAYS[index]
+      attemptRef.current += 1
+      if (attemptRef.current > RECONNECT_DELAYS.length) {
+        setState('unavailable')
+        onNotice(`手机端宿主接入失败：${reason}`)
+        return
+      }
+      setState('attaching')
+      onNotice(`宿主连接已断开（${reason}）；${Math.round(wait / 1000)} 秒后自动重连（第 ${attemptRef.current} 次）`)
+      clearTimer()
+      timerRef.current = window.setTimeout(() => { void connect() }, wait)
+    }
+    try {
+      sessionRef.current?.close()
+      sessionRef.current = null
+      transportRef.current?.teardown?.()
+      transportRef.current = null
+      const hostFiles = await loadHostFiles()
+      if (!aliveRef.current || runRef.current !== run) return
+      const transport = httpTransport(onNotice, schedule)
+      transportRef.current = transport
+      const session = await startPluginHost({
+        hostFiles,
+        pluginFiles: [],
+        transport,
+        packageFiles: transport.packageFiles,
+      })
+      if (!aliveRef.current || runRef.current !== run) {
+        session.close()
+        return
+      }
+      sessionRef.current = session
+      // **不要在这里发 init**：`init` 是网关发给宿主的方法（host/main.mjs 里 `frame.method === "init"`
+      // 由宿主自己应答），方向是 网关 → 宿主。宿主主动发 init 只会等一个不会来的回复，
+      // 界面就停在「正在接入」，插件也起不来。
+      // 面板的职责到此为止：宿主跑起来、传输层接上；随后用户在商店点「获取」时，
+      // 网关启动插件会自己发 init，宿主（这里这个 Worker）应答，provider 就注册上来了。
+      attemptRef.current = 0
+      setState('attached')
+    } catch (failure) {
+      if (!aliveRef.current || runRef.current !== run) return
+      schedule(failure instanceof Error ? failure.message : String(failure))
+    }
+  }, [clearTimer, onNotice])
 
   useEffect(() => {
+    aliveRef.current = enabled
     if (!enabled) {
+      stop()
       setState('idle')
-      return
+      return () => { aliveRef.current = false }
     }
-    let cancelled = false
+    attemptRef.current = 0
     setState('attaching')
-    void (async () => {
-      try {
-        const hostFiles = await loadHostFiles()
-        if (cancelled) return
-        const transport = httpTransport(onNotice)
-        transportRef.current = transport
-        const session = await startPluginHost({ hostFiles, pluginFiles: [], transport, packageFiles: transport.packageFiles })
-        sessionRef.current = session
-        // **不要在这里发 init**：`init` 是网关发给宿主的方法（host/main.mjs 里 `frame.method === "init"`
-        // 由宿主自己应答），方向是 网关 → 宿主。宿主主动发 init 只会等一个不会来的回复，
-        // 界面就停在「正在接入」，插件也起不来。
-        // 面板的职责到此为止：宿主跑起来、传输层接上；随后用户在商店点「获取」时，
-        // 网关启动插件会自己发 init，宿主（这里这个 Worker）应答，provider 就注册上来了。
-        if (cancelled) return
-        setState('attached')
-      } catch (failure) {
-        if (cancelled) return
-        setState('unavailable')
-        onNotice(failure instanceof Error ? failure.message : String(failure))
-      }
-    })()
+    void connect()
     return () => {
-      cancelled = true
+      aliveRef.current = false
       stop()
       setState('idle')
     }
-  }, [enabled, onNotice, stop])
+  }, [enabled, connect, stop])
 
-  return { state }
+  /** 手工重试：重置重连计数再走一次接入 */
+  const retry = useCallback(() => {
+    attemptRef.current = 0
+    if (!aliveRef.current) return
+    setState('attaching')
+    void connect()
+  }, [connect])
+
+  return { state, retry }
 }
