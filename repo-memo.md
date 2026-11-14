@@ -5300,3 +5300,29 @@ error[E0425]: cannot find function `remote_session_lost` in this scope
   - CI：commit `cd2b5f0` → run `43640880013`（embed=1 / only=store / publish=true）⇒ **Plugins 与 iOS 全 success**，一次性发版成功，Release `ios-20261114-b449`（7 资产）。
 - 交付约定（操作者 2026-11-15 明确）：**以后只需发 rootful / arm64e 的 deb 直链**，不必每次列四款——他固定测这一款。
 - 教训：① 异步/惰性构造的缓存表**不能用空串当"尚未就绪"的哨兵**，falsy 判断会把"没算出来"和"不需要"混成一件事；正确做法是先占位成不可能的显式标记（`undefined` / 独立 sentinel），或直接两遍扫描（先算全表再改写）。② 依赖图里出现真正的环（本次是 `login-prompts ↔ login-policy`）就不能靠拓扑排序，得按 SCC 折叠；折叠前必须确认分量内顶层声明无冲突、import 全是单行形式。③ "本地能跑"要看清跑的是哪条路径——沙盘走真实文件系统、真机走 Blob URL，两条路的模块解析语义完全不同。④ 清单类请求必须校验**内容**而非状态码：反代 200 + HTML 是很常见的形态。⑤ 交付物要按收件人的习惯裁剪，别再让他从四款里挑一款。
+## 步骤 145 · 0027：远端宿主桥审计日志 + 手机端宿主失败可见（2026-11-15）
+
+**症状**：b449（含 0026 模块 URL 修复）装上后点「获取」装 Nous Portal (OAuth) 脚本插件，面板一直「正在加载脚本插件 · 已 N 秒没有进展」，最后无声失败。导出的日志 50 条全部是 `plugin` 类别，每一轮都是 `starting≈33ms / loading≈60000ms` + 「远端插件握手失败：插件调用超时（init）」，**没有任何一条宿主侧日志**。
+
+**根因**（不是网络，也不是包体下载；包体 5.8 MB 早就下完了）：
+1. 手机端宿主（WebView Worker 里跑 29 个宿主 .mjs）失败时三条通道全被静默丢弃：`process.stderr.write` 发出的 `{kind:'err'}` 在 `plugin-host-session.ts` 的消息处理里**没有分支**；Worker 的 `error` / `unhandledrejection` **没有监听**；`boot-failed` 只写进模块内变量，唯一抛出点是 `session.call()`，而面板从不 `call()`（宿主是网关直连的）⇒ 界面永远看不到原因。
+2. `plugin-host-attach.ts` 在 `startPluginHost()` 返回后无条件 `setState('attached')`，宿主已经死了也显示「已连接」。
+3. 网关侧整条远端桥（open / stream / frames / close）**一句日志都没有**，出问题时分不清「手机没发帧」还是「发了网关没接」。
+
+**改法**（0027）：
+- `api/plugin_host.rs`：新增模块级 `fn audit(text)` → `logging::log_with_level("[Plugin]", text, "info")`（落 `plugin` 类别，用户导出日志可见）。打点 8 处：open 收到 / 挂载失败 / 已挂载；stream 槽空 409 / 会话已交给流；frames 开头「上行帧到达：N 行，宿主实例=有/无，首行=…」、503 分支、解析失败分支、结尾「投递 X 帧，丢弃 Y 帧」；close 收到。
+- `plugin-host-session.ts`：bootstrap 内加 `reportHostError()` 与 `error` / `unhandledrejection` 监听；options 新增 `onFailure`；`err` / `host-error` / `exit` / `boot-failed` 四条路统一走 `report()`（超 400 字符截断）。
+- `plugin-host-attach.ts`：`onFailure` 立即 `setState('unavailable')` + `onNotice('插件宿主不可用：'+reason)`，并用 `failedEarly` 短路随后的 `attached`。
+
+**验证**：
+- `_chain27v`（上游 v3.5.0-beta.1 fresh clone）按序 `git apply --3way` 应用 0001..0027 **全部 rc=0**；`api/plugin_host.rs` sha256 `8772EA19570A8B8DF5B24CFDD9B377144906732F044D49BCFC3152AE15B4DB58`（16347 B）与 `_chain24` 逐字节一致。
+- 手机端 `tsc --noEmit --strict --jsx react-jsx src/lib/plugin-host-session.ts src/lib/plugin-host-attach.ts` ⇒ exit=0。
+- 0025/0026 的 diff 内容要用 `GET /git/blobs/{sha}` 取 base64；`GET /contents/<path>.diff` 会返回 404（含有 `?ref=main` 也一样）。
+- CI run #451 success，Release `ios-20261114-b451`。
+
+**教训**：
+1. 「插件加载不出来」在没有日志时**不能靠猜**——先确认哪一段静默（面板 / 网关 / 宿主），再补观测点；本次三处静默同时存在，任何单点修复都定位不到。
+2. 失败上报必须接到**用户看得见的地方**（onNotice / 状态机），只存模块变量或只经 `call()` 抛出，等于没上报。
+3. 状态机里「无条件 attached」是同类病：失败标记要先置位并短路后续成功路径。
+4. 网关侧对手机端的每一条入站通道（open / stream / frames / close）都应有审计行，否则跨设备链路故障只能靠猜。
+5. 交付约定不变：给用户的直链只发 **rootful + arm64e** 那一款。
