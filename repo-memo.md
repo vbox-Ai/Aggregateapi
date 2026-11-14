@@ -5271,3 +5271,16 @@ error[E0425]: cannot find function `remote_session_lost` in this scope
 - 改法（只改 `desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs`）：`IDLE_MS` 60s → 25s；新增 `STALL_BUDGET_MS = 60_000`（单条 URL 的累计停顿预算）；`resumed` 里加 `stalled_ms` 记账（连接超时记 `CONNECT_MS`、传输停顿记 `IDLE_MS`），一超预算就把错误交还调用方 ⇒ 镜像链换另一条线路继续下。
 - 校验：两级干跑 ✓（施加后与目标逐字节一致）；整棵树复核「fresh clone 上游 `v3.5.0-beta.1`（经 gh-proxy）+ 按序 `git apply --3way` **0001..0024**」⇒ **全部 rc=0**，且 `download.rs`(226 行)、`script/mod.rs`(104)、`http.rs`(1590)、`core/plugin_host/mod.rs`(928)、`script/host/main.mjs`(100)、`distribution.rs`(163) 与各自**最新**目标逐字节一致；`api/plugin_host.rs` 与 0023 的目标一致（289 行）—— 第一次比对时我填的是 0022 的旧目标，报了一次假不一致。
 - 教训：① 「等了很久」和「线路死了」在界面上长得一模一样，超时要按「正常速率 × 数据量」定，凭感觉给 60 秒就会把故障演成"卡死"；② 重试预算必须分层（单条 URL 一层、换源一层），否则同一层的重试会把上层的"换源"永远饿死；③ 自写 unified-diff 施加器的返回值是字符串还是行数组要统一 —— 拿字符串跟行数组比会伪装成"补丁错了"，白查一轮（本轮就踩了一次）。
+
+## 步骤 143：0025 修「插件目录黄警告 + 第三方 github: 源装不上」——清单链路接入网关镜像源
+
+- 症状（iOS 截图）：网关插件页黄条「部分信息未能更新：error sending request … raw.githubusercontent.com/…/package.json → Connection reset by peer (os error 54)」；Nous Portal 卡片卡「正在加载脚本插件 · 0.0 MiB」。
+- 根因：0022 修过包体下载链（`script/distribution.rs` 的 `dist_bytes` 走「GitHub 访问方式」+ 反代链），但**目录清单链**全漏了——`script/catalog/network.rs::github_bytes` 用 `client::fetch_official`（= `fetch_github(allow_mirror=false)`），`source.rs:149` 在 `allow_mirror=false` 时把镜像候选整段剪掉，只剩官方直连一个。国内直连 raw 被 RST ⇒ registry/dist index/topic 扫描/每仓 package.json 全挂。「正在加载脚本插件 · 0.0 MiB」是 `start_remote` 等手机 Worker init 握手（上限 60s），与黄条同根（Worker 宿主脚本未绕网关直连，排查过 29 个 .mjs 无直连）。
+- 顺带发现：`script/source.rs` 的第三方 `github:` 源安装（commits API + codeload tar.gz）与 `script/updates.rs` 的更新检查只走 `Transport::Official` 直连（download.rs `github_bytes`），同样被 RST ⇒ 第三方源在国内必然装不上。
+- 改法（3 个文件，补丁 `0025-catalog-github-via-gateway-sources.diff`）：
+  - `script/catalog/network.rs::github_bytes`：`fetch_official` → `fetch_public`（复用「GitHub 访问方式」：官方源 + 已启用镜像、Auto 按探测排序；镜像候选上 `client::fetch_candidate` 会剥 Authorization，token 不泄给镜像站）。代价：错误退化 String、跨源 403/429 retry_at 不再透传（刷新侧本有 60s 退避兜底）。
+  - `script/download.rs::github_bytes`：先 `Transport::Public`（自动选源），全挂退 `Transport::Official`；错误信息合并两条路。代价：Public 路不带 token，commits API 退化未认证 60/h —— 装几个插件的量级足够。
+  - `script/source.rs:108` 注释更新（codeload 完整性靠固定提交归档 sha256 落库，可接镜像）。
+- 不改：`api.github.com/search`（topic 扫描）恒直连（`is_resource` 不含 search），该线路 api.github.com 实测可达；`bun.rs` 的 Bun 下载走 `download::bytes`（Public）已带镜像；`icons/sources.rs` 的 raw 元数据走 `download::bytes`（Public）已可镜像；`plugin_host/update.rs` 的 INDEX_REPO 走 `selection::fetch_json`（恒 allow_mirror=true）已是镜像。
+- 验证惯例整树复核：fresh clone 上游 `v3.5.0-beta.1`（本地 file:// clone `_chain24`）+ 按序 `git apply --3way` **0001..0025** ⇒ 全部 rc=0；三文件（network.rs/download.rs/source.rs）与验证树逐字节一致，与 `_chain24` CRLF 版内容等价（去 CR 后相同）。
+- 教训：① 「下载修好 ≠ 目录修好」——同一仓里包体和清单是两条独立链路，镜像改造要按「取数入口」全量过一遍（本次遗漏了 network.rs 与 download.rs 的 Official 路）；② PowerShell `git diff > file` 会把输出写成 UTF-16，`git apply` 报 "No valid patches in input"——生成 diff 必须 `git diff --output=` 或 `-OutFile -Encoding utf8`；③ 上游 blob 有 CRLF 的文件，在 `core.autocrlf=false` 下 apply 后工作树变 LF——下游对比行尾时先查 blob，别默认工作树即权威。
