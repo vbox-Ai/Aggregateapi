@@ -1,0 +1,63 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs
+index 6060a7d..a147a00 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs
+@@ -36,8 +36,16 @@ async fn read(mut response: reqwest::Response, limit: usize) -> Result<Option<Ve
+ 
+ pub(super) async fn github_bytes(url: &str, limit: usize) -> Result<Option<Vec<u8>>, Failure> {
+     let work = async {
+-        let response = client::fetch_official(url, &client::github_headers(), Some(45_000)).await
+-            .map_err(|error| Failure { retry_at: error.retry_at(), message: error.message })?;
++        // 走网关的「GitHub 访问方式」（fetch_public ⇒ fetch_github(allow_mirror = true)）：
++        // 官方源之外带上已启用的镜像，Auto 模式按探测速度排序；镜像候选上
++        // client::fetch_candidate 会剥掉 Authorization，token 不会泄给镜像站。
++        // 之前这里用 fetch_official（allow_mirror = false）：候选只剩官方直连一个，
++        // 国内直连 raw.githubusercontent.com 会被 RST（os error 54），目录清单
++        // 与每仓 package.json 必然拉不到 —— 「部分信息未能更新」黄条就出自这里。
++        // 代价：错误退化为 String，跨源 403/429 的 retry_at 不再透传；
++        // 刷新侧有自己的 60 秒退避（refresh/github 的 github_retry），可以接受。
++        let response = client::fetch_public(url, &client::github_headers(), Some(45_000)).await
++            .map_err(Failure::from)?;
+         read(response, limit).await
+     };
+     tokio::time::timeout(Duration::from_secs(60), work).await
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
+index aade685..521b9be 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/download.rs
+@@ -72,8 +72,19 @@ pub(super) async fn public_bytes(url: &str, limit: usize) -> Result<Vec<u8>, Str
+     resumed(Transport::Public, url, limit, None).await
+ }
+ 
++/// GitHub 地址（commits API / codeload tarball）：先走「GitHub 访问方式」
++/// （Public ⇒ fetch_public ⇒ 官方源 + 已启用镜像，Auto 模式按探测速度排序），
++/// 全挂才退回官方直连。国内直连 codeload/raw 会被 RST（os error 54），
++/// 第三方 `github:` 源插件的安装与更新检查此前只有官方直连一条路，必然失败。
++/// 代价：Public 路只带 UA 不带 token（镜像候选本来就会被剥凭证，
++/// 见 client::fetch_candidate），commits API 退化为未认证限额（60/h），
++/// 对「装几个插件」的量级足够。
+ pub(super) async fn github_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
+-    resumed(Transport::Official, url, limit, None).await
++    match resumed(Transport::Public, url, limit, None).await {
++        Ok(bytes) => Ok(bytes),
++        Err(public_error) => resumed(Transport::Official, url, limit, None).await
++            .map_err(|official_error| format!("{official_error}（自动选源失败：{public_error}）")),
++    }
+ }
+ 
+ /// 带断点续传的下载：每次被掐断都发 `Range: bytes=<已收>-` 接着往后传。
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/source.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/source.rs
+index 9f51185..4d40ec2 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/source.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/source.rs
+@@ -105,7 +105,9 @@ async fn download(repository: &str, reference: &str) -> Result<Package, String>
+         .as_str().filter(|sha| sha.len() == 40 && sha.bytes().all(|ch| ch.is_ascii_hexdigit()))
+         .ok_or("GitHub 没有返回有效的固定提交")?.to_ascii_lowercase();
+     super::operations::stage("package", "正在下载 GitHub 脚本插件");
+-    // 源码没有 npm integrity；仅从 GitHub 官方源下载固定提交，不接受镜像代换。
++    // 源码没有 npm integrity，完整性靠固定提交归档的 sha256 落库记录（见 PackageSource::Github）。
++    // 下载走 download::github_bytes：先「GitHub 访问方式」（官方源 + 已启用镜像），全挂退官方直连 ——
++    // 国内直连 codeload.github.com 会被 RST，只走官方源时第三方 `github:` 插件必然装不上。
+     let archive = super::download::github_bytes(
+         &format!("https://codeload.github.com/{repository}/tar.gz/{commit}"),
+         super::packages::MAX_PACKAGE_BYTES,
