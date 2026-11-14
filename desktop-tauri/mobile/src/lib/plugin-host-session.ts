@@ -129,6 +129,22 @@ class MiniBuffer extends Uint8Array {
 }
 globalThis.Buffer = MiniBuffer
 
+// ── 宿主内部错误必须看得见 ─────────────────────────────────────
+// 顶层 import 成功返回 ≠ 宿主在跑。宿主之后在异步段抛出时，Worker 里既没人监听
+// error/unhandledrejection，process.stderr 的内容也没人消费 —— 网关只能等 init
+// 超时，面板除了转圈什么都看不到（真机上就是这样卡满 60 秒）。
+function reportHostError(reason) {
+  self.postMessage({ kind: 'host-error', message: String(reason) })
+}
+self.addEventListener('error', event => {
+  const detail = (event && event.error && event.error.stack) || (event && event.message) || event
+  reportHostError(detail)
+})
+self.addEventListener('unhandledrejection', event => {
+  const reason = event && event.reason
+  reportHostError((reason && (reason.stack || reason.message)) || reason)
+})
+
 // ── Bun 空壳：真用到本机进程能力才失败，不静默假装支持。──
 globalThis.Bun ??= new Proxy({}, {
   get(_target, name) {
@@ -176,6 +192,14 @@ export async function startPluginHost(options: {
    * 所以在把 `init` 交给宿主之前，先按包 id 把文件取回来登记进模块表/文件表。
    */
   packageFiles?: (id: string) => Promise<HostFile[]>
+  /**
+   * 宿主不可用时的回调（启动抛错 / 内部崩溃 / 自己退出）。
+   *
+   * 以前这些只记在 `bootFailure` 里、由 `call()` 抛出 —— 可这套宿主是网关直连的，
+   * 面板一次 `call()` 都不做，于是「宿主启动失败」四个字永远不会出现在界面上，
+   * 用户看到的是「正在加载脚本插件」一直转、60 秒后网关报握手超时。
+   */
+  onFailure?: (reason: string) => void
 }): Promise<PluginHostSession> {
   const hostEntryKey = 'main.mjs'
   const urls = buildModuleUrls(
@@ -203,6 +227,14 @@ export async function startPluginHost(options: {
   let exitCode: number | null = null
   let lastNotice = ''
   const loadedPackages = new Set<string>()
+
+  /** 宿主侧的失败：既记进 notice，也立刻抛给外层（不等到下一次 call） */
+  const report = (reason: unknown) => {
+    const text = String(reason ?? '').trim()
+    if (!text) return
+    lastNotice = text.length > 400 ? `${text.slice(0, 400)}…` : text
+    options.onFailure?.(lastNotice)
+  }
 
   // 运行期登记文件：既进文件表（宿主 readFile 用），也生成模块 URL（宿主 import 用）。
   const registerFiles = (files: HostFile[]) => {
@@ -262,14 +294,25 @@ export async function startPluginHost(options: {
       return
     }
     if (data.kind === 'exit') {
-      // 宿主自己结束了：以前这里什么都不做，于是面板永远停在「正在加载脚本插件」，
-      // 直到网关 60 秒后报超时 —— 退出必须看得见。
+      // 宿主自己结束了：以前这里只记下 code，而没有任何人读它 —— 面板永远停在
+      // 「正在加载脚本插件」，直到网关 60 秒后报超时。退出必须看得见。
       exitCode = Number(data.code) || 0
+      report(`插件宿主已退出（code ${exitCode}）`)
+      return
+    }
+    if (data.kind === 'err') {
+      // process.stderr：宿主的崩溃堆栈、console.error 全走这里，以前整支丢弃
+      report(data.text)
+      return
+    }
+    if (data.kind === 'host-error') {
+      report(`插件宿主内部错误：${data.message}`)
       return
     }
     if (data.kind === 'boot-failed') {
       // 事件回调里 throw 不会让任何 promise 失败，所以先记下来，由下一次 call 抛出
       bootFailure = new Error(`插件宿主启动失败：${data.message}`)
+      report(bootFailure.message)
       return
     }
   })

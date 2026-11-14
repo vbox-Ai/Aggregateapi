@@ -1,0 +1,102 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+index ec3beee..ce4bb9f 100644
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -62,6 +62,15 @@ pub async fn source(State(_state): State<ServerState>, _headers: HeaderMap) -> R
+ // 一台网关同一时刻只服务一个面板（宿主本身也是单实例），所以用一个全局槽持有
+ // 出站接收端，由 `GET /stream` 取走。重复 open 会替换旧会话。
+ 
++/// 远端宿主桥的审计行（落在 `plugin` 类别里，用户导出的日志能看到）。
++///
++/// 宿主跑在手机 WebView 里，它的 stdout / stderr 都在浏览器上下文 —— 网关这边只看得见
++/// 「帧有没有到」。这条链此前一句日志都没有：出问题时分不清「手机没发帧」还是「发了
++/// 没解析出来」，只能靠用户导日志反推。
++fn audit(text: &str) {
++    crate::server::logging::log_with_level("[Plugin]", text, "info");
++}
++
+ /// 待取用的下行接收端，连同**会话守卫**：
+ /// 守卫随这条接收端一起被 `GET /stream` 取走，再由那条流的闭包持有 ——
+ /// 流一结束（手机断开或页面离开），守卫 Drop ⇒ `plugin_host` 里的会话槽被清空。
+@@ -88,12 +97,15 @@ fn inbox() -> &'static std::sync::Mutex<Option<RemoteInbox>> {
+ /// 现在会话挂在模块级（`plugin_host::attach_remote_session`），与宿主实例解耦：
+ /// 谁先到都行 —— 手机先接入，安装时新建的宿主实例直接复用这条会话。
+ pub async fn open_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
++    audit("远端宿主会话：收到 open");
+     let Some((guard, receiver)) = plugin_host::attach_remote_session() else {
++        audit("远端宿主会话：挂载失败（attach_remote_session 返回 None）");
+         return error_response("远端宿主会话挂载失败", StatusCode::INTERNAL_SERVER_ERROR);
+     };
+     if let Ok(mut slot) = inbox().lock() {
+         *slot = Some((guard, receiver));
+     }
++    audit("远端宿主会话：已挂载，等手机取下行流");
+     ok_json(json!({ "hostId": script::HOST_ID }))
+ }
+ 
+@@ -116,6 +128,19 @@ pub async fn frames(
+     Json(body): Json<FramesBody>,
+ ) -> Response {
+     let host = script::script_host();
++    let arrived = body.lines.len();
++    let preview = body
++        .lines
++        .iter()
++        .find(|line| !line.trim().is_empty())
++        .map(|line| line.chars().take(160).collect::<String>())
++        .unwrap_or_default();
++    audit(&format!(
++        "上行帧到达：{} 行，宿主实例={}，首行={}",
++        arrived,
++        if host.is_some() { "有" } else { "无" },
++        if preview.is_empty() { "（空）" } else { preview.as_str() }
++    ));
+     // 拼成一个流再按帧读：proto 的读取接口吃的是 AsyncRead（lifecycle.rs:238 就是这么用的），
+     // 逐行自己解析等于重写一遍协议。
+     // 每帧都要带行尾：`proto::read_frame` 读到 EOF 时若缓冲区还剩半截数据，会直接判
+@@ -139,6 +164,7 @@ pub async fn frames(
+                         // 启动期的 log / startup 事件：没有宿主可投递，按丢失计
+                         ignored += 1;
+                     } else {
++                        audit("上行帧被拒：这台网关还没有脚本宿主实例（503）");
+                         return error_response(
+                             "这台网关还没有脚本宿主实例（脚本插件未启用或尚未开始安装）",
+                             StatusCode::SERVICE_UNAVAILABLE,
+@@ -148,6 +174,7 @@ pub async fn frames(
+             },
+             Ok(None) => break,
+             Err(error) => {
++                audit(&format!("上行帧解析失败：{error}（本批 {arrived} 行）"));
+                 return error_response(
+                     &format!("宿主帧读取失败：{error}"),
+                     StatusCode::BAD_REQUEST,
+@@ -155,6 +182,7 @@ pub async fn frames(
+             }
+         }
+     }
++    audit(&format!("上行帧处理完：投递 {accepted} 帧，丢弃事件 {ignored} 帧"));
+     ok_json(json!({ "accepted": accepted, "ignored": ignored }))
+ }
+ 
+@@ -162,11 +190,13 @@ pub async fn frames(
+ pub async fn stream(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
+     let taken = inbox().lock().ok().and_then(|mut slot| slot.take());
+     let Some((guard, receiver)) = taken else {
++        audit("下行流：槽里没有会话（没 open 或已被取走），回 409");
+         return error_response(
+             "远端宿主会话还没打开（手机端要先 POST /api/plugins/host/open）",
+             StatusCode::CONFLICT,
+         );
+     };
++    audit("下行流：会话已交给这条流");
+     // 守卫跟着这条流的闭包：客户端断开 ⇒ 流被丢弃 ⇒ 会话槽自动清空。
+     let body = Body::from_stream(futures::stream::unfold((guard, receiver), |(guard, mut receiver)| async move {
+         match receiver.recv().await {
+@@ -281,6 +311,7 @@ fn collect_package_files(
+ 
+ /// 关闭远端宿主会话（面板退出或手机断开）。
+ pub async fn close_remote(State(_state): State<ServerState>, _headers: HeaderMap) -> Response {
++    audit("远端宿主会话：收到 close，开始 detach");
+     plugin_host::detach_remote_session();
+     if let Ok(mut slot) = inbox().lock() {
+         *slot = None;

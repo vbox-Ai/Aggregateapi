@@ -265,17 +265,30 @@ export function useScriptHostAttach(options: {
       if (!aliveRef.current || runRef.current !== run) return
       const transport = httpTransport(onNotice, schedule)
       transportRef.current = transport
+      /** 宿主在 startPluginHost 返回前就失败：后面的 attached 不许把它盖回去 */
+      let failedEarly = false
       const session = await startPluginHost({
         hostFiles,
         pluginFiles: [],
         transport,
         packageFiles: transport.packageFiles,
+        // 宿主起不来必须当场说出来：启动失败 / 内部崩溃 / 自己退出这三类原因过去只
+        // 记在会话对象里等 `call()` 抛出，而面板从不 `call()`（帧是网关直连宿主的），
+        // 于是界面永远停在「正在加载脚本插件」，直到网关 60 秒后报握手超时。
+        onFailure: reason => {
+          if (!aliveRef.current || runRef.current !== run) return
+          failedEarly = true
+          setState('unavailable')
+          onNotice(`插件宿主不可用：${reason}`)
+        },
       })
       if (!aliveRef.current || runRef.current !== run) {
         session.close()
         return
       }
       sessionRef.current = session
+      // 宿主已经报过失败就别再改成 attached（那是「已就绪」的意思）
+      if (failedEarly) return
       // **不要在这里发 init**：`init` 是网关发给宿主的方法（host/main.mjs 里 `frame.method === "init"`
       // 由宿主自己应答），方向是 网关 → 宿主。宿主主动发 init 只会等一个不会来的回复，
       // 界面就停在「正在接入」，插件也起不来。
