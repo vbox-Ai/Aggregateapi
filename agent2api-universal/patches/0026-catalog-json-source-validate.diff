@@ -1,0 +1,103 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs
+index a147a00..ccb8f46 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/catalog/network.rs
+@@ -1,6 +1,7 @@
+ use std::time::Duration;
+ use serde_json::Value;
+ use crate::server::core::update::client;
++use crate::server::core::update::source::{self, Candidate, Source};
+ 
+ #[derive(Clone, Debug)]
+ pub(super) struct Failure {
+@@ -52,9 +53,88 @@ pub(super) async fn github_bytes(url: &str, limit: usize) -> Result<Option<Vec<u
+         .map_err(|_| Failure::from("GitHub 插件清单读取超时".to_string()))?
+ }
+ 
++/// 把这个候选从本轮里排除：记一次失败偏好（Auto 模式下一轮排序会绕开它），
++/// 并把具体原因收进错误文案。加速源失败不能只说「请求失败」——用户要看得出
++/// 是「这个源回了一张网页」还是「这个源压根连不上」。
++fn reject(candidate: &Candidate, reason: String, notes: &mut Vec<String>) {
++    candidate.forget();
++    notes.push(format!("{}：{}", candidate.label(), reason));
++}
++
++fn summary(notes: &[String]) -> String {
++    if notes.is_empty() { return "GitHub 插件清单拉取失败".to_string(); }
++    format!("GitHub 插件清单拉取失败（已试 {} 个源）—— {}", notes.len(), notes.join("；"))
++}
++
+ pub(super) async fn github(url: &str, limit: usize) -> Result<Option<Value>, Failure> {
+-    github_bytes(url, limit).await?.map(|bytes| serde_json::from_slice(&bytes)
+-        .map_err(|_| Failure::from("GitHub 插件清单不是有效 JSON".to_string()))).transpose()
++    // 清单类请求要按候选逐个校验「内容是不是 JSON」，不能只看状态码。
++    // raw / api 的加速反代在限流、被墙、路径拼错时经常回 HTTP 200 + 一张 HTML
++    // 错误页；只看状态码会把它当作成功，再被 serde 判成
++    // 「GitHub 插件清单不是有效 JSON」——那条黄条的另一种成因就在这里，
++    // 而实际换一个源就能拉到。这里逐个候选试到拿到真 JSON 为止，
++    // 全部失败才报错，并把每个源各自的原因写进文案。
++    if !source::is_resource(url) {
++        return github_bytes(url, limit).await?
++            .map(|bytes| serde_json::from_slice(&bytes)
++                .map_err(|_| Failure::from("GitHub 插件清单不是有效 JSON".to_string()))).transpose();
++    }
++    // 单源 20 秒、整轮 75 秒：镜像正常是几百毫秒，被墙的官方直连也是秒级 RST，
++    // 留这么宽是为了不把「慢」和「坏」混在一起，又不能拖住面板 1.5 秒一轮的刷新。
++    let work = async {
++        let headers = client::github_headers();
++        let candidates = source::candidates(url, true);
++        let mut notes: Vec<String> = Vec::new();
++        let mut limited: Option<Failure> = None;
++        for candidate in &candidates {
++            let response = match client::fetch_candidate(candidate, &headers, Some(20_000)).await {
++                Ok(response) => response,
++                Err(error) => {
++                    let retry_at = error.retry_at();
++                    if retry_at > 0 {
++                        if limited.as_ref().is_none_or(|current| retry_at < current.retry_at) {
++                            limited = Some(Failure { message: error.message, retry_at });
++                        }
++                    } else {
++                        reject(candidate, error.message, &mut notes);
++                    }
++                    continue;
++                }
++            };
++            match read(response, limit).await {
++                Ok(None) => {
++                    // 官方源 404 = 这个仓库（或这个文件）本来就没有这份清单，换源结果一样。
++                    // 加速源的 404 更可能是前缀拼错或缓存没命中，继续试下一个。
++                    if candidate.source == Source::Mirror {
++                        reject(candidate, "没有这份清单（HTTP 404）".to_string(), &mut notes);
++                        continue;
++                    }
++                    return Ok(None);
++                }
++                Ok(Some(bytes)) => match serde_json::from_slice::<Value>(&bytes) {
++                    Ok(value) => { candidate.remember(); return Ok(Some(value)); }
++                    Err(_) => {
++                        reject(candidate, format!("返回的不是 JSON（{} 字节，多为限流页或错误页）", bytes.len()), &mut notes);
++                        continue;
++                    }
++                },
++                Err(failure) => {
++                    if failure.retry_at > 0 {
++                        if limited.as_ref().is_none_or(|current| failure.retry_at < current.retry_at) {
++                            limited = Some(failure);
++                        }
++                    } else {
++                        reject(candidate, failure.message, &mut notes);
++                    }
++                    continue;
++                }
++            }
++        }
++        // 全源限流时保留退避时间，让上层按 retry_at 安排重试。
++        if let Some(failure) = limited { return Err(failure); }
++        Err(Failure::from(summary(&notes)))
++    };
++    tokio::time::timeout(Duration::from_secs(75), work).await
++        .map_err(|_| Failure::from("GitHub 插件清单读取超时".to_string()))?
+ }
+ 
+ pub(super) async fn npm(name: &str) -> Result<Option<Value>, Failure> {

@@ -52,34 +52,198 @@ export type HostTransport = {
   teardown?: () => void
 }
 
-/** 把一个模块表编译成「可 import 的 URL 表」：改写相对与 node: 说明符为 Blob URL */
+/**
+ * 把一个模块表编译成「可 import 的 URL 表」：改写相对与 node: 说明符为 Blob URL。
+ *
+ * ── 为什么不能单遍扫描（0026 修的就是这里）──────────────────────
+ * 说明符要用「被依赖模块的 Blob URL」来改写，而 Blob URL 又只能由**改写后的内容**
+ * 生成。单遍按数组顺序处理时，排在前面的模块看不到后面模块的 URL —— 占位是空串，
+ * 而 `''` 是 falsy，`resolveSpecifier` 会当成「没有这份文件」返回 null，于是说明符
+ * **原样保留**。GitHub 侧 `/host/source` 给出的顺序是 `main.mjs` 在最前、它 import
+ * 的 wire / fetch / loader 全在后面，结果入口那 10 条 `./x.mjs` 一条都没被改写：
+ * Blob URL 的相对解析落到 `blob:<origin>/wire.mjs` 这种不存在的地址，`await import`
+ * 直接抛，宿主连 boot 都完成不了 —— 网关那边看到的就是 init 一直不应答，60 秒后
+ * 报「远端插件握手超时」（手机上「正在加载脚本插件」一直转，0.0 MiB 不动）。
+ *
+ * ── 现在的做法 ────────────────────────────────────────────────
+ * 先把依赖图求出来做 Tarjan，按**被依赖者在前**的分量顺序生成：轮到某个分量时，
+ * 它依赖的分量都已有 URL，一次成型，无需回填。
+ * 分量内多于一个模块（宿主里 `login-prompts.mjs` ↔ `login-policy.mjs` 就是这种环）
+ * 时合并成一份源码 —— 环内互相 import 本来就是个死结（A 的 URL 要 B 的内容、
+ * B 的 URL 要 A 的内容），合并后它们同处一个模块，环自然消失，两者对外都映射到
+ * 同一个 URL（同一个 URL 只会被实例化一次，语义与「互为模块」一致）。
+ */
 export function buildModuleUrls(files: HostFile[], hostDir: string): Map<string, string> {
   const urls = new Map<string, string>()
   // 目录内相对路径 → 绝对（相对 hostDir）键，便于解析 `./x.mjs`
   const key = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '')
   const pending = files.map(file => ({ ...file, key: key(file.path) }))
 
-  for (const file of pending) {
-    // 先占位，后回填：说明符可能指向尚未处理的文件
-    urls.set(file.key, '')
-  }
-  const shimUrl = new Map<string, string>()
+  const text = new Map<string, string>()
+  for (const file of pending) text.set(file.key, file.text)
 
+  const shimUrl = new Map<string, string>()
   for (const name of NODE_SHIMS) {
     shimUrl.set(name, URL.createObjectURL(new Blob([shimSource(name)], { type: 'text/javascript' })))
   }
 
+  const deps = new Map<string, string[]>()
   for (const file of pending) {
-    const rewritten = file.text.replace(
-      /(\bfrom\s*|\bimport\s*\(\s*)(['"])([^'"]+)\2/g,
-      (whole, lead: string, quote: string, specifier: string) => {
-        const target = resolveSpecifier(specifier, file.key, hostDir, urls, shimUrl)
-        return target ? `${lead}${quote}${target}${quote}` : whole
-      },
+    deps.set(
+      file.key,
+      relativeSpecifiers(file.text, file.key).filter(dep => text.has(dep)),
     )
-    urls.set(file.key, URL.createObjectURL(new Blob([rewritten], { type: 'text/javascript' })))
+  }
+
+  for (const group of componentOrder([...text.keys()], deps)) {
+    const members = new Set(group)
+    const source =
+      group.length === 1
+        ? rewriteSpecifiers(group[0], text.get(group[0]) ?? '', urls, shimUrl)
+        : mergeComponent(group, text, urls)
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
+    // 分量内每个键都指向同一个 URL：ESM 按 URL 去重，等价于它们互相就是同一个模块
+    for (const member of members) urls.set(member, url)
   }
   return urls
+}
+
+/** 源码里出现的同表相对说明符（`./x` / `../x`）；`node:*` 与裸包名不算 */
+function relativeSpecifiers(source: string, fromKey: string): string[] {
+  const found: string[] = []
+  const pattern = /(\bfrom\s*|\bimport\s*\(\s*)(['"])([^'"]+)\2/g
+  let match = pattern.exec(source)
+  while (match) {
+    const resolved = resolveKey(match[3], fromKey)
+    if (resolved) found.push(resolved)
+    match = pattern.exec(source)
+  }
+  return found
+}
+
+/**
+ * 相对说明符 → 模块表键（候选规则与 {@link resolveSpecifier} 一致）。
+ * 解析不出来（裸包名、`node:*`、绝对 URL）返回 null。
+ */
+function resolveKey(specifier: string, fromKey: string): string | null {
+  if (!specifier.startsWith('./') && !specifier.startsWith('../')) return null
+  const base = fromKey.split('/').slice(0, -1)
+  for (const part of specifier.split('/')) {
+    if (part === '.' || part === '') continue
+    if (part === '..') base.pop()
+    else base.push(part)
+  }
+  const last = base.pop() ?? ''
+  const joined = [...base, last].filter(Boolean).join('/')
+  if (last.endsWith('.mjs')) return joined
+  // 与 resolveSpecifier 的候选顺序对齐：先精确，再补 `.mjs`，最后 `index.mjs`
+  return `${joined}.mjs`
+}
+
+/** 把一条模块源码里的说明符改写成已就绪的 URL（依赖分量已先处理） */
+function rewriteSpecifiers(
+  fromKey: string,
+  source: string,
+  urls: Map<string, string>,
+  shimUrl: Map<string, string>,
+): string {
+  return source.replace(
+    /(\bfrom\s*|\bimport\s*\(\s*)(['"])([^'"]+)\2/g,
+    (whole, lead: string, quote: string, specifier: string) => {
+      const target = resolveSpecifier(specifier, fromKey, '', urls, shimUrl)
+      return target ? `${lead}${quote}${target}${quote}` : whole
+    },
+  )
+}
+
+/**
+ * 把强连通分量里的模块拼成一份源码。
+ *
+ * 命名导入按来源合并（两处都 `import { send } from './wire.mjs'` 拼起来会重复声明
+ * 同一个绑定，是语法错误）；指向分量内部的导入整条丢掉（合并后同处一个作用域）。
+ */
+function mergeComponent(
+  group: string[],
+  text: Map<string, string>,
+  urls: Map<string, string>,
+): string {
+  const members = new Set(group)
+  const named = new Map<string, Set<string>>()
+  const sideEffects: string[] = []
+  const bodies: string[] = []
+
+  for (const member of group) {
+    const kept: string[] = []
+    for (const line of (text.get(member) ?? '').split('\n')) {
+      const namedImport = /^\s*import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]\s*;?\s*$/.exec(line)
+      if (namedImport) {
+        const target = resolveKey(namedImport[2], member)
+        if (target && members.has(target)) continue
+        const source = target && urls.has(target) ? target : namedImport[2]
+        const bucket = named.get(source) ?? new Set<string>()
+        for (const raw of namedImport[1].split(',')) {
+          const binding = raw.trim()
+          if (binding) bucket.add(binding)
+        }
+        named.set(source, bucket)
+        continue
+      }
+      const sideEffect = /^\s*import\s*['"]([^'"]+)['"]\s*;?\s*$/.exec(line)
+      if (sideEffect) {
+        const target = resolveKey(sideEffect[1], member)
+        sideEffects.push(`import '${(target && urls.get(target)) || sideEffect[1]}'`)
+        continue
+      }
+      kept.push(line)
+    }
+    bodies.push(`// ── 合并自 ${member} ──\n${kept.join('\n')}`)
+  }
+
+  const imports: string[] = []
+  for (const [source, bindings] of named) {
+    imports.push(`import { ${[...bindings].join(', ')} } from '${urls.get(source) ?? source}'`)
+  }
+  return [...imports, ...sideEffects, '', ...bodies].join('\n')
+}
+
+/** Tarjan：返回「被依赖者在前」的分量序列 */
+function componentOrder(keys: string[], deps: Map<string, string[]>): string[][] {
+  const index = new Map<string, number>()
+  const low = new Map<string, number>()
+  const onStack = new Set<string>()
+  const stack: string[] = []
+  const out: string[][] = []
+  let next = 0
+
+  const walk = (key: string): void => {
+    index.set(key, next)
+    low.set(key, next)
+    next += 1
+    stack.push(key)
+    onStack.add(key)
+    for (const dep of deps.get(key) ?? []) {
+      if (!index.has(dep)) {
+        walk(dep)
+        low.set(key, Math.min(low.get(key) ?? 0, low.get(dep) ?? 0))
+      } else if (onStack.has(dep)) {
+        low.set(key, Math.min(low.get(key) ?? 0, index.get(dep) ?? 0))
+      }
+    }
+    if (low.get(key) === index.get(key)) {
+      const group: string[] = []
+      for (;;) {
+        const popped = stack.pop()
+        if (popped === undefined) break
+        onStack.delete(popped)
+        group.push(popped)
+        if (popped === key) break
+      }
+      out.push(group)
+    }
+  }
+
+  for (const key of keys) if (!index.has(key)) walk(key)
+  return out
 }
 
 function resolveSpecifier(
