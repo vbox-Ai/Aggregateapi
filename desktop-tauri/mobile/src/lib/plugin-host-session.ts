@@ -33,6 +33,7 @@ function bootstrapSource(hostEntryKey: string): string {
   return `
 // 模块表必须在 import 宿主之前就位，而 Worker 的构造参数只能带 URL。
 // 所以这里先等一条 bootstrap 消息再继续 —— 否则会与 postMessage 竞态。
+self.postMessage({ kind: 'boot' })
 const bootstrap = await new Promise(resolve => {
   self.addEventListener('message', event => {
     if (event.data && event.data.kind === 'bootstrap') resolve(event.data)
@@ -169,7 +170,9 @@ self.addEventListener('message', event => {
 try {
   const entry = moduleUrls.get(${JSON.stringify(hostEntryKey)})
   if (!entry) throw new Error('宿主入口未注册: ' + ${JSON.stringify(hostEntryKey)})
+  self.postMessage({ kind: 'importing' })
   await import(entry)
+  self.postMessage({ kind: 'loaded' })
 } catch (error) {
   self.postMessage({ kind: 'boot-failed', message: String(error?.stack || error) })
 }
@@ -227,6 +230,20 @@ export async function startPluginHost(options: {
   let exitCode: number | null = null
   let lastNotice = ''
   const loadedPackages = new Set<string>()
+  /**
+   * 宿主启动到哪一步了。Worker 是黑盒，没有这条链就只能看到「60 秒后网关报超时」：
+   *   created    Worker 对象建好了，但引导脚本一个消息都没回（多半是脚本没执行 / Worker 起不来）
+   *   boot       引导脚本执行到第一行（证明 Worker 真的在跑）
+   *   importing  正在 import 宿主入口 main.mjs（卡在这里 = 某支模块求值挂了 / blob 链断）
+   *   loaded     入口模块已求值完，宿主应该开始读 stdin 了
+   */
+  let stage = 'created'
+  let watchdog: ReturnType<typeof setTimeout> | null = null
+  const STAGE_TEXT: Record<string, string> = {
+    created: 'Worker 已创建但未响应',
+    boot: '引导脚本已执行，尚未开始加载宿主入口',
+    importing: '正在加载宿主入口 main.mjs',
+  }
 
   /** 宿主侧的失败：既记进 notice，也立刻抛给外层（不等到下一次 call） */
   const report = (reason: unknown) => {
@@ -264,13 +281,38 @@ export async function startPluginHost(options: {
         }
       } catch (failure) {
         lastNotice = failure instanceof Error ? failure.message : String(failure)
+        // 取不回插件文件时宿主一定加载不了；以前这里只写变量、没人读，于是表现成「网关等 60 秒超时」
+        report(`取回插件文件失败（${id}）：${lastNotice}`)
       }
     }
     return line
   }
 
+  // 宿主必须在 10 秒内把入口加载完，否则把「卡在哪一步」直接说出来
+  watchdog = setTimeout(() => {
+    watchdog = null
+    if (stage === 'loaded') return
+    report(`插件宿主未完成加载：${STAGE_TEXT[stage] ?? stage}`)
+  }, 10000)
+
   worker.addEventListener('message', event => {
     const data = event.data || {}
+    if (data.kind === 'boot') {
+      stage = 'boot'
+      return
+    }
+    if (data.kind === 'importing') {
+      stage = 'importing'
+      return
+    }
+    if (data.kind === 'loaded') {
+      stage = 'loaded'
+      if (watchdog !== null) {
+        clearTimeout(watchdog)
+        watchdog = null
+      }
+      return
+    }
     if (data.kind === 'out') {
       for (const line of String(data.text).split('\n')) {
         if (!line.trim()) continue
@@ -318,7 +360,9 @@ export async function startPluginHost(options: {
   })
 
   options.transport.onLine(line => {
-    void prepareFrame(line).then(prepared => worker.postMessage({ kind: 'line', text: prepared }))
+    void prepareFrame(line)
+      .then(prepared => worker.postMessage({ kind: 'line', text: prepared }))
+      .catch(failure => report(`投递帧失败：${failure instanceof Error ? failure.message : String(failure)}`))
   })
   options.transport.onClose(() => worker.postMessage({ kind: 'close' }))
 
@@ -340,6 +384,12 @@ export async function startPluginHost(options: {
     onEvent(handler) { eventHandlers.push(handler) },
     onRequest(handler) { requestHandlers.push(handler) },
     reply(id, payload) { options.transport.send(JSON.stringify({ id, ...payload })) },
-    close() { worker.terminate() },
+    close() {
+      if (watchdog !== null) {
+        clearTimeout(watchdog)
+        watchdog = null
+      }
+      worker.terminate()
+    },
   }
 }
