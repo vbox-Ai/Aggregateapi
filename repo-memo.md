@@ -5343,3 +5343,15 @@ error[E0425]: cannot find function `remote_session_lost` in this scope
 **验证**：`tsc --noEmit --strict` 三文件 exit=0；文件 18123 B / CR=0 / sha256 `008D5D7BD20CC9884C2500B2742A5103DC038CD17A8D95F03558B1E7C0F30502`；推送 commit `2d607f6ae5c45ac9bf0bcef0c44402b45fac07d6`（blob `5e974fa4`）；CI run #453 success，Release `ios-20261115-b453`，rootful-arm64e deb 42,276,848 B。手机端源码（`desktop-tauri/mobile/src/lib/*.ts`）不走补丁链，直接提交 main。
 
 **教训**：①跨设备链路必须双向观测，网关侧 `[Plugin]` 审计（0027）与手机侧阶段消息（0028）缺一侧只剩「60 秒超时」一个事实；②阶段消息比堆栈更有用——「Worker 已创建但未响应」指向 module worker/blob 支持，「已执行但未开始加载入口」指向消息表传输，「正在加载 main.mjs」指向模块求值，三种修法完全不同；③`Promise.then()` 后必须 `.catch`，否则失败在 UI 上等于「卡住」；④`tsc` 只验类型不验运行，纯观测改动仍要真机确认文案。
+---
+
+## 步骤 147 · 0029：手机端宿主双通道（Worker 失败自动降级主线程）
+
+- **症状**：iPhone 上点「获取」装 Nous Portal，面板长转「正在加载脚本插件」，60 秒后网关报「远端插件握手失败：插件调用超时（init）」。同一份日志里 gent2api-providers / gent2api-web-providers 两个原生 pack 每次都 ready。
+- **根因（两类插件的分野）**：那两个是 native pack（Rust 编的 Mach-O 随包分发，网关 spawn 即可，0.9–1.3 秒就绪）；Nous Portal 是纯 JS 脚本插件，iOS 没有 Bun（un.rs::asset() 无 ios 分支），唯一运行时是手机 WebView 的 Worker + 跨设备 NDJSON 桥（网关写 init → 入站队列 → GET /host/stream → 手机 fetch 流 → Worker → 宿主处理 → POST /host/frames 回网关）。网关报「握手超时」而不是「没有可用的脚本运行时」，说明**会话已建、init 已写入通道**，缺口只剩「Worker 起没起来」与「宿主有没有吐帧」二选一，而旧版两者外观完全相同（都是一声不吭）。
+- **排除项**：storage::read() 只读文件无锁、mutation_guard() 是 plugin_host 全局锁而 package_files 不用它 ⇒ 早先怀疑的「install 持锁 vs package-files 读注册表」死锁不成立。
+- **改法**：desktop-tauri/mobile/src/lib/plugin-host-session.ts 引入 Channel 抽象（post / onMessage / dispose）。ootstrapSource() 生成的引导脚本里 self. 全部改写成可注入的 __bridge.，开头 const __bridge = (typeof self !== "undefined" && self.__hostBridgeForBootstrap) || self：Worker 模式下 __bridge = self，主线程模式下由 makeMainChannel 注入假 self（postMessage→outbound、ddEventListener('message')→inbound，
+ew Function('(async () => { … })()') 跑含顶层 await 的脚本）。wire(mode) 统一下发 bootstrap；watchdog BOOT_TIMEOUT_MS=8000 到点仍未 loaded ⇒ 红字「插件宿主在 Worker 中没有启动（…），正在改用主线程重试」并 wire('main')，再给 MAIN_TIMEOUT_MS=12000；两条都失败才报终态。主线程 dispose 时恢复被宿主改掉的 process / Buffer / console.*。
+- **验证**：	sc --noEmit --strict 三支文件 exit=0；文件 21462 B / CR=0 / 无 BOM / sha256 1C1F36B1…；CI #455 全绿，Release ios-20261115-b455（rootful-arm64e 42,278,468 B）。
+- **教训**：①同一份引导脚本要能被 Worker 与主线程共用，靠「可注入的 self」而不是维护两份；②iOS 上 
+ew Worker(blob:, {type:'module'}) 与 Worker 内的 blob 互引不保证可用，主文档里 import(blob:) 才是稳的；③诊断要把「谁没说话」拆成阶段上报，否则 60 秒超时永远分不清是通道问题还是宿主问题。
