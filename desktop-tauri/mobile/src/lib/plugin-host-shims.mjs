@@ -245,8 +245,58 @@ export async function rm() { return undefined }
 export async function writeFile() { throw new Error('writeFile is unavailable in this runtime') }
 export default { readFile, realpath, stat, mkdir, readdir, rm, writeFile }`
     case 'fs':
-      return `export * from 'node:fs/promises'
-export default {}`
+      // 插件是照 Node 写的：nous 插件第 22 行
+      //   readFileSync(new URL("./package.json", import.meta.url), "utf8")
+      // 以前这里只 `export * from 'node:fs/promises'`，两个毛病：
+      //   ① 没有 readFileSync —— ESM 具名导入不允许缺项，整支插件在**链接阶段**就失败；
+      //   ② `export * from 'node:fs/promises'` 是裸说明符，而 shim 源码本身不过改写器，
+      //      浏览器无法解析 `node:` 前缀 —— 这个 shim 自己就先加载失败。
+      // 所以这里写成**完全自包含**的一份：不 import 任何东西，读写都落到 __hostFiles。
+      return `const table = () => globalThis.__hostFiles
+const lookup = value => {
+  const key = String(value).split(String.fromCharCode(92)).join('/')
+  const files = table() || new Map()
+  const leaf = key.split('/').pop()
+  for (const [path, text] of files) {
+    if (key.endsWith(path) || path.endsWith(key) || path === leaf) return text
+  }
+  return undefined
+}
+const missing = value => {
+  const error = new Error('ENOENT: no such file or directory, open ' + String(value))
+  error.code = 'ENOENT'
+  return error
+}
+export async function readFile(value) {
+  const hit = lookup(value)
+  if (hit === undefined) throw missing(value)
+  return hit
+}
+export function readFileSync(value) {
+  const hit = lookup(value)
+  if (hit === undefined) throw missing(value)
+  return hit
+}
+export function existsSync(value) { return lookup(value) !== undefined }
+export async function realpath(value) { return String(value).split(String.fromCharCode(92)).join('/') }
+export function realpathSync(value) { return realpath(value) }
+export async function stat() { return { isFile: () => true, isDirectory: () => false, size: 0 } }
+export function statSync() { return { isFile: () => true, isDirectory: () => false, size: 0 } }
+export async function mkdir() { return undefined }
+export function mkdirSync() { return undefined }
+export async function readdir() { return [] }
+export function readdirSync() { return [] }
+export async function rm() { return undefined }
+export function rmSync() { return undefined }
+export async function writeFile() { throw new Error('writeFile is unavailable in this runtime') }
+export function writeFileSync() { throw new Error('writeFileSync is unavailable in this runtime') }
+export function chmodSync() { return undefined }
+export async function access() { return undefined }
+export function accessSync() { return undefined }
+export const constants = { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 }
+export default { readFile, readFileSync, existsSync, realpath, realpathSync, stat, statSync,
+  mkdir, mkdirSync, readdir, readdirSync, rm, rmSync, writeFile, writeFileSync, chmodSync,
+  access, accessSync, constants }`
     case 'stream':
       return `class Base { pipe(target) { return target } on() { return this } once() { return this } off() { return this } }
 export class Readable extends Base {}

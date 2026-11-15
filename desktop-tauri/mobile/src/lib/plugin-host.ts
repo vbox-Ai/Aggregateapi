@@ -79,8 +79,17 @@ export function buildModuleUrls(files: HostFile[], hostDir: string): Map<string,
   const key = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '')
   const pending = files.map(file => ({ ...file, key: key(file.path) }))
 
+  // ── `import.meta.url` 换成 file: 字面量（0030）──────────────────
+  // 插件是照 Node 写的，典型写法：
+  //   const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"))
+  // 但我们这里每个模块都是一个 blob: URL，而 `blob:` 不是层级 scheme ——
+  // `new URL("./x", "blob:capacitor://localhost/uuid")` 直接抛 TypeError，插件在顶层就炸。
+  // 换成 `file:///<包内相对键>` 之后，`new URL` 得到 `file:///packages/<id>/package.json`，
+  // 再交给 fs 垫片按后缀命中内存表。改写发生在生成 Blob 之前，源码里只需一段字符串字面量。
   const text = new Map<string, string>()
-  for (const file of pending) text.set(file.key, file.text)
+  for (const file of pending) {
+    text.set(file.key, file.text.replace(/import\.meta\.url/g, JSON.stringify(`file:///${file.key}`)))
+  }
 
   const shimUrl = new Map<string, string>()
   for (const name of NODE_SHIMS) {
