@@ -5326,3 +5326,20 @@ error[E0425]: cannot find function `remote_session_lost` in this scope
 3. 状态机里「无条件 attached」是同类病：失败标记要先置位并短路后续成功路径。
 4. 网关侧对手机端的每一条入站通道（open / stream / frames / close）都应有审计行，否则跨设备链路故障只能靠猜。
 5. 交付约定不变：给用户的直链只发 **rootful + arm64e** 那一款。
+
+---
+
+## 步骤 146 · 0028：手机端宿主启动分阶段上报（定位「一直加载中」的观测盲区）
+
+**症状**：b451 上点「获取」，Nous Portal 卡「正在加载脚本插件」约 38 秒，随后黄条「远端插件握手失败：插件调用超时（init）；原安装记录已保留」；面板没有出现「插件宿主不可用」红条。日志 50 条全为 `plugin` 类别，每轮 `loading≈60000ms` + init 超时，零宿主侧日志。
+
+**根因**：宿主从「Worker 创建」到「入口 import 完成」之间完全无信号，且三处失败被静默吞掉——①`prepareFrame` 里 `packageFiles()` 失败只写进 `lastNotice` 变量，没有任何上报路径；②`transport.onLine → prepareFrame().then(...)` 没有 `.catch`，reject 静默丢失；③Worker 生命周期无任何阶段消息，`boot`（引导脚本已执行）与 `loaded`（入口 import 完成）分不出来。
+
+**改法**（`desktop-tauri/mobile/src/lib/plugin-host-session.ts`）：
+- bootstrap 内新增 `self.postMessage({ kind: 'boot' })`（在等 bootstrap 消息之前），以及 `importing` / `loaded` 两个阶段消息；
+- 主线程 `STAGE_TEXT` 表把 created/boot/importing 翻成中文；`watchdog = setTimeout(() => report('插件宿主未完成加载：' + STAGE_TEXT[stage]), 8000)`，收到 `loaded` 后清除；
+- `prepareFrame` 失败分支上报「取回插件文件失败（id）：...」；`onLine` 的 `prepareFrame().then(...)` 加 `.catch` 上报「投递帧失败：...」；`close()` 里清 watchdog。
+
+**验证**：`tsc --noEmit --strict` 三文件 exit=0；文件 18123 B / CR=0 / sha256 `008D5D7BD20CC9884C2500B2742A5103DC038CD17A8D95F03558B1E7C0F30502`；推送 commit `2d607f6ae5c45ac9bf0bcef0c44402b45fac07d6`（blob `5e974fa4`）；CI run #453 success，Release `ios-20261115-b453`，rootful-arm64e deb 42,276,848 B。手机端源码（`desktop-tauri/mobile/src/lib/*.ts`）不走补丁链，直接提交 main。
+
+**教训**：①跨设备链路必须双向观测，网关侧 `[Plugin]` 审计（0027）与手机侧阶段消息（0028）缺一侧只剩「60 秒超时」一个事实；②阶段消息比堆栈更有用——「Worker 已创建但未响应」指向 module worker/blob 支持，「已执行但未开始加载入口」指向消息表传输，「正在加载 main.mjs」指向模块求值，三种修法完全不同；③`Promise.then()` 后必须 `.catch`，否则失败在 UI 上等于「卡住」；④`tsc` 只验类型不验运行，纯观测改动仍要真机确认文案。
