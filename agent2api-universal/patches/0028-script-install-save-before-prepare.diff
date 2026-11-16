@@ -1,0 +1,74 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+index ce4bb9f..ffe4208 100644
+--- a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
++++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
+@@ -247,6 +247,7 @@ pub async fn package_files(
+     Json(body): Json<PackageFilesBody>,
+ ) -> Response {
+     let id = body.id.trim().to_string();
++    audit(&format!("取插件文件：id={id}"));
+     if id.is_empty() {
+         return error_response("缺少插件包 id", StatusCode::BAD_REQUEST);
+     }
+@@ -260,6 +261,14 @@ pub async fn package_files(
+         }
+     };
+     let Some(package) = registry.packages.iter().find(|package| package.id == id) else {
++        // 把注册表里的包 id 一起打出来：手机端看到的只是「HTTP 404」，
++        // 到底是路由没挂、还是注册表里确实没有这支，只能靠这行日志分辨。
++        let known: Vec<&str> = registry.packages.iter().map(|package| package.id.as_str()).collect();
++        audit(&format!(
++            "取插件文件失败：注册表里没有 {id}（现有 {} 支：{}）",
++            known.len(),
++            if known.is_empty() { "空".into() } else { known.join(",") }
++        ));
+         return error_response(&format!("没有这支脚本插件：{id}"), StatusCode::NOT_FOUND);
+     };
+     let directory = match script::package_directory(package) {
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
+index 6d18915..3a6f207 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
+@@ -372,7 +372,12 @@ pub(super) async fn switch(
+     super::transport::clear();
+     guard.clear_adapters();
+     let result = async {
+-        let prepared = super::runtime::prepare(&store, &mut after, executable).await?;
++        // ⚠️ 这里的顺序是硬约束：**先落盘，再 prepare**。
++        // 手机端拿到 init 之后会 POST /api/plugins/host/package-files，按包 id
++        // 回网关取插件文件（iOS 上宿主读不到网关的盘），而那个端点读的是磁盘上的
++        // registry.json。此前这里是「prepare → save」，新装的包只存在于内存 `after`
++        // 里 ⇒ 加载期间该端点一律 404 ⇒ 手机端放弃取文件 ⇒ 宿主起不来 ⇒ init 等不到
++        // 应答 ⇒ 60 秒超时回滚。加载成功与落盘互相等待，新包永远装不上。
+         if let Some(failed) = after
+             .packages
+             .iter()
+@@ -384,6 +389,28 @@ pub(super) async fn switch(
+                 .unwrap_or_else(|| "脚本插件加载失败".into()));
+         }
+         super::storage::save(&after)?;
++        let prepared = match super::runtime::prepare(&store, &mut after, executable).await {
++            Ok(prepared) => prepared,
++            Err(error) => {
++                // 已经落过盘了，失败必须把磁盘改回去 —— 下面的恢复分支只在
++                // `old_executable` 存在时才会走到 start_registry（进而 save），
++                // 否则磁盘上会留下一份没装成的记录。
++                let _ = super::storage::save(&before);
++                return Err(error);
++            }
++        };
++        if let Some(failed) = after
++            .packages
++            .iter()
++            .find(|package| package.enabled && package.error.is_some())
++        {
++            let _ = super::storage::save(&before);
++            return Err(failed
++                .error
++                .clone()
++                .unwrap_or_else(|| "脚本插件加载失败".into()));
++        }
++        super::storage::save(&after)?;
+         if let Err(error) = super::runtime::activate(&after, prepared) {
+             super::storage::save(&before)?;
+             return Err(error);

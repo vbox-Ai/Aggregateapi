@@ -162,17 +162,34 @@ function httpTransport(onNotice: (text: string) => void, onStreamEnd: (reason: s
    * 网关按包 id 在它自己的 packages 目录里读，回 [{ path, text }]。
    */
   const packageFiles = async (id: string): Promise<HostFile[]> => {
-    const response = await fetch(url('/api/plugins/host/package-files'), {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    })
-    const payload = (await response.json().catch(() => null)) as
-      | { data?: { files?: unknown }; files?: unknown }
-      | null
+    // ⚠️ 网关可能刚把包装好、注册表还没落盘，第一次取多半 404。
+    // 所以：带网关原话 + 退避重试 —— 只报「HTTP 404」既分不清是路由没挂
+    // 还是注册表里没有这支包（两种情况修法完全不同）。
+    const attempt = async (): Promise<Response> =>
+      fetch(url('/api/plugins/host/package-files'), {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+    let response = await attempt()
+    let text = await response.text().catch(() => '')
+    for (const delay of [1000, 2000, 4000]) {
+      if (response.ok) break
+      if (response.status !== 404 && response.status !== 409 && response.status !== 503) break
+      await new Promise(resolve => setTimeout(resolve, delay))
+      response = await attempt()
+      text = await response.text().catch(() => '')
+    }
+    let payload: { data?: { files?: unknown }; files?: unknown } | null = null
+    try {
+      payload = JSON.parse(text) as { data?: { files?: unknown }; files?: unknown }
+    } catch {
+      payload = null
+    }
     if (!response.ok) {
-      onNotice(`取插件文件失败（HTTP ${response.status}）`)
-      throw new Error(`取插件文件失败（HTTP ${response.status}）`)
+      const detail = text.replace(/\s+/g, ' ').slice(0, 240)
+      onNotice(`取插件文件失败（HTTP ${response.status}）：${detail || '无响应内容'}`)
+      throw new Error(`取插件文件失败（HTTP ${response.status}）：${detail || '无响应内容'}`)
     }
     const raw = (payload?.data?.files ?? payload?.files ?? []) as Array<{ path?: unknown; text?: unknown }>
     return raw
