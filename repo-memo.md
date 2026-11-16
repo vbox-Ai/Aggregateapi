@@ -5355,3 +5355,31 @@ ew Function('(async () => { … })()') 跑含顶层 await 的脚本）。wire(mo
 - **验证**：	sc --noEmit --strict 三支文件 exit=0；文件 21462 B / CR=0 / 无 BOM / sha256 1C1F36B1…；CI #455 全绿，Release ios-20261115-b455（rootful-arm64e 42,278,468 B）。
 - **教训**：①同一份引导脚本要能被 Worker 与主线程共用，靠「可注入的 self」而不是维护两份；②iOS 上 
 ew Worker(blob:, {type:'module'}) 与 Worker 内的 blob 互引不保证可用，主文档里 import(blob:) 才是稳的；③诊断要把「谁没说话」拆成阶段上报，否则 60 秒超时永远分不清是通道问题还是宿主问题。
+
+---
+
+## 步骤 148 · 0030：iOS 脚本插件垫片（fs 同步 API + import.meta.url 改写）
+
+**症状**：b455 装上后，点「获取」装 Nous Portal (OAuth) 仍卡在「正在加载脚本插件」，最终网关报「远端插件握手超时」。用户反馈的日志是一段**旧记录**（条目 id 3414–3420 与 11-15 那份一字不差），不含 b455 的新尝试。
+
+**根因（两处叠加，都在手机端垫片，插件本体没错）**：
+1. `plugin-host-shims.mjs` 的 `case 'fs'` 原来只 `export * from 'node:fs/promises'`。nous 插件第 22 行是 `readFileSync(new URL("./package.json", import.meta.url), "utf8")`，ESM 具名导入不允许缺项 ⇒ 模块在**链接阶段**就失败，任何 try/catch 都抓不到。且那条 `export * from 'node:fs/promises'` 是裸说明符，shim 源码本身不过改写器，浏览器不认 `node:` 前缀 ⇒ fs 垫片自己先死。
+2. 模块里 `import.meta.url` 是 `blob:capacitor://localhost/<uuid>`，`blob:` 不是层级 scheme ⇒ `new URL("./package.json", …)` 直接抛 TypeError。
+
+**改法**：
+- `plugin-host-shims.mjs`：`case 'fs'` 改成**完全自包含**（不 import 任何东西），导出 `readFile`(async)/`readFileSync`/`existsSync`/`realpath`/`realpathSync`/`stat`/`statSync`/`mkdir`/`mkdirSync`/`readdir`/`readdirSync`/`rm`/`rmSync`/`writeFile`/`writeFileSync`/`chmodSync`/`access`/`accessSync`/`constants` + default；内部 `lookup(value)` 用 `key.endsWith(path) || path.endsWith(key) || path === leaf` 命中 `globalThis.__hostFiles`，未命中抛带 `code='ENOENT'` 的错。16,421 B / CR=0 / sha256 `4E24167CAA74B7AF`。
+- `plugin-host.ts`：`buildModuleUrls` 构建 `text` 表时 `text.set(file.key, file.text.replace(/import\.meta\.url/g, JSON.stringify(\`file:///${file.key}\`)))` ⇒ 插件里 `new URL("./package.json", "file:///packages/nous/opencode2.mjs")` 得到 `file:///packages/nous/package.json`，再由 fs 垫片按后缀命中。12,920 B / CR=0 / sha256 `FA5BE0C2CF293BC3`。
+
+**验证**：
+- `tsc --noEmit --strict`（session/attach/plugin-host 三文件）⇒ exit=0。
+- 离线跑 `_work/verify-0030.mjs`（mock `URL.createObjectURL` 收集 blob 文本，喂 29 个宿主 .mjs + nous 的 package.json/index.mjs/oauth.mjs/opencode.mjs/opencode2.mjs）：`modules=34 blobUrls=48`、`import.meta.url 残留=0`、`fs shim 有 readFileSync=true`、`opencode2.mjs → file:///packages/nous/opencode2.mjs ✓`、`new URL("./package.json") → file:///packages/nous/package.json`（endsWith 命中）、`仍含 node: 说明符的模块数=0`、**PASS**。
+- 包内取证（b455）：`ui/m/mobile.js` 1,718,007 B 命中 0029 五个 needle；`agent2api-server` 26,691,728 B 命中 0026/0027 的 audit 与 accept_json 文案 ⇒ 上一版包没打错，缺的是本次 0030。
+
+**教训**：
+1. ESM **链接阶段**失败与运行时报错外观相同，都是「加载不出来」；垫片缺一个具名导出就够杀整支插件，排查时要先核对插件实际 import 了哪些名字。
+2. 垫片源码不过说明符改写器 ⇒ 垫片内部**绝不能** import 裸 `node:` 说明符，必须自包含。
+3. `import.meta.url` 在 blob 宿主里没有意义，任何 `new URL(rel, import.meta.url)` 的 Node 写法都要在生成 Blob 前替换成 `file:///<包内键>`。
+4. 用户回报日志先比对条目 id —— 重合即旧记录，不能用来判新版行为。
+5. 对照插件的选型要看依赖：agnes 依赖 `child_process`/`net`（spawn + 本地端口），手机上不可能跑，不能当对照组。
+
+**交付**：推送 main `e17d0e84`（plugin-host.ts + plugin-host-shims.mjs）→ dispatch #457 → Release `ios-20261116-b457`，rootful-arm64e 42,278,488 B。
