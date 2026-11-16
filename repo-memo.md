@@ -5383,3 +5383,35 @@ ew Worker(blob:, {type:'module'}) 与 Worker 内的 blob 互引不保证可用�
 5. 对照插件的选型要看依赖：agnes 依赖 `child_process`/`net`（spawn + 本地端口），手机上不可能跑，不能当对照组。
 
 **交付**：推送 main `e17d0e84`（plugin-host.ts + plugin-host-shims.mjs）→ dispatch #457 → Release `ios-20261116-b457`，rootful-arm64e 42,278,488 B。
+
+---
+
+## 步骤 149 · 0028：脚本插件安装「先落盘再加载」（修 404 死循环）
+
+**症状**：b457 装上后点「获取」装 Nous Portal (OAuth)，面板报「手机端宿主接入失败：插件宿主不可用：取回插件文件失败（script-f3a09418cee4b6b14b8872a9）：取插件文件失败（HTTP 404）」，随后网关仍报「远端插件握手失败：插件调用超时（init）」。日志 50 条全 `plugin` 类别，有 open/挂载/交给流/close 审计，**零「上行帧到达」** ⇒ 手机端从未发出任何一帧。
+
+**根因（顺序错了，不是网络也不是插件）**：
+1. 手机端收到 init 后，按 `frame.params.packages[].id` 调 `POST /api/plugins/host/package-files` 把包文件取回（iOS 上插件在网关那台机器，宿主读不到它的盘）。
+2. 该端点读**磁盘** `config_dir()/script-plugins/registry.json`；而安装流程 `script/operations.rs` 原顺序是 `runtime::prepare(&mut after)`（此时 `after` 只在内存，磁盘还是 `before`）→ 检查 error → `storage::save(&after)`。新包 **不在磁盘注册表里** ⇒ `find(|p| p.id == id)` 落空 ⇒ 404。
+3. 手机端 404 后放弃 prepareFrame ⇒ init 帧不交给宿主 ⇒ 宿主不上线 ⇒ 网关等满 60s ⇒ 超时回滚。**「加载成功需要落盘，落盘又排在加载成功之后」** —— 死循环，从 b447 起这支插件永远装不上。两个原生插件是 native pack（`spawn` 即跑），不经过这条路径，所以一直正常。
+
+**改法**：
+- `script/operations.rs`：顺序改为「先 save 再 prepare」，失败显式回滚。当前实现（:374-418）——
+  `if let Some(failed) = after.packages.iter().find(|p| p.enabled && p.error.is_some()) { return Err(...) }` → `super::storage::save(&after)?` → `match super::runtime::prepare(&store, &mut after, executable).await { Ok(p) => p, Err(e) => { let _ = super::storage::save(&before); return Err(e); } }` → 再查一次 error（同样 `let _ = save(&before)`）→ `storage::save(&after)?` → `activate` 失败则 `storage::save(&before)?`。注释块明写「⚠️ 这里的顺序是硬约束：先落盘，再 prepare」。
+- `api/plugin_host.rs`：`package_files` 加两处审计——开头 `audit(&format!("取插件文件：id={id}"))`；`find` 失败分支打出「注册表里没有 {id}（现有 N 支：…）」。
+- `desktop-tauri/mobile/src/lib/plugin-host-attach.ts`：`packageFiles` 加 1s/2s/4s 三次退避重试（只在 404/409/503 重试），并把网关响应正文带进提示（`取插件文件失败（HTTP ${status}）：${detail}`）。
+
+**验证**：
+- `tsc --noEmit --strict`（attach + session + plugin-host）⇒ exit=0。
+- 补丁生成：`_chain24` 的 index 里 `plugin_host.rs` 不含 0027 的 audit（`git show :path | grep audit` 无输出），直接 `git diff` 会混入 0027 ⇒ 改用已应用 0001..0027 的 `_chain27v` 作基线，复制最终文件后 `git -c core.autocrlf=false diff --output=` ⇒ 4,075 B / 74 行 / CR=0，grep 确认不含 `audit_frames|上行帧到达`。
+- 全链：`_chain31v`（上游 tag v3.5.0-beta.1，HEAD `aba5885`）+ 0001..0028 共 **28 个补丁 `git apply --3way` 全 rc=0**；两文件 sha256 与 `_chain24` 一致（`5E02852C277CA18C…` / `CCF7C3AF3B0455BF…`，16,922 / 20,127 B）。
+- 推送 base `bbd8818b` → commit `83bbba8c`；dispatch #459 → Release `ios-20261116-b459`。
+
+**教训**：
+1. **「先加载后落盘」是隐形死锁**——加载路径会回调读磁盘的功能（package-files、catalog、注册表），只要落盘在后面，回调必然读到旧状态。任何 install/apply 流程都该先把新状态落盘，再启动运行时。
+2. `storage::read()` 把 `NotFound` 吞成 `Ok(Registry::default())`（`storage.rs:62-68`）⇒ 文件缺失表现为「空表」而不是报错，排查时要先确认「表里有什么」而不是「读没读到」。
+3. 手机端 `fetch` 不读 body 等于自废诊断：同样的 404，可能是 handler 的「没有这支脚本插件」，也可能是 axum fallback 的路由不存在——后来把正文带进提示才一眼分清。
+4. 排 id 格式问题最省事的办法是验算：`sha256(name)[..24]` 加 `script-` 前缀，一次比对就能排除。
+5. 面板与 daemon 必须同包更新；本次取证靠「deb 里 `ui/m/mobile.js` 与 `agent2api-server` 各自命中哪些改动字符串」直接判定包内容有没有带上去。
+
+**交付**：b459，rootful/arm64e 42,275,504 B。
