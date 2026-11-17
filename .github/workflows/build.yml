@@ -668,7 +668,10 @@ jobs:
   release:
     name: Publish Release
     needs: [ios, plugins]
-    if: ${{ always() && inputs.publish == 'true' }}
+    # always() 让它在插件作业失败时仍能发（拿不到插件包就发不带预置插件的 deb），
+    # 但 iOS 作业必须真的成功 —— #461 就是 iOS 排队被取消、这里照样发布了只有两个
+    # zip、一只 deb 都没有的空 Release。
+    if: ${{ always() && inputs.publish == 'true' && needs.ios.result == 'success' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -701,7 +704,13 @@ jobs:
           cp dist/app/agent2api-web-providers-*.zip dist/web/ 2>/dev/null || true
 
           echo "--- 将发布到快照的资产 ---"; ls -lh dist/app
-          test -n "$(ls -A dist/app)" || { echo "dist/app 为空：ios 产物没取到"; exit 1; }
+          # 非空不够：插件 zip 单独也能把 dist/app 填满。必须真有 deb 和 ipa，
+          # 否则就是 iOS 作业没产出却照样发版（#461 的空 Release 就是这么来的）。
+          shopt -s nullglob
+          debs=(dist/app/*.deb)
+          test "${#debs[@]}" -ge 1 || { echo "没有 deb：ios 作业没产出，拒绝发版"; exit 1; }
+          test -f dist/app/Agent2API-standalone.ipa || { echo "没有 standalone.ipa：ios 作业没产出，拒绝发版"; exit 1; }
+          echo "deb 数量：${#debs[@]}"
 
       - name: 读插件版本前先对齐（与 ios/plugins 作业同一规则）
         run: |
