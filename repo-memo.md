@@ -5415,3 +5415,65 @@ ew Worker(blob:, {type:'module'}) 与 Worker 内的 blob 互引不保证可用�
 5. 面板与 daemon 必须同包更新；本次取证靠「deb 里 `ui/m/mobile.js` 与 `agent2api-server` 各自命中哪些改动字符串」直接判定包内容有没有带上去。
 
 **交付**：b459，rootful/arm64e 42,275,504 B。
+
+
+## 步骤 150 · 0031：引导脚本的换行转义（脚本插件始终起不来的真因）
+
+**症状**：装上 0028/0029/0030 后，插件卡片已经能变「已安装 · 正在加载 · v0.1.3」，开关可拨，6.4 MiB 文件也取回手机了，但一直停在「正在加载脚本插件 · 已 N 秒没有进展」，最后网关报「远端插件握手失败：插件调用超时（init）」；另一台机器上还会来回跳「手机端宿主已接入」↔「插件宿主在 Worker 中没有启动（Worker 已创建但未响应），正在改用主线程重试」。
+
+**根因**：手机端宿主不是加载文件，而是把 `bootstrapSource()` 拼成一整段字符串再注入（Worker 用 Blob，主线程用 `new Function`）。这段字符串本身是**模板字符串**，里面有一行：
+
+```ts
+if (data.kind === 'line') pushLine(data.text.endsWith('\n') ? data.text : data.text + '\n')
+```
+
+写成了单反斜杠 `'\n'` 的单反斜杠版本（即源码里只有 `\n` 一个反斜杠）时，模板字符串会先把它解释成**真实换行**，生成出来的代码就成了单引号字符串跨行 —— 整段脚本语法错误。于是：
+
+- Worker：脚本解析失败，`error` 事件也不发（WKWebView 对 blob worker 的静默拒绝），`stage` 永远停在 `created`；
+- 主线程：`new Function` 直接抛 SyntaxError；
+- 两条路都起不来 ⇒ 网关发的 init 永远没人应答 ⇒ 60 秒超时。
+
+0029 引入双通道、0030 补齐 `node:fs` 垫片之后，这一层才露出来 —— 之前在更前面就挂了，看不到。
+
+**改法**：
+1. `plugin-host-session.ts` 里把 `'\n'` 写成 `'\\n'`（源码两个反斜杠），并加注释锁死「这里必须写两个反斜杠」；同一模板里那句注释里的 `'\n'` 改成散文（「靠行尾换行分帧」），不再出现转义序列。
+2. 状态机三处语义纠正：Worker 降级走新增的 `onStage`（只更新进度，不判死），只有宿主报 `loaded` 才走 `onReady` 置「已接入」；`capacitor://`/`ionic://` 页面直接跳过 Worker（blob module worker 在这些页面本来就不执行），BOOT 3000ms / MAIN 20000ms。
+3. `makeWorkerChannel` 补 `error` / `messageerror` 监听，失败原因能上报到面板。
+
+**验证**：
+- `tsc --noEmit --strict`（session + attach + plugin-host）exit=0。
+- `_work/verify-0031.mjs` 22 项断言全过：靠 `node --check` 校验 `bootstrapSource()` 的产物能过语法检查（旧版在这里报 `_0031_probe.mjs:130` 语法错，就是这个 bug 的铁证）；另断言降级走 onStage、`setState('attached')` 只出现在 onReady 内。
+- 出包后解 deb 复核：`Applications/Agent2API.app/ui/m/mobile.js`（1,721,381 B）含「消息无法反序列化」「正在改用主线程重试」「Worker 已创建但未响应」三条特征串 ⇒ 0031 的代码确实进了包。
+
+**教训**：
+- 用字符串拼代码（`new Function`、Blob 注入、代码生成）时，**模板字符串里任何反斜杠都要先在心里过一遍**。这类 bug 不报错、不抛栈，只表现为「静默不执行」，最难查。
+- 浏览器里 `new Function` 抛的 SyntaxError 拿不到行号上下文，`node --check` 才是能立刻指到具体行的工具 —— 以后凡是拼代码，产物必须先过 `node --check`。
+- 「Worker 已创建但未响应」这条文案本身就是线索：说明 Worker 构造成功、脚本没跑。WKWebView 对 blob worker 不执行时连 error 都不发，所以不能只靠事件判断，必须靠超时 + 阶段上报。
+
+
+## 步骤 151 · CI 守卫：iOS 作业没产出时不许发版（残包事故复盘）
+
+**症状**：#461 的 iOS 作业从未启动（runner 未分配，排队 15:16:39→15:31:40 整 15 分钟后 cancelled），但 workflow 的 Publish Release 作业照常执行，发布出 `ios-20261117-b461`，资产只有两个插件 zip（11,388,327 B + 3,474,568 B），**一只 deb、一个 ipa 都没有**。
+
+**根因**：两层。
+1. `release` job 的 `if:` 是 `always() && inputs.publish == 'true'` —— `always()` 让它在 iOS 失败/取消时也跑。
+2. 产物校验只写了 `test -n "$(ls -A dist/app)"`（目录非空即可），而 `dist/app` 里本来就会落两个插件 zip，于是「非空」永远成立。
+
+**改法**（`.github/workflows/build.yml`，commit `e14458da`）：
+- `release` 的 `if` 增加 `needs.ios.result == 'success'`，iOS 没成功就整个跳过。
+- 704 行的校验改成逐个断言：
+```bash
+shopt -s nullglob
+debs=(dist/app/*.deb)
+test "${#debs[@]}" -ge 1 || { echo "没有 deb：ios 作业没产出，拒绝发版"; exit 1; }
+test -f dist/app/Agent2API-standalone.ipa || { echo "没有 standalone.ipa：ios 作业没产出，拒绝发版"; exit 1; }
+echo "deb 数量：${#debs[@]}"
+```
+
+**验证**：新 commit 之后 #462（push）与 #463（dispatch）的 iOS 都被 cancelled，但这次 release 作业被 `needs.ios.result` 拦住，**没有产生任何残缺 Release** —— 守卫生效。
+
+**教训**：
+- `if: always()` + 只检查「目录非空」是最典型的残包组合。发布前要断言**具体文件名型**，不是目录非空。
+- 作业失败/取消时，宁可什么都不发，也不要发一个缺主产物的包 —— 用户装上之后是白折腾，而且会怀疑「修复没生效」。
+- cancel 掉一个 run 不会清掉它已经产出的 artifact；反过来，cancel 之后 release 仍然可能跑。这两件事要分开想。
+- `concurrency` 里 push 与 workflow_dispatch 属于**不同 group**（group 含 `github.event_name`），不会互相取消 —— 所以 dispatch 时要先手动 cancel 掉 push 那次，否则两个 iOS 作业抢同一个 macOS runner，后到的排队 15 分钟被取消。
