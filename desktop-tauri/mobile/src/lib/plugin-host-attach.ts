@@ -298,6 +298,26 @@ export function useScriptHostAttach(options: {
           setState('unavailable')
           onNotice(`插件宿主不可用：${reason}`)
         },
+        /**
+         * 降级提示（Worker 起不来、改主线程）：这是过程不是结论。
+         * 以前这类消息走 onFailure，于是界面 8 秒一到就变「接入失败」，
+         * 而主线程紧接着可能已经起来了 —— 用户看到的就是「一会已接入、一会接入失败」。
+         */
+        onStage: text => {
+          if (!aliveRef.current || runRef.current !== run) return
+          setState('attaching')
+          onNotice(text)
+        },
+        /**
+         * 宿主入口真的加载完了才算接入成功。以前这里是 `startPluginHost` 一返回就
+         * `setState('attached')`，可那时只是通道建好、宿主一个字节都还没跑，
+         * 所以「已接入」是假阳性，几百毫秒后就被降级提示打成失败。
+         */
+        onReady: () => {
+          if (!aliveRef.current || runRef.current !== run) return
+          attemptRef.current = 0
+          setState('attached')
+        },
       })
       if (!aliveRef.current || runRef.current !== run) {
         session.close()
@@ -311,8 +331,7 @@ export function useScriptHostAttach(options: {
       // 界面就停在「正在接入」，插件也起不来。
       // 面板的职责到此为止：宿主跑起来、传输层接上；随后用户在商店点「获取」时，
       // 网关启动插件会自己发 init，宿主（这里这个 Worker）应答，provider 就注册上来了。
-      attemptRef.current = 0
-      setState('attached')
+      // 状态留给 onReady / onFailure —— 通道建好不等于宿主在跑，这里不许先宣布成功。
     } catch (failure) {
       if (!aliveRef.current || runRef.current !== run) return
       schedule(failure instanceof Error ? failure.message : String(failure))

@@ -174,9 +174,12 @@ globalThis.Bun ??= new Proxy({}, {
 
 __bridge.addEventListener('message', event => {
   const data = event.data || {}
-  // wire.mjs 的 listen() 靠 '\n' 分帧；传输层是按 '\n' 切行后才送过来的，行尾已丢。
+  // wire.mjs 的 listen() 靠行尾换行分帧；传输层是按换行切行后才送过来的，行尾已丢。
   // 不补回去，宿主会把收到的所有帧攒在 remainder 里，一帧都切不出来（表现：握手超时）。
-  if (data.kind === 'line') pushLine(data.text.endsWith('\n') ? data.text : data.text + '\n')
+  // 这里必须写 \\n（模板字符串里的字面反斜杠 n）：写成 \n 会被模板字符串
+  // 解释成真实换行，单引号字符串跨行 —— 整段脚本语法错，Worker 静默不执行、
+  // 主线程 new Function 直接抛。0029 起宿主一直起不来就是这个。
+  if (data.kind === 'line') pushLine(data.text.endsWith('\\n') ? data.text : data.text + '\\n')
   else if (data.kind === 'files') {
     // 运行期追加文件（插件的文件是安装/接入时才从网关取回的）
     for (const [key, text] of Object.entries(data.files || {})) files.set(key, text)
@@ -207,10 +210,20 @@ const STAGE_TEXT: Record<string, string> = {
   importing: '正在加载宿主入口 main.mjs',
 }
 
-/** 首轮等待入口加载完成的上限；超时就换主线程再试一次 */
-const BOOT_TIMEOUT_MS = 8000
-/** 降级到主线程后再等多久 */
-const MAIN_TIMEOUT_MS = 12000
+/** 首轮等待 Worker 加载完成的上限；超时就换主线程再试一次（Worker 能跑是毫秒级） */
+const BOOT_TIMEOUT_MS = 3000
+/** 降级到主线程后再等多久（主线程要先 import 29 个宿主模块，比 Worker 慢） */
+const MAIN_TIMEOUT_MS = 20000
+
+/**
+ * iOS/Capacitor 下 `new Worker(blob:…)` 会**构造成功但脚本一行都不执行**
+ * —— WKWebView 对自定义 scheme 页面（`capacitor://localhost`）里的 blob worker
+ * 静默拒绝，连 `error` 事件都不发。表现就是 `stage` 永远停在 `created`，
+ * 真机上看到的是「Worker 已创建但未响应」。这类页面直接走主线程，省掉整轮空等。
+ */
+const WORKER_UNUSABLE = /^(capacitor|ionic):/.test(
+  typeof location === 'object' && location ? String(location.protocol) : '',
+)
 
 /**
  * 启动一个插件宿主会话。
@@ -235,6 +248,18 @@ export async function startPluginHost(options: {
    * 面板一次 `call()` 都不做，于是「宿主启动失败」四个字永远不会出现在界面上。
    */
   onFailure?: (reason: string) => void
+  /**
+   * 阶段变化（Worker 起不来、正在改用主线程）。
+   *
+   * 这**不是**失败 —— 主线程随后可能就成功了。以前这类消息走 `onFailure`，
+   * 界面先显示「已接入」、8 秒后被打成「接入失败」，主线程真跑起来也不会回来。
+   */
+  onStage?: (text: string) => void
+  /**
+   * 宿主入口真的加载完成（`loaded`）。只有到这一步才算"接入成功"：
+   * 通道建好 ≠ 宿主在跑，中间还隔着引导脚本与 29 个模块的 import。
+   */
+  onReady?: () => void
 }): Promise<PluginHostSession> {
   const hostEntryKey = 'main.mjs'
   const urls = buildModuleUrls(
@@ -261,12 +286,32 @@ export async function startPluginHost(options: {
   let mode: 'worker' | 'main' = 'worker'
   let watchdog: ReturnType<typeof setTimeout> | null = null
 
+  const remember = (reason: unknown) => {
+    const text = String(reason ?? '').trim()
+    if (!text) return ''
+    lastNotice = text.length > 400 ? `${text.slice(0, 400)}…` : text
+    return lastNotice
+  }
+
   /** 宿主侧的失败：既记进 notice，也立刻抛给外层（不等到下一次 call） */
   const report = (reason: unknown) => {
-    const text = String(reason ?? '').trim()
+    const text = remember(reason)
     if (!text) return
-    lastNotice = text.length > 400 ? `${text.slice(0, 400)}…` : text
-    options.onFailure?.(lastNotice)
+    options.onFailure?.(text)
+  }
+
+  /** 阶段/降级提示：只更新"正在做什么"，不改判定（界面应保持"接入中"） */
+  const noteStage = (text: string) => {
+    const kept = remember(text)
+    if (kept) options.onStage?.(kept)
+  }
+
+  let readyNotified = false
+  /** 宿主入口加载完成：只报一次，且此后不再被降级逻辑覆盖 */
+  const reportReady = () => {
+    if (readyNotified) return
+    readyNotified = true
+    options.onReady?.()
   }
 
   const clearWatchdog = () => {
@@ -284,6 +329,8 @@ export async function startPluginHost(options: {
     if (kind === 'loaded') {
       stage = 'loaded'
       clearWatchdog()
+      // 宿主入口 import 完成 = 它真的在跑了。这是「接入成功」的唯一判据。
+      reportReady()
       return
     }
     if (kind === 'out') {
@@ -364,9 +411,29 @@ export async function startPluginHost(options: {
 
   const makeWorkerChannel = (source: string): Channel => {
     const worker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })), { type: 'module' })
+    let listener: ((data: Record<string, unknown>) => void) | null = null
+    const buffered: Record<string, unknown>[] = []
+    // 帧可能在 onMessage 注册前就到达（Worker 起得快的时候），先缓冲再补发
+    const deliver = (data: Record<string, unknown>) => {
+      if (listener) listener(data)
+      else buffered.push(data)
+    }
+    worker.addEventListener('message', event => deliver((event.data || {}) as Record<string, unknown>))
+    // Worker 内部的语法错/加载失败不走 message；不接这两个事件，
+    // 界面上就只剩「Worker 已创建但未响应」，看不出真正原因。
+    worker.addEventListener('error', event => {
+      const detail = String((event as ErrorEvent).message || '加载或执行失败')
+      deliver({ kind: 'host-error', message: `Worker: ${detail}` })
+    })
+    worker.addEventListener('messageerror', () => {
+      deliver({ kind: 'host-error', message: 'Worker: 消息无法反序列化' })
+    })
     return {
       post: message => worker.postMessage(message),
-      onMessage: handler => worker.addEventListener('message', event => handler((event.data || {}) as Record<string, unknown>)),
+      onMessage: handler => {
+        listener = handler
+        for (const data of buffered.splice(0)) handler(data)
+      },
       dispose: () => worker.terminate(),
     }
   }
@@ -421,25 +488,24 @@ export async function startPluginHost(options: {
     channel.onMessage(handleMessage)
     channel.post({ kind: 'bootstrap', moduleUrls: table, files })
     clearWatchdog()
+    const where = next === 'worker' ? 'Worker' : '主线程'
     watchdog = setTimeout(() => {
       watchdog = null
       if (stage === 'loaded') return
-      if (mode === 'worker') {
-        // Worker 这条路走不通：同一份脚本改在主线程再试一次
-        report(`插件宿主在 Worker 中没有启动（${STAGE_TEXT[stage] ?? stage}），正在改用主线程重试`)
+      const because = STAGE_TEXT[stage] ?? stage
+      if (next === 'worker') {
+        // Worker 这条路走不通：同一份脚本改在主线程再试一次。
+        // 这是**降级**不是失败 —— 所以走 noteStage，界面继续显示"接入中"。
+        noteStage(`插件宿主在 Worker 中没有启动（${because}），正在改用主线程重试`)
         wire('main')
-        watchdog = setTimeout(() => {
-          watchdog = null
-          if (stage === 'loaded') return
-          report(`插件宿主（主线程）未完成加载：${STAGE_TEXT[stage] ?? stage}`)
-        }, MAIN_TIMEOUT_MS)
         return
       }
-      report(`插件宿主（主线程）未完成加载：${STAGE_TEXT[stage] ?? stage}`)
-    }, BOOT_TIMEOUT_MS)
+      report(`插件宿主（${where}）未完成加载：${because}`)
+    }, next === 'worker' ? BOOT_TIMEOUT_MS : MAIN_TIMEOUT_MS)
   }
 
-  wire('worker')
+  // iOS 的 blob Worker 根本不会执行，直接进主线程；桌面/浏览器仍先试 Worker
+  wire(WORKER_UNUSABLE ? 'main' : 'worker')
 
   options.transport.onLine(line => {
     void prepareFrame(line)
