@@ -4,14 +4,14 @@
 里面的补丁是照 **`v3.5.0-beta.1`** 写的，在 beta.7 上只有 9/28 可应用。
 本目录是移植进度的一部分，先单独放，避免影响现有流水线。
 
-完整分诊见 `docs/PORTING-3.5.0-beta.7.md`；原生后端见 `NATIVE-BACKEND.md`；iOS 下载/加载全链路见 `PLUGIN-IOS.md`。
+完整分诊见 `docs/PORTING-3.5.0-beta.7.md`；原生后端见 `NATIVE-BACKEND.md`；iOS 下载/加载全链路见 `PLUGIN-IOS.md`；自建目录见 `PLUGIN-SELFHOST.md`。
 
 ## 内容
 
 | 文件 | 来源 | 验证 |
 |---|---|---|
 | `0029-native-pack-backend.diff` | 新写。恢复原生提供商插件包后端（默认关闭，env 放行） | 在干净 beta.7 树上 7/7 文件可应用；入口解析三处已覆盖 |
-| `0013-index-cache.diff` | 按 beta.7 的 `script/distribution.rs` 手写重写 | 在干净 beta.7 树上可应用 |
+| `0030-self-hosted-catalog.diff` | 新写。自建插件目录（目录源可配、原生平台放行、签名策略可关），须在 0029 之后应用 | 在干净 beta.7 上按 0029→0030 顺序 4/4 文件可应用 | 按 beta.7 的 `script/distribution.rs` 手写重写 | 在干净 beta.7 树上可应用 |
 | `0021-remote-outbound-channel.diff` | 3 路合并忠实 rebase（只做原补丁的增删） | 在干净 beta.7 树上可应用 |
 
 ## 怎么用
@@ -23,7 +23,7 @@ for p in agent2api-universal/patches-3.5.0-beta.7/*.diff; do
 done
 ```
 
-`0029` 先打（它改 `HostOptions` 与宿主闸门，其余补丁不碰这些行）。三条互相独立，顺序上只有这条有约束。
+`0029` 必须先打；`0030` 只能打在 `0029` 之上（它改的是 0029 之后的 `support`/`catalog` 附近代码）。其余补丁互相独立。
 
 ## 独立形态要设的两个环境变量
 
