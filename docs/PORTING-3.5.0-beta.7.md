@@ -1,8 +1,12 @@
 # 移植记录：手机端补丁层 → 上游 3.5.0-beta.7
 
-本文件记录 Aggregateapi 的补丁层在**上游 beta.2 重构**之后的移植状态。
+> **修订 2026-11-23**：上一版把本仓库的形态判成「手机当远程客户端（R 路线）」，结论写错了。
+> 事实是**独立形态**：网关跑在手机里（iOS 侧 `EMBED=1` 或 LaunchDaemon，Android 侧 KSU 模块），不依赖电脑端。
+> 本版按独立形态重写第 4 节，第 1–3 节的实测数据与分诊表不变。
+
 结论先行：上游 3.5.0-beta.2 起把**提供商插件整体换成 WASM 包**、并把**社区插件所有下载源改道官网**，
-28 个补丁里 **5 条已被上游取代**、**3 条可直接沿用**、**20 条需重写**。
+28 个补丁里 **5 条已被上游取代**、**3 条可直接沿用**、**20 条需重写**；
+独立形态还多一个硬阻塞：**上游把原生提供商插件彻底禁用了**（见第 4 节）。
 
 - 上游源码：`aimod-cc/Agent2API`，分支 `beta`，最新 tag `v3.5.0-beta.7`（`d20e8501`，2026-11-21T14:37Z）
 - 补丁写就时的基版：`v3.5.0-beta.1`（`aba58858`）——该基版上 **27/28 补丁可应用**
@@ -21,9 +25,6 @@
 | 上游没有 `api/plugin_host.rs` | 9 条补丁是**新建**该模块（远端宿主桥是 Aggregateapi 自研层） |
 | `script/catalog/network.rs` 已被删 | 目录网络层并入 `catalog/{cache,refresh,types}.rs` |
 
-推论（需真机验证）：iOS 禁 `PROT_EXEC` 数据页，wasmtime 的 cranelift JIT 无法分配可执行内存，
-所以「网关跑在手机进程内 + 提供商插件」在上游 WASM-only 之后没有官方路径。
-
 ## 2 分诊
 
 ### 2.1 删除（上游已取代）
@@ -38,42 +39,38 @@
 
 ### 2.2 可直接沿用
 
-见 `agent2api-universal/patches-3.5.0-beta.7/`：
-
-| 补丁 | 状态 |
-|---|---|
-| `0013-index-cache` | 已按新 `index()` 重写，可在 beta.7 独立应用 |
-| `0021-remote-outbound-channel` | 忠实 rebase（只做原补丁的增删），可在 beta.7 独立应用 |
-| `0011-script-remote-host-start` | 忠实 rebase，但**依赖 0001** 的 `lifecycle.rs` 闸门，暂不单独交付 |
+见 `agent2api-universal/patches-3.5.0-beta.7/`：`0013-index-cache`（按新 `index()` 重写）、
+`0021-remote-outbound-channel`（忠实 rebase），两条均可在 beta.7 独立应用。
+`0011-script-remote-host-start` 忠实 rebase 但依赖 `0001` 的 `lifecycle.rs` 闸门，暂不单独交付。
 
 ### 2.3 需重写
 
 | 补丁 | 新落点 | 要动的点 |
 |---|---|---|
-| `0001` iOS 插件执行闸门 | `core/plugin_host/lifecycle.rs`、`script/bun.rs` | 闸门插到新 `start()`：`admission_closed()` / `closing` / `options.wasm` 之前 |
-| `0002` 能力表端点 | 新文件 `server/api/host.rs` + `api/mod.rs` + `http.rs` | `http.rs` 路由表已到 1500+ 行并新增 `metadata/refresh` 等，按新顺序插入 |
-| `0003` 插件索引指向自有仓库 | `core/plugin_host/update.rs` | `INDEX_REPO/FALLBACK_REPO` 已被 `INDEX_SOURCE = website::PLUGIN_BASE` 取代；改为在 `website::convert` 收窄白名单 |
-| `0004` 自有仓库免签名 | `update.rs`、`update/required.rs`、`operations.rs`、`catalog.rs` | 上游新增 `require_signed: true` + `validate_release_urls()`，要免签名必须同时放宽两处 |
+| `0001` iOS 插件执行闸门 | `core/plugin_host/lifecycle.rs`、`script/bun.rs` | 闸门插到 `start()` 的 `admission_closed()` / `closing` / `options.wasm` 判断之前 |
+| `0002` 能力表端点 | 新文件 `server/api/host.rs` + `api/mod.rs` + `http.rs` | `http.rs` 路由表已 1500+ 行并新增 `metadata/refresh` 等 |
+| `0003` 插件索引指向自有仓库 | `core/plugin_host/update.rs` | `INDEX_REPO/FALLBACK_REPO` 已被 `INDEX_SOURCE = website::PLUGIN_BASE` 取代；改在 `website::convert` 收窄白名单 |
+| `0004` 自有仓库免签名 | `update.rs`、`update/required.rs`、`operations.rs`、`catalog.rs` | 上游新增 `require_signed: true` + `validate_release_urls()` |
 | `0005` altcha 密钥进程内缓存 | `server/altcha.rs` | 仅 1 行上下文差异 |
 | `0006` 面板绑定 host | `server/mod.rs` | `bind` 段已被 `start_managed()` 重构 |
-| `0007` 助手文件导入 | `db/schema.rs` + 3 个新文件 | **schema 号撞车**：上游已是 30，迁移须改 31，`match version` 臂同步 |
+| `0007` 助手文件导入 | `db/schema.rs` + 3 个新文件 | **schema 号撞车**：上游已是 30，迁移须改 31 |
 | `0008` 宿主源码端点 | `script/mod.rs`、`api/mod.rs`、`http.rs`、新 `api/plugin_host.rs` | `script/mod.rs` 导出已重排 |
 | `0009` 远端宿主桥 | 新 `api/plugin_host.rs`、`http.rs` | 整套重贴到新路由表 |
 | `0010` 免运行时安装 | `script/dependencies.rs`、`script/operations.rs` | `operations.rs` 已重写（`generation` / `progressAt`） |
 | `0014` 操作卡死看门狗 | `script/operations.rs`、`script/settings.rs` | 字段语义已变 |
-| `0015` 下载续传 | `script/download.rs` + **`script/website.rs`** | `website::request()` 不接受自定义 header，续传需先加 `Range` 透传 |
+| `0015` 下载续传 | `script/download.rs` + **`script/website.rs`** | `website::request()` 不接受自定义 header，需先加 `Range` 透传 |
 | `0018` iOS 远端会话 | `plugin_host/mod.rs` | `Host` 新增 `wasm: wasm::Embedded` 字段 |
 | `0019` 远端宿主 reinit | `script/host/main.mjs` | `loader.mjs` 导出改为 `reloadCatalog` |
 | `0020` 帧批换行 | 新 `api/plugin_host.rs` | 随 0009 落 |
 | `0022` 插件包文件桥 | `script/mod.rs`、`http.rs`、新 `api/plugin_host.rs` | 同上 |
 | `0023` 远端会话存活 | `plugin_host/mod.rs` | 同 0018 |
-| `0024` 下载卡死轮换 | `script/download.rs` | `CONNECT_MS` → `website::request(url, Some(45_000))`；镜像轮换已无意义 |
+| `0024` 下载卡死轮换 | `script/download.rs` | `CONNECT_MS` → `website::request(url, Some(45_000))` |
 | `0027` 远端宿主审计日志 | 新 `api/plugin_host.rs` | 随 0009 |
 | `0028` 脚落盘再加载 | `script/operations.rs`、新 `api/plugin_host.rs` | `operations.rs` 重写，锚点失效 |
 
 ## 3 建议的 CI 改动
 
-`build.yml` 目前每次取「最新 v\* tag」，等于每轮构建都在赌补丁还合得上。建议加显式 pin：
+`build.yml` 每次取「最新 v\* tag」，等于每轮构建都在赌补丁还合得上。建议显式 pin：
 
 ```yaml
 env:
@@ -81,21 +78,67 @@ env:
   UPSTREAM_TAG: v3.5.0-beta.7   # 留空则回落「最新 v* tag」
 ```
 
-并把「取上游源码」段里的 `TAG="$(git -C Agent2API tag -l 'v*' --sort=-v:refname | head -1)"`
-换成 `TAG="${UPSTREAM_TAG:-$(...)}"`；`align-plugin-version.py --min-version` 同步用同一个 TAG。
+并把取 tag 那段换成 `TAG="${UPSTREAM_TAG:-$(git -C Agent2API tag -l 'v*' --sort=-v:refname | head -1)}"`，
+`align-plugin-version.py --min-version` 用同一个 TAG。
 
-另外把「打补丁」步骤的 `exit 1` 保留（现在已经有），并让 `release` 继续用 deb/ipa 非空兜底。
+## 4 独立形态：插件是唯一的硬阻塞
 
-## 4 手机端形态与插件
+手机独立跑 = 网关进程在手机上，模型调用全依赖插件，所以插件不能"挪到桌面去"。beta.7 上有两道闸：
 
-| | R · 手机当远程客户端 | S · 手机独立网关 |
+### 4.1 原生提供商插件被硬禁用（Observed）
+
+```rust
+// core/plugin_host/support.rs:6
+pub(super) const LEGACY_REASON: &str =
+    "旧原生提供商插件已停止支持，请安装对应的 WASM 插件；已有账号和配置保留。";
+```
+
+拦截面（10 处调用点）：
+
+| 文件:行 | 作用 |
+|---|---|
+| `support.rs:15` `require_wasm()` | 安装闸门 |
+| `support.rs:31` `legacy_reason()` | 启动/兼容判定 |
+| `install.rs:401/576/599` | 安装、启动、操作前置 |
+| `lifecycle.rs:24/99` | `Host` 启动：`if !self.options.script { return Err(LEGACY_REASON) }` |
+| `packages.rs:95` | 包登记 |
+| `catalog.rs:81/422/482` | 目录展示与可安装判定 |
+| `startup.rs:112/157/203/346` | 开机预热的支持状态 |
+| `structure/operations.rs:219/368`、`ownership.rs:9`、`compatibility.rs:42` | 操作与归属 |
+
+### 4.2 而 WASM 在 iOS 上跑不了（Inferred）
+
+`wasmtime` 只带了 `cranelift`（JIT），没有 `wasmi` / `pulley` 解释器；iOS 禁止在数据页上取执行权，
+`Engine::new()` 阶段就会失败（验证动作：越狱机跑 wasmtime 最小样例，看是否 `failed to allocate executable memory`）。
+
+### 4.3 好消息：原生执行通道的代码还在
+
+| 证据 | 位置 |
+|---|---|
+| 子进程启动通道仍存在 | `lifecycle.rs:119` `tokio::process::Command::new(&self.options.exe)`（当前只被 `options.script` 门控） |
+| 包清单仍按 target 映射二进制 | `install.rs:636` `entry: BTreeMap::from([("x86_64-pc-windows-msvc", "bin/x.exe")])` |
+| 签名载荷按 target 计算 | `install.rs:767` `proto::signing_payload(&m, "x86_64-pc-windows-msvc", …)` |
+
+也就是说：**不是执行器没了，是入口被封了**。
+
+### 4.4 两条技术路线
+
+| | S-A · 恢复原生 pack 后端 | S-B · WASM 换解释器 |
 |---|---|---|
-| 手机跑什么 | 只有面板，连桌面 `:3065` | 网关跑在手机里（daemon / EMBED=1） |
-| 要的补丁 | `0002` `0005` `0006` `0007` `0013`（`0001` 可选） | 追加 `0008~0023` `0027` `0028` |
-| beta.7 能力 | 全量（WASM 插件在桌面跑） | 面板全量，**提供商插件无解**（WASM 需 JIT） |
-| 工作量 | 5 条小补丁 + 重编 `ui/m` | 20 条重写 + 解决 iOS 上的 WASM 执行 |
+| 做法 | 给 pack 增加 `native` 分支：按当前 target 取 `entry` 里的二进制 → 复用 `options.exe` 子进程通道；`require_wasm`/`legacy_reason`/`catalog` 按「原生允许」放行 | `wasm::runtime` 换 `wasmi`：ABI 只有 `agent2api::call` / `agent2api::read` 两个导入、无 WASI、无组件模型；host `call` 是 async，需 std 线程 + `Handle::block_on` 桥 |
+| 工作量 | 改 10 处闸门 + 宿主 options 组装，估 150–250 行 | 重写执行层 + 异步桥 + 性能与配额语义（fuel 换成指令计数），估 600 行以上 |
+| 复用现有资产 | ✅ 直接复用你们已在 iPad/deb 上验证过的 `aarch64-apple-ios` Mach-O 插件包 | ❌ 要等上游发 wasm 包在 iOS 上验证，且解释执行速度待测 |
+| 与上游一致性 | 长期分叉（上游明确不支持） | 与上游一致 |
+| 建议 | **先做**，恢复"手机独立可用" | 作为长期对齐项，S-A 落地后并行推进 |
 
-目前手机端走的是 R（连桌面 3065），插件在桌面正常运行，无需改动插件层。
+### 4.5 独立形态的最小可用集
+
+| 优先级 | 补丁 |
+|---|---|
+| P0（独立形态地基） | **原生 pack 后端放行（新写，不在原 28 条里）**、`0001` 执行闸门、`0002` 能力表、`0002` 之外的 `0006` 绑定 host、`0007` 助手文件（schema 31） |
+| P1（脚本插件在手机上跑的唯一通路） | `0008` `0009` `0011` `0018` `0019` `0020` `0021` `0022` `0023` `0027` `0028` |
+| P2（健壮性） | `0010` `0013` `0014` `0015` `0024` |
+| 删除 | `0012` `0016` `0017` `0025` `0026` |
 
 ## 5 验证状态
 
@@ -103,6 +146,8 @@ env:
 |---|---|
 | 28 补丁在 beta.1 / beta.7 的可应用性 | Observed（行级 hunk 匹配 + 顺序累积） |
 | `0013` / `0021` 在干净 beta.7 上可应用 | Observed |
-| 生成补丁「只做原补丁的增删」 | Observed（逐 hunk 对比原补丁删除行集合） |
+| 生成补丁「只做原补丁的增删」 | Observed |
+| 原生 pack 被 `LEGACY_REASON` 拦截（10 处调用点） | Observed |
+| 原生执行通道代码仍在（`options.exe` / `entry` 按 target） | Observed |
+| iOS 上 wasmtime 不可用 | Inferred；验证动作见 4.2 |
 | 编译通过 | `NOT RUN`（构建机无 Rust 工具链） |
-| iOS 上 wasmtime 不可用 | Inferred；验证动作：越狱机跑 wasmtime 最小样例，看是否 `failed to allocate executable memory` |
