@@ -1,4 +1,4 @@
-# 编译门：把 porting 分支的补丁打到上游 beta.7 上，只做 cargo check。
+﻿# 编译门：把 porting 分支的补丁打到上游 beta.7 上，只做 cargo check。
 #   · 不产出任何安装包，只回答一个问题：这些补丁能不能编译。
 #   · 先跑一次「未打补丁」的基线，用来区分「上游自己坏了」与「补丁改坏了」。
 name: compile-check
@@ -115,3 +115,59 @@ jobs:
           if [ "${patched_exit:-1}" != "0" ]; then
             echo "::error::补丁引入编译失败；基线退出码 ${baseline_exit:-?}（0 = 上游本身可编译）"
           fi
+
+  # ── 真正的产品 target：iOS（只 check，不链接，Linux runner 上可跑）────────
+  ios-check:
+    name: cargo check (aarch64-apple-ios + 补丁)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取上游源码
+        run: |
+          set -euo pipefail
+          for base in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+            rm -rf Agent2API
+            if git clone --depth 1 --branch "$UPSTREAM_TAG" "${base}${UPSTREAM_REPO}" Agent2API 2>&1 | tail -2; then
+              [ -d Agent2API/.git ] && break
+            fi
+            echo "   clone 失败，换下一个源：${base:-直连}"
+          done
+          git -C Agent2API log -1 --format='上游：%h %ad %s' --date=short
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Agent2API/desktop-tauri/src-tauri -> target
+          key: ios
+
+      - name: 打补丁（0029 → 0030）
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          for p in agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff; do
+            git -C Agent2API apply --3way "$(pwd)/$p"
+          done
+
+      - name: iOS target cargo check
+        run: |
+          set +e
+          cd Agent2API/desktop-tauri/src-tauri
+          cargo check -p agent2api-server --target aarch64-apple-ios 2>&1 | tee /tmp/ios.log
+          code=${PIPESTATUS[0]}
+          echo "===== iOS 错误摘要 ====="
+          grep -E "^error(\[E[0-9]+\])?:" /tmp/ios.log | sort | uniq -c | sort -rn | head -40 || true
+          exit $code
+
+      - name: 上传日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-check-ios-logs
+          path: /tmp/ios.log
+          if-no-files-found: warn
