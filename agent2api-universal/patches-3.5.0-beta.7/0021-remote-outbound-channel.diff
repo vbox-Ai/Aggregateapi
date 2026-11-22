@@ -1,0 +1,150 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
+index 9d06734..fc2836b 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/mod.rs
+@@ -260,6 +260,46 @@
+     pub last_error: Option<String>,
+ }
+ 
++/// 一个提供商插件宿主（对应一个已安装的包）。
++pub struct Host {
++    /// 启动参数。
++    options: HostOptions,
++    embedded: wasm::Embedded,
++    activity: Arc<activity::Activity>,
++    /// 当前代进程的写端；退出状态由 ProcessRun 独立持有。
++    inner: Mutex<Option<Inner>>,
++    /// 状态转换与调用登记共用此锁；不得跨 await 持有。
++    lifecycle: StdMutex<()>,
++    generation: AtomicU64,
++    active: StdMutex<Option<Arc<process::ProcessRun>>>,
++    /// 回调应答的等待者（插件 → 网关的请求）。
++    ///
++    /// ── 为什么用 std Mutex ────────────────────────────────────
++    /// 这个表只在「读循环派发」与「发回调」两处短暂访问，临界区里没有
++    /// await。用 tokio 的 Mutex 会让读循环多一次 await 点（而读循环的
++    /// 原则是「不 await」）。
++    pending: StdMutex<HashMap<i64, PendingCall>>,
++    /// 下一个回调 id。
++    next_id: AtomicI64,
++    /// 在途的流式调用（`abort` 与额度归还都按它找）。
++    streams: StdMutex<HashMap<i64, StreamState>>,
++    /// 启动与关闭串行化；握手期间不能持有 inner 锁。
++    starting: Mutex<()>,
++    /// 是否已完成握手（`init` 成功）。
++    ///
++    /// 与 `running` 分开：进程起来但握手失败时，`running` 为真而 `ready`
++    /// 为假 —— 此时 `ensure()` 必须重试而不是把空 provider 列表当成结果。
++    ready: AtomicBool,
++    /// 退避截止时间（连续崩溃后到点之前不再 spawn）。
++    retry_after: StdMutex<Option<std::time::Instant>>,
++    /// 连续崩溃次数。
++    crashes: StdMutex<u32>,
++    /// 是否已停用（崩溃太多次）。
++    disabled: AtomicBool,
++    /// 主动关闭后该 Host 不得复活；重新启用由管理层创建新 Host。
++    closing: AtomicBool,
++    /// 子进程已启动且未确认通信中断；只有同代读循环可清除此标志。
++    running: AtomicBool,
+ /// 一个提供商插件宿主（对应一个已安装的包）。
+ pub struct Host {
+     /// 启动参数。
+@@ -567,15 +607,15 @@
+         };
+         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+         let (tx, rx) = oneshot::channel();
+-        let run = {
++        let (run, remote) = {
+             let _state = self.lifecycle.lock().unwrap_or_else(|error| error.into_inner());
+             let run = self.current_run().filter(|run| self.is_current_run(run)
+                 && self.running.load(Ordering::Acquire) && !run.failed.load(Ordering::Acquire)
+-                && (!run.is_expected_exit() || method == proto::methods::gateway::SHUTDOWN))
+-                .ok_or_else(|| proto::WireError::with_code("插件进程不可用", proto::WireError::INTERNAL))?;
++                && (!run.is_expected_exit() || method == proto::methods::gateway::SHUTDOWN));
++            // ── 没有子进程时退到远端会话（iOS 上的脚本宿主）─────────────────
+             self.pending.lock().map_err(|_| proto::WireError::with_code("回调表被污染", proto::WireError::INTERNAL))?
+                 .insert(id, PendingCall { tx, _lease: lease });
+-            run
++            (run, remote)
+         };
+         let frame = proto::Frame {
+             id,
+@@ -583,7 +623,7 @@
+             params: Some(params),
+             ..Default::default()
+         };
+-        if let Err(e) = self.write_for_run(frame, run).await {
++        let written = match run {
+             if let Ok(mut map) = self.pending.lock() {
+                 map.remove(&id);
+             }
+@@ -631,6 +671,12 @@
+ 
+     async fn write_for_run(&self, frame: proto::Frame, run: Arc<process::ProcessRun>) -> std::io::Result<()> {
+         let stdin = {
++        let run = self.current_run().ok_or_else(process::disconnected)?;
++        self.write_for_run(frame, run).await
++    }
++
++    async fn write_for_run(&self, frame: proto::Frame, run: Arc<process::ProcessRun>) -> std::io::Result<()> {
++        let stdin = {
+             let guard = self.inner.lock().await;
+             let inner = guard.as_ref().filter(|inner| Arc::ptr_eq(&inner.run, &run))
+                 .ok_or_else(process::disconnected)?;
+@@ -666,7 +712,46 @@
+                 .ok_or_else(|| "插件进程不可用".to_string())?;
+             self.streams.lock().map_err(|_| "流式表被污染".to_string())?
+                 .insert(id, StreamState { tx: event_tx, _lease: lease, closed: false });
+-            run
++    }
++
++    async fn write_for_run(&self, frame: proto::Frame, run: Arc<process::ProcessRun>) -> std::io::Result<()> {
++        let stdin = {
++            let guard = self.inner.lock().await;
++            let inner = guard.as_ref().filter(|inner| Arc::ptr_eq(&inner.run, &run))
++                .ok_or_else(process::disconnected)?;
++            inner.stdin.clone()
++        };
++        let mut stdin = stdin.lock_owned().await;
++        // write_all 可能已经写出半帧；调用方取消不能打断共享管道的帧边界。
++        tokio::spawn(async move {
++            if run.retired.load(Ordering::Acquire) || run.failed.load(Ordering::Acquire) {
++                return Err(process::disconnected());
++            }
++            proto::write_frame(&mut *stdin, &frame).await
++        }).await.map_err(|error| std::io::Error::other(format!("插件写入任务未完成：{error}")))?
++    }
++
++
++    /// 发起流式调用；head、chunk 和最终应答共用专属通道，保持帧顺序。
++    pub(crate) async fn open_stream(
++        self: &Arc<Self>,
++        method: &str,
++        params: serde_json::Value,
++    ) -> Result<StreamCall, String> {
++        if self.options.wasm.is_some() { return self.open_wasm_stream(params).await; }
++        let lease = self.activity.acquire().ok_or_else(|| "插件正在切换或已关闭".to_string())?;
++        self.ensure().await?;
++        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
++        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
++
++        let (run, remote) = {
++            let _state = self.lifecycle.lock().unwrap_or_else(|error| error.into_inner());
++            let run = self.current_run().filter(|run| self.is_current_run(run) && self.ready()
++                && !run.failed.load(Ordering::Acquire) && !run.is_expected_exit());
++            // 与 `call_coded` 同理：没有子进程时走远端会话（iOS 脚本宿主在手机里）。
++            self.streams.lock().map_err(|_| "流式表被污染".to_string())?
++                .insert(id, StreamState { tx: event_tx, _lease: lease, closed: false });
++            (run, remote)
+         };
+ 
+         let (written, write_result) = oneshot::channel();
+@@ -681,7 +766,7 @@
+         };
+         let host = self.clone();
+         let write = crate::spawn_task(async move {
+-            let result = host.write_for_run(frame, run).await;
++            let result = match run {
+             let _ = written.send(result.is_ok());
+             result
+         }).await.map_err(|error| std::io::Error::other(format!("插件写入任务中断：{error}")))
