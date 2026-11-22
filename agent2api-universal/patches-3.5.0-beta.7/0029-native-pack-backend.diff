@@ -100,9 +100,18 @@ index 78b00b4..53ac257 100644
          command.args(&self.options.args)
              .stdin(std::process::Stdio::piped())
 diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
-index baf609d..3517dc0 100644
+index baf609d..f04bd7d 100644
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
+@@ -83,7 +83,7 @@
+             return Err("下载包的 id 或版本与所选发行版不一致，已拒绝安装".to_string());
+         }
+         let target = super::host_target();
+-        let entry = install::entry_for_target(&manifest, &target)
++        let entry = super::support::resolve_entry(&manifest, &target)
+             .ok_or_else(|| format!("插件包没有为当前平台（{target}）提供入口"))?;
+         if !staging.join(&entry).is_file() {
+             return Err(format!("包里的入口二进制不存在：{entry}"));
 @@ -92,7 +92,11 @@
          if require_signed && signature != SignatureState::Verified {
              return Err("此下载方式只接受通过可信签名校验的插件包；未签名包请从原来源下载后手动安装".to_string());
@@ -116,6 +125,19 @@ index baf609d..3517dc0 100644
          let artifact = provenance::VerifiedArtifact::from_prepared(extracted, &manifest, &entry, &target, signature, &staging)?;
          Ok(PreparedPack {
              staging: staging.clone(),
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs
+index b10993f..0a8f3f8 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs
+@@ -51,7 +51,7 @@
+         directory: &Path,
+     ) -> Result<Option<Arc<Self>>, String> {
+         zip_layout::path(selected_entry, false)?;
+-        let chosen = install::entry_for_target(manifest, target).ok_or(archive::INVALID)?;
++        let chosen = super::super::support::resolve_entry(manifest, target).ok_or(archive::INVALID)?;
+         if chosen != selected_entry || !facts.files.contains_key(selected_entry)
+             || signature == SignatureState::Invalid
+         { return Err(archive::INVALID.into()); }
 diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/rpc.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/rpc.rs
 index a0a9f06..badbb92 100644
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/rpc.rs
@@ -139,10 +161,10 @@ index a0a9f06..badbb92 100644
              init_payload: Value::Null,
              startup: None,
 diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs
-index 1fde307..4acf841 100644
+index 1fde307..6c4b94a 100644
 --- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs
 +++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs
-@@ -12,20 +12,63 @@
+@@ -12,20 +12,79 @@
      LegacyUnsupported,
  }
  
@@ -177,14 +199,29 @@ index 1fde307..4acf841 100644
  pub(super) fn require_wasm(manifest: &proto::PackManifest) -> Result<(), String> {
      if super::wasm::manifest::is_wasm(manifest) {
 -        Ok(())
--    } else {
--        Err(LEGACY_REASON.to_string())
 +        return Ok(());
-     }
++    }
 +    if native_allowed() && native_entry(manifest).is_some() {
 +        return Ok(());
 +    }
 +    Err(LEGACY_REASON.to_string())
++}
++
++/// 解析「本机该用哪个入口」：WASM 优先，放行时回落原生。
++///
++/// 用于安装（`packages.rs`）与产物见证（`packages/provenance.rs`）——这两处原本都直接调
++/// `install::entry_for_target`，而那个函数在 beta.2 之后恒取 wasm 键，原生包会得到
++/// `None`，表现为「插件包没有为当前平台提供入口」。
++pub(super) fn resolve_entry(manifest: &proto::PackManifest, target: &str) -> Option<String> {
++    if super::wasm::manifest::is_wasm(manifest) {
++        return install::entry_for_target(manifest, target);
++    }
++    if native_allowed() {
++        native_entry(manifest)
+     } else {
+-        Err(LEGACY_REASON.to_string())
++        None
+     }
  }
  
  pub(crate) fn installed_state(pack: &InstalledPack) -> PackSupportState {
