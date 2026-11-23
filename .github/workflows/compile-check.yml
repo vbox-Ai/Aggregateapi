@@ -74,7 +74,8 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           for p in agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
-                   agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff; do
+                   agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff; do
             echo "== apply $p"
             git -C Agent2API apply --3way "$(pwd)/$p"
           done
@@ -146,12 +147,22 @@ jobs:
           workspaces: Agent2API/desktop-tauri/src-tauri -> target
           key: ios
 
+      - name: 基线 iOS cargo check（未打补丁，用于区分上游问题）
+        continue-on-error: true
+        id: ios_baseline
+        run: |
+          set +e
+          cd Agent2API/desktop-tauri/src-tauri
+          cargo check -p agent2api-server --target aarch64-apple-ios 2>&1 | tee /tmp/ios-baseline.log
+          echo ios_baseline_exit= | tee -a 
+
       - name: 打补丁（0029 → 0030）
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           for p in agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
-                   agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff; do
+                   agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff; do
             git -C Agent2API apply --3way "$(pwd)/$p"
           done
 
