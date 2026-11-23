@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """让插件包版本不低于网关版本。
 
-网关里 `compatibility.rs::minimum_version()` 对这两个配套包硬性要求：
-
-    pack.version >= CURRENT_VERSION          # CURRENT_VERSION = 网关自身编译版本
-
-低于就整包不加载（面板显示「需要补齐插件」「已加载 0 家」），
-而且这条校验发生在 `packages::prepare()` 里 —— 连安装都会被拒。
-所以只要有一次用更新的上游 tag 编网关、插件清单还停在旧版本，
-用户在手机上看到的就是"装上了但一家都没起来"。
+上游 3.5.0-beta.2 之后，`compatibility.rs` 开头写明「兼容性只由公共接口决定，
+不比较插件与主程序的产品版本号」，只校验 protocol 与 capabilities。
+但更早的版本（以及部分分支）确有 `pack.version >= CURRENT_VERSION` 的硬要求，
+低于就整包不加载、连安装都被拒。这个脚本保留下来当保险：宁可把版本号抬齐，
+也不要出现「装上了却一家都没起来」。
 
 用法（CI 里在编插件包之前跑一次）：
   python3 scripts/align-plugin-version.py --min-version 3.4.2
@@ -20,14 +17,35 @@ import sys
 
 
 def parse(version: str):
-    core = version.split("-", 1)[0].split("+", 1)[0]
+    """把版本号拆成可直接比较的 key，遵循 semver 的优先级规则。
+
+    返回 ``(major, minor, patch, release_flag, pre_key)``：
+
+    * ``release_flag``：正式版为 1、预发布为 0（正式版 > 任何预发布）；
+    * ``pre_key``：预发布标识符序列；数字标识按**数值**比、字母标识按字典序比，
+      短前缀不算大（``beta`` < ``beta.1`` < ``beta.2`` < ``beta.10``）。
+
+    旧实现把 ``-beta.1`` 整段丢掉，导致 ``3.5.0-beta.1`` 与 ``3.5.0-beta.7``
+    被判为相等，插件包版本会永远停在第一次出现的那个 beta 上。
+    """
+    without_build = version.partition("+")[0]
+    core, _, pre = without_build.partition("-")
     parts = core.split(".")
     if len(parts) < 2:
         return None
     try:
-        return tuple(int(part) for part in (parts + ["0", "0"])[:3])
+        nums = tuple(int(part) for part in (parts + ["0", "0"])[:3])
     except ValueError:
         return None
+    if not pre:
+        return nums + (1, ())
+    identifiers = []
+    for ident in pre.split("."):
+        if ident.isdigit():
+            identifiers.append((0, int(ident), ""))
+        else:
+            identifiers.append((1, 0, ident))
+    return nums + (0, tuple(identifiers))
 
 
 def main() -> int:
@@ -62,5 +80,14 @@ def main() -> int:
     return 0
 
 
+def _self_check() -> None:
+    """防止回归：预发布段的比较必须真的生效。"""
+    assert parse("3.5.0-beta.1") < parse("3.5.0-beta.7")
+    assert parse("3.5.0-beta.10") > parse("3.5.0-beta.7")
+    assert parse("3.5.0") > parse("3.5.0-beta.7")
+    assert parse("3.5.0-beta") < parse("3.5.0-beta.1")
+
+
 if __name__ == "__main__":
+    _self_check()
     sys.exit(main())
