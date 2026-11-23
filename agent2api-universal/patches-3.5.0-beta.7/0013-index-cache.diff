@@ -1,0 +1,40 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+index ea40d05..7afe021 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+@@ -7,11 +7,35 @@
+ const INDEX_LIMIT: usize = 16 * 1024 * 1024;
+ 
+ /// 官方分发索引（`dist` 分支的 `index.json`）：下载与「检查更新」共用一份读法。
++/// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
++///
++/// 只缓存**解析并校验过**的值，TTL 10 分钟；刷新目录时清空，保证「手动刷新」
++/// 永远是新鲜数据。
++static INDEX_CACHE: std::sync::Mutex<Option<(i64, Value)>> = std::sync::Mutex::new(None);
++const INDEX_CACHE_TTL_MS: i64 = 10 * 60 * 1000;
++
++pub(super) fn invalidate_index_cache() {
++    if let Ok(mut cache) = INDEX_CACHE.lock() {
++        *cache = None;
++    }
++}
++
+ pub(super) async fn index() -> Result<Value, String> {
++    let now = crate::server::logging::now_ms();
++    if let Ok(cache) = INDEX_CACHE.lock() {
++        if let Some((at, cached)) = cache.as_ref() {
++            if now.saturating_sub(*at) < INDEX_CACHE_TTL_MS {
++                return Ok(cached.clone());
++            }
++        }
++    }
+     let bytes = super::website::bytes_with_fallback(INDEX_URL, LEGACY_INDEX_URL, INDEX_LIMIT).await?;
+     let index: Value = serde_json::from_slice(&bytes).map_err(|_| "Magpie 社区索引无法解析")?;
+     if index["version"].as_u64() != Some(1) {
+         return Err("Magpie 社区分发索引版本暂不兼容".into());
++    }
++    if let Ok(mut cache) = INDEX_CACHE.lock() {
++        *cache = Some((now, index.clone()));
+     }
+     Ok(index)
+ }

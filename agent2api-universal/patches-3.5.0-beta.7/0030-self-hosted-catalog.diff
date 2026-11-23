@@ -1,0 +1,215 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/update/website.rs b/desktop-tauri/src-tauri/server/src/server/core/update/website.rs
+index e3d1862..44f4f11 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/update/website.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/update/website.rs
+@@ -55,6 +55,56 @@
+     String::from_utf8(out).ok()
+ }
+ 
++/// 自建插件源：目录 JSON 的完整地址（`AGENT2API_PLUGIN_CATALOG_URL`）。
++///
++/// 设置后，目录与资产都允许来自该源（目录同源的 origin 自动放行），不再强制官网 CDN。
++/// 不设 = 与上游行为完全一致。
++pub fn custom_catalog_url() -> Option<String> {
++    std::env::var("AGENT2API_PLUGIN_CATALOG_URL")
++        .ok()
++        .map(|value| value.trim().to_string())
++        .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
++}
++
++/// 自建源允许的额外 origin（`AGENT2API_PLUGIN_ASSET_ORIGINS`，逗号分隔）。
++///
++/// 典型用法：目录放自己的网站、资产放 GitHub Releases —— 两者 origin 不同，需要显式列出。
++fn custom_origins() -> Vec<String> {
++    let mut origins = Vec::new();
++    if let Some(url) = custom_catalog_url().and_then(|value| url::Url::parse(&value).ok()) {
++        origins.push(url.origin().ascii_serialization());
++    }
++    if let Ok(list) = std::env::var("AGENT2API_PLUGIN_ASSET_ORIGINS") {
++        for item in list.split(',') {
++            let item = item.trim().trim_end_matches('/');
++            if item.is_empty() { continue; }
++            if let Ok(url) = url::Url::parse(item) {
++                let origin = url.origin().ascii_serialization();
++                if !origins.contains(&origin) { origins.push(origin); }
++            }
++        }
++    }
++    origins
++}
++
++/// 某个地址是否属于「自建插件源」（未设目录地址时恒为 false）。
++pub fn custom_source_allowed(value: &str) -> bool {
++    if custom_catalog_url().is_none() { return false; }
++    let Ok(url) = url::Url::parse(value) else { return false; };
++    let origin = url.origin().ascii_serialization();
++    custom_origins().iter().any(|allowed| *allowed == origin)
++}
++
++/// 自建源下是否允许未签名包（`AGENT2API_ALLOW_UNSIGNED_PLUGINS=1`）。
++///
++/// 只在设了自建目录时生效，避免把官网通道的签名策略一起放松。
++pub fn allow_unsigned_plugins() -> bool {
++    custom_catalog_url().is_some()
++        && std::env::var("AGENT2API_ALLOW_UNSIGNED_PLUGINS")
++            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
++            .unwrap_or(false)
++}
++
+ pub fn trusted_url(value: &str) -> bool {
+     url::Url::parse(value).is_ok_and(|url| {
+         let origin = url.origin().ascii_serialization();
+@@ -104,6 +154,13 @@
+ }
+ 
+ pub fn plugin_url(value: &str, id: &str, tag: &str, name: &str) -> bool {
++    // 自建源：地址的最后一节必须等于资产文件名（id 由调用方另行比对包清单）。
++    if custom_source_allowed(value) {
++        if id.is_empty() || name.is_empty() { return false; }
++        let Ok(url) = url::Url::parse(value) else { return false; };
++        return url.path_segments().and_then(|mut parts| parts.next_back())
++            .is_some_and(|last| last == name);
++    }
+     if !download_url(value) || id.is_empty() || name.is_empty() { return false; }
+     let Ok(url) = url::Url::parse(value) else { return false; };
+     if url.origin().ascii_serialization() == CDN_ORIGIN {
+@@ -141,9 +198,11 @@
+     headers: &[(String, String)],
+     timeout_ms: Option<u64>,
+ ) -> Result<reqwest::Response, UpdateError> {
+-    if !trusted_url(value) { return Err(UpdateError::new("更新只允许访问 Agent2API 官网")); }
++    if !trusted_url(value) && !custom_source_allowed(value) {
++        return Err(UpdateError::new("更新只允许访问 Agent2API 官网（或已配置的自建插件源）"));
++    }
+     let download = download_url(value);
+-    let valid: fn(&str) -> bool = if api_url(value) { api_url }
++    let valid: fn(&str) -> bool = if custom_source_allowed(value) { custom_source_allowed } else if api_url(value) { api_url }
+         else if download_url(value) { download_url }
+         else { trusted_url };
+     let mut last_error = "无法连接官网更新服务".to_string();
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
+index 449c43d..957d6de 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/update.rs
+@@ -250,7 +250,11 @@
+         .filter_map(|item| {
+             let name = item.get("name")?.as_str()?;
+             let target = name.strip_prefix(prefix)?.strip_suffix(suffix)?;
+-            if target != super::wasm::manifest::TARGET { return None; }
++            if target != super::wasm::manifest::TARGET
++                && !(super::support::native_allowed() && target == super::host_target())
++            {
++                return None;
++            }
+             let url = text(item, "browser_download_url");
+             if url.is_empty() {
+                 return None;
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
+index 99015bf..6fdf49c 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
+@@ -252,9 +252,17 @@
+ }
+ 
+ async fn fetch_catalog(channels: crate::server::config::UpdateChannels) -> Result<Value, UpdateError> {
+-    let fallback_url = format!("{}/catalog?stable={}&beta={}", update::INDEX_SOURCE, u8::from(channels.stable), u8::from(channels.beta));
++    // 自建源优先：设了 AGENT2API_PLUGIN_CATALOG_URL 就直连它，不再碰官网 CDN。
++    let custom = crate::server::core::update::website::custom_catalog_url();
++    let fallback_url = custom.clone().unwrap_or_else(|| {
++        format!("{}/catalog?stable={}&beta={}", update::INDEX_SOURCE, u8::from(channels.stable), u8::from(channels.beta))
++    });
++    let primary_url = custom.unwrap_or_else(|| {
++        crate::server::core::update::website::CDN_PLUGIN_CATALOG_URL.to_string()
++    });
++    let signed_policy = !crate::server::core::update::website::allow_unsigned_plugins();
+     let response = crate::server::core::update::website::fetch_json_with_fallback(
+-        crate::server::core::update::website::CDN_PLUGIN_CATALOG_URL,
++        &primary_url,
+         &fallback_url,
+         30_000,
+     ).await?;
+@@ -288,7 +296,7 @@
+             tag_template: entry["detail"]["release"]["tag"].as_str().unwrap_or("v{version}").to_string(),
+             asset_template: entry["detail"]["release"]["asset"].as_str().unwrap_or("{id}-{version}-{target}.zip").to_string(),
+             homepage: entry["detail"]["homepage"].as_str().unwrap_or("").to_string(),
+-            require_signed: true,
++            require_signed: signed_policy,
+         };
+         let repo = &detail.repo;
+         let old = cached["plugins"]
+@@ -307,7 +315,7 @@
+             "repository": repo,
+             "homepage": detail.homepage,
+             "protocol": detail.protocol, "icon": icon, "iconSource": entry["icon"],
+-            "requireSigned": true,
++            "requireSigned": signed_policy,
+             "version": Value::Null, "page": Value::Null, "notes": "", "prerelease": false,
+             "platforms": [], "error": false, "reason": Value::Null,
+         });
+@@ -328,7 +336,7 @@
+                     parse_error = Some(error);
+                     continue;
+                 }
+-                assets.require_signed = true;
++                assets.require_signed = signed_policy;
+                 if matched.as_ref().is_none_or(|best| {
+                     crate::server::core::update::compare_versions(&assets.version, &best.version) == Some(1)
+                 }) {
+@@ -346,7 +354,7 @@
+                     .and_then(|mut assets| {
+                         update::validate_release_urls(release, &assets, id)?;
+                         if !channels.accepts(assets.prerelease) { return Err(UpdateError::new("官网插件版本不属于当前通道")); }
+-                        assets.require_signed = true;
++                        assets.require_signed = signed_policy;
+                         Ok(Some(assets))
+                     })
+             }
+@@ -365,7 +373,7 @@
+                 let digests = release.digests.clone();
+                 value["platforms"] = json!(release.platforms.into_iter().map(|(target, url, size)| {
+                     let digest = digests.get(&url).cloned();
+-                    json!({ "current": target == current || target == super::wasm::manifest::TARGET, "target": target, "url": url, "size": size, "requireSigned": true, "sha256": digest })
++                    json!({ "current": target == current || target == super::wasm::manifest::TARGET, "target": target, "url": url, "size": size, "requireSigned": signed_policy, "sha256": digest })
+                 }).collect::<Vec<_>>());
+                 if let Some(reason) = compatibility_error {
+                     value["error"] = json!(true);
+@@ -599,9 +607,13 @@
+             continue;
+         }
+         let target = super::host_target();
++        let native_target = super::support::native_allowed().then(super::host_target);
+         let Some(asset) = entry["platforms"]
+             .as_array()
+-            .and_then(|items| items.iter().find(|item| item["target"] == super::wasm::manifest::TARGET))
++            .and_then(|items| items.iter().find(|item| {
++                item["target"] == super::wasm::manifest::TARGET
++                    || native_target.as_deref() == item["target"].as_str()
++            }))
+         else {
+             continue;
+         };
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs
+index a603e04..f8ec5ec 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/operations.rs
+@@ -215,7 +215,10 @@
+     if target != super::host_target() && target != super::wasm::manifest::TARGET {
+         return Err("只能安装当前网关平台的插件包".to_string());
+     }
+-    if platform["target"] != super::wasm::manifest::TARGET {
++    let platform_target = platform["target"].as_str().unwrap_or("");
++    if platform_target != super::wasm::manifest::TARGET
++        && !(super::support::native_allowed() && platform_target == super::host_target())
++    {
+         return Err(super::support::LEGACY_REASON.to_string());
+     }
+     let asset = update::PackAsset {
+@@ -224,7 +227,7 @@
+         url: platform["url"].as_str().unwrap_or("").to_string(),
+         size: platform["size"].as_u64().unwrap_or(0),
+         page: String::new(),
+-        require_signed: true,
++        require_signed: !crate::server::core::update::website::allow_unsigned_plugins(),
+         sha256: platform["sha256"].as_str().map(str::to_string),
+     };
+     let policy = if automatic {

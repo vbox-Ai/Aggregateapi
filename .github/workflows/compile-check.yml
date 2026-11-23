@@ -1,0 +1,185 @@
+﻿# 编译门：把 porting 分支的补丁打到上游 beta.7 上，只做 cargo check。
+#   · 不产出任何安装包，只回答一个问题：这些补丁能不能编译。
+#   · 先跑一次「未打补丁」的基线，用来区分「上游自己坏了」与「补丁改坏了」。
+name: compile-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "上游 tag（默认 v3.5.0-beta.7）"
+        default: "v3.5.0-beta.7"
+  push:
+    branches: [porting/3.5.0-beta.7, main]
+    paths:
+      - 'agent2api-universal/patches-3.5.0-beta.7/**'
+      - 'scripts/gen-plugin-catalog.py'
+      - '.github/workflows/compile-check.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compile-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  UPSTREAM_REPO: https://github.com/aimod-cc/Agent2API.git
+  UPSTREAM_TAG: ${{ inputs.upstream_tag || 'v3.5.0-beta.7' }}
+
+jobs:
+  check:
+    name: cargo check (beta.7 + 补丁)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取上游源码
+        run: |
+          set -euo pipefail
+          clone() {
+            for base in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+              rm -rf Agent2API
+              if git clone --depth 1 --branch "$UPSTREAM_TAG" "${base}${UPSTREAM_REPO}" Agent2API 2>&1 | tail -2; then
+                [ -d Agent2API/.git ] && return 0
+              fi
+              echo "   clone 失败，换下一个源：${base:-直连}"
+            done
+            return 1
+          }
+          clone
+          git -C Agent2API log -1 --format='上游：%h %ad %s' --date=short
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Agent2API/desktop-tauri/src-tauri -> target
+
+      - name: 基线 cargo check（未打补丁）
+        continue-on-error: true
+        id: baseline
+        run: |
+          set +e
+          cd Agent2API/desktop-tauri/src-tauri
+          cargo check -p agent2api-server 2>&1 | tee /tmp/baseline.log
+          echo "baseline_exit=${PIPESTATUS[0]}" | tee -a $GITHUB_ENV
+          echo "== 基线退出码：${PIPESTATUS[0]} =="
+
+      - name: 打补丁（0029 → 0030）
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          for p in agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff; do
+            echo "== apply $p"
+            git -C Agent2API apply --3way "$(pwd)/$p"
+          done
+          echo "== 补丁全部应用"
+
+      - name: 打补丁后 cargo check
+        id: patched
+        run: |
+          set +e
+          cd Agent2API/desktop-tauri/src-tauri
+          cargo check -p agent2api-server 2>&1 | tee /tmp/patched.log
+          code=${PIPESTATUS[0]}
+          echo "patched_exit=${code}" | tee -a $GITHUB_ENV
+          # 只把补丁引入的错误单独捞出来，便于修复
+          echo "===== 错误摘要 ====="
+          grep -E "^(error|error\[E[0-9]+\])" /tmp/patched.log | sort | uniq -c | sort -rn | head -40 || true
+          exit $code
+
+      - name: 目录生成器语法检查
+        if: always()
+        run: python3 -m py_compile scripts/gen-plugin-catalog.py && echo "py_compile OK"
+
+      - name: 上传日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-check-logs
+          path: |
+            /tmp/baseline.log
+            /tmp/patched.log
+          if-no-files-found: warn
+
+      - name: 结论
+        if: always()
+        run: |
+          echo "基线（未打补丁）退出码：${baseline_exit:-?}"
+          echo "打补丁后退出码：${patched_exit:-?}"
+          if [ "${patched_exit:-1}" != "0" ]; then
+            echo "::error::补丁引入编译失败；基线退出码 ${baseline_exit:-?}（0 = 上游本身可编译）"
+          fi
+
+  # ── 真正的产品 target：iOS（只 check，不链接，Linux runner 上可跑）────────
+  ios-check:
+    name: cargo check (aarch64-apple-ios + 补丁)
+    # Linux runner 没有 xcrun：cc-rs 编不了 iOS 目标的 C 依赖，必须在 macOS 上跑
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取上游源码
+        run: |
+          set -euo pipefail
+          for base in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+            rm -rf Agent2API
+            if git clone --depth 1 --branch "$UPSTREAM_TAG" "${base}${UPSTREAM_REPO}" Agent2API 2>&1 | tail -2; then
+              [ -d Agent2API/.git ] && break
+            fi
+            echo "   clone 失败，换下一个源：${base:-直连}"
+          done
+          git -C Agent2API log -1 --format='上游：%h %ad %s' --date=short
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: Agent2API/desktop-tauri/src-tauri -> target
+          key: ios
+
+      - name: 基线 iOS cargo check（未打补丁，用于区分上游问题）
+        continue-on-error: true
+        id: ios_baseline
+        run: |
+          set +e
+          cd Agent2API/desktop-tauri/src-tauri
+          cargo check -p agent2api-server --target aarch64-apple-ios 2>&1 | tee /tmp/ios-baseline.log
+          echo ios_baseline_exit= | tee -a 
+
+      - name: 打补丁（0029 → 0030）
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          for p in agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff; do
+            git -C Agent2API apply --3way "$(pwd)/$p"
+          done
+
+      - name: iOS target cargo check
+        run: |
+          set +e
+          cd Agent2API/desktop-tauri/src-tauri
+          cargo check -p agent2api-server --target aarch64-apple-ios 2>&1 | tee /tmp/ios.log
+          code=${PIPESTATUS[0]}
+          echo "===== iOS 错误摘要 ====="
+          grep -E "^error(\[E[0-9]+\])?:" /tmp/ios.log | sort | uniq -c | sort -rn | head -40 || true
+          exit $code
+
+      - name: 上传日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-check-ios-logs
+          path: /tmp/ios.log
+          if-no-files-found: warn

@@ -1,0 +1,252 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/bootstrap.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/bootstrap.rs
+index baf0b3c..b504aa7 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/bootstrap.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/bootstrap.rs
+@@ -490,9 +490,16 @@
+     // 清单里是按目标三元组分列的（一个包可以带多平台二进制），注册表里
+     // 只记了安装时那一条。以清单为准才能让「同一个包在另一台机器上装」
+     // 也选对文件；注册表那条是清单读不到时的退路。
++    // 入口：先按 WASM 目标找；放行原生时再按本机目标三元组找（原生 pack）。
+     let entry = manifest
+         .as_ref()
+-        .and_then(|manifest| install::entry_for_target(manifest, &super::wasm::manifest::TARGET))
++        .and_then(|manifest| {
++            install::entry_for_target(manifest, &super::wasm::manifest::TARGET).or_else(|| {
++                super::support::native_allowed()
++                    .then(|| super::support::native_entry(manifest))
++                    .flatten()
++            })
++        })
+         .ok_or_else(|| super::support::LEGACY_REASON.to_string())?;
+     let exe = dir.join(&entry);
+     if !exe.exists() {
+@@ -511,9 +518,14 @@
+             return Err(format!("插件包「{}」完整性复核失败：{}", pack.id, problem.unwrap_or_default()));
+         }
+     }
+-    if wasm.is_none() { return Err(super::support::LEGACY_REASON.to_string()); }
++    // 没有 WASM 权限清单 = 原生 pack；只有显式放行时才继续。
++    let native = wasm.is_none();
++    if native && !super::support::native_allowed() {
++        return Err(super::support::LEGACY_REASON.to_string());
++    }
+ 
+     let options = HostOptions {
++        native,
+         wasm,
+         cwd: exe.parent().map(std::path::Path::to_path_buf),
+         data_dir: install::plugins_dir().join(&pack.id).display().to_string(),
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
+index 76e51fa..99015bf 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/catalog.rs
+@@ -76,7 +76,18 @@
+ fn retain_wasm_platforms(item: &mut Value) {
+     if let Some(platforms) = item["platforms"].as_array_mut() {
+         let had_assets = !platforms.is_empty();
+-        platforms.retain(|platform| platform["target"] == super::wasm::manifest::TARGET);
++        let native = super::support::native_allowed().then(super::host_target);
++        platforms.retain(|platform| {
++            if platform["target"] == super::wasm::manifest::TARGET {
++                return true;
++            }
++            // platforms 有两种形状：官网聚合的对象（带 target）与本仓库 iOS 包的字符串数组。
++            let target = platform["target"].as_str().or_else(|| platform.as_str());
++            match (native.as_deref(), target) {
++                (Some(ours), Some(found)) => found == ours || found == "aarch64-apple-ios",
++                _ => false,
++            }
++        });
+         if had_assets && platforms.is_empty() && item["error"] != true {
+             item["reason"] = json!(super::support::LEGACY_REASON);
+         }
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
+index 78b00b4..53ac257 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/lifecycle.rs
+@@ -20,7 +20,7 @@
+     pub async fn ensure(self: &Arc<Self>) -> Result<Vec<proto::ProviderInfo>, String> {
+         if super::runtime::admission_closed() { return Err("插件宿主全局关闭中，未开放新运行代次".into()); }
+         if self.closing.load(Ordering::Acquire) { return Err("插件宿主已关闭，不能重新启动已回收的宿主".to_string()); }
+-        if self.options.wasm.is_none() && !self.options.script {
++        if self.options.wasm.is_none() && !self.options.script && !self.options.native {
+             return Err(super::support::LEGACY_REASON.to_string());
+         }
+         if self.disabled.load(Ordering::Acquire) { return Err(self.failure_message()); }
+@@ -96,7 +96,7 @@
+ 
+         if let Some(attempt) = &self.options.startup { attempt.phase(super::startup::Phase::Starting); }
+         if self.options.wasm.is_some() { return self.start_wasm().await; }
+-        if !self.options.script { return Err(super::support::LEGACY_REASON.to_string()); }
++        if !self.options.script && !self.options.native { return Err(super::support::LEGACY_REASON.to_string()); }
+         if let Some(old) = self.current_run() {
+             {
+                 let _state = self.lifecycle.lock().unwrap_or_else(|error| error.into_inner());
+@@ -116,6 +116,16 @@
+         if self.options.script { super::script::clear_transport(); }
+         *self.inner.lock().await = None;
+ 
++        if self.options.native {
++            // 原生 pack：直接以子进程运行插件二进制。独立形态（手机自己跑网关）必须显式
++            // 放行，避免桌面端误跑来路不明的可执行文件。
++            let allowed = std::env::var("AGENT2API_ALLOW_EXEC")
++                .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
++                .unwrap_or(false);
++            if !allowed {
++                return Err("原生插件执行未放行：请设置 AGENT2API_ALLOW_EXEC=1 后重启网关".into());
++            }
++        }
+         let mut command = tokio::process::Command::new(&self.options.exe);
+         command.args(&self.options.args)
+             .stdin(std::process::Stdio::piped())
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
+index baf609d..f04bd7d 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages.rs
+@@ -83,7 +83,7 @@
+             return Err("下载包的 id 或版本与所选发行版不一致，已拒绝安装".to_string());
+         }
+         let target = super::host_target();
+-        let entry = install::entry_for_target(&manifest, &target)
++        let entry = super::support::resolve_entry(&manifest, &target)
+             .ok_or_else(|| format!("插件包没有为当前平台（{target}）提供入口"))?;
+         if !staging.join(&entry).is_file() {
+             return Err(format!("包里的入口二进制不存在：{entry}"));
+@@ -92,7 +92,11 @@
+         if require_signed && signature != SignatureState::Verified {
+             return Err("此下载方式只接受通过可信签名校验的插件包；未签名包请从原来源下载后手动安装".to_string());
+         }
+-        if !is_wasm { return Err(super::support::LEGACY_REASON.to_string()); }
++        if !is_wasm
++            && !(super::support::native_allowed() && super::support::native_entry(&manifest).is_some())
++        {
++            return Err(super::support::LEGACY_REASON.to_string());
++        }
+         let artifact = provenance::VerifiedArtifact::from_prepared(extracted, &manifest, &entry, &target, signature, &staging)?;
+         Ok(PreparedPack {
+             staging: staging.clone(),
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs
+index b10993f..0a8f3f8 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/packages/provenance.rs
+@@ -51,7 +51,7 @@
+         directory: &Path,
+     ) -> Result<Option<Arc<Self>>, String> {
+         zip_layout::path(selected_entry, false)?;
+-        let chosen = install::entry_for_target(manifest, target).ok_or(archive::INVALID)?;
++        let chosen = super::super::support::resolve_entry(manifest, target).ok_or(archive::INVALID)?;
+         if chosen != selected_entry || !facts.files.contains_key(selected_entry)
+             || signature == SignatureState::Invalid
+         { return Err(archive::INVALID.into()); }
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/rpc.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/rpc.rs
+index a0a9f06..badbb92 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/rpc.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/rpc.rs
+@@ -87,6 +87,9 @@
+     /// 而那是**宿主**才知道的事实（见 `HostEnv.loopback_port`）。
+     pub loopback_port: u16,
+     pub script: bool,
++    /// 原生 pack（按目标三元组取 `entry` 的二进制，走子进程宿主）。
++    /// 由 `AGENT2API_ALLOW_NATIVE_PACKS=1` 放行，见 `support::native_allowed`。
++    pub native: bool,
+     pub wasm: Option<super::wasm::manifest::Options>,
+     pub init_payload: Value,
+     pub startup: Option<super::startup::Attempt>,
+@@ -107,6 +110,7 @@
+             init_timeout: Duration::from_secs(60),
+             loopback_port: 0,
+             script: false,
++            native: false,
+             wasm: None,
+             init_payload: Value::Null,
+             startup: None,
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs
+index 1fde307..6c4b94a 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs
+@@ -12,20 +12,79 @@
+     LegacyUnsupported,
+ }
+ 
++/// 是否允许原生（非 WASM）提供商插件包。
++///
++/// 默认关闭，与上游 beta.2 起的口径一致（官方只发 WASM 包）。独立形态在 iOS 上拿不到
++/// 可执行页，wasmtime 的 JIT 起不来，所以这里留一个显式开关：置
++/// `AGENT2API_ALLOW_NATIVE_PACKS=1` 后，网关按「当前目标三元组」从包清单的 `entry`
++/// 里取原生入口，走既有子进程宿主通道（`HostOptions.exe`）。
++pub(super) fn native_allowed() -> bool {
++    std::env::var("AGENT2API_ALLOW_NATIVE_PACKS")
++        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
++        .unwrap_or(false)
++}
++
++/// 包清单里「当前平台」的原生入口（没有则 `None`）。
++///
++/// 不能用 `install::entry_for_target`：那个函数在 beta.2 之后的实现里**忽略** target，
++/// 恒取 `entry["wasm32-unknown-unknown"]`（见 `install.rs:441`）。这里直接查 `entry`。
++/// `host_target()` 在 iOS 上回落成 `aarch64-unknown-linux-gnu`（`rpc.rs:131` 的 `_` 分支），
++/// 而 `scripts/pack-ios-plugins.sh` 正是按这个键写入口，所以精确匹配即可；
++/// 另补一个 `aarch64-apple-ios` 别名，兼容按真实三元组打包的产物。
++pub(super) fn native_entry(manifest: &proto::PackManifest) -> Option<String> {
++    let target = super::host_target();
++    manifest
++        .entry
++        .get(&target)
++        .or_else(|| manifest.entry.get("aarch64-apple-ios"))
++        .cloned()
++}
++
+ pub(super) fn require_wasm(manifest: &proto::PackManifest) -> Result<(), String> {
+     if super::wasm::manifest::is_wasm(manifest) {
+-        Ok(())
++        return Ok(());
++    }
++    if native_allowed() && native_entry(manifest).is_some() {
++        return Ok(());
++    }
++    Err(LEGACY_REASON.to_string())
++}
++
++/// 解析「本机该用哪个入口」：WASM 优先，放行时回落原生。
++///
++/// 用于安装（`packages.rs`）与产物见证（`packages/provenance.rs`）——这两处原本都直接调
++/// `install::entry_for_target`，而那个函数在 beta.2 之后恒取 wasm 键，原生包会得到
++/// `None`，表现为「插件包没有为当前平台提供入口」。
++pub(super) fn resolve_entry(manifest: &proto::PackManifest, target: &str) -> Option<String> {
++    if super::wasm::manifest::is_wasm(manifest) {
++        return install::entry_for_target(manifest, target);
++    }
++    if native_allowed() {
++        native_entry(manifest)
+     } else {
+-        Err(LEGACY_REASON.to_string())
++        None
+     }
+ }
+ 
+ pub(crate) fn installed_state(pack: &InstalledPack) -> PackSupportState {
+     let dir = install::plugins_dir().join(&pack.id).join(&pack.version);
+-    let wasm = install::read_manifest(&dir)
+-        .map(|manifest| super::wasm::manifest::is_wasm(&manifest))
+-        .unwrap_or_else(|_| pack.entry.ends_with(".wasm"));
+-    if wasm { PackSupportState::Supported } else { PackSupportState::LegacyUnsupported }
++    let manifest = install::read_manifest(&dir).ok();
++    let wasm = manifest
++        .as_ref()
++        .map(super::wasm::manifest::is_wasm)
++        .unwrap_or_else(|| pack.entry.ends_with(".wasm"));
++    if wasm {
++        return PackSupportState::Supported;
++    }
++    // 原生包：只在显式放行、且清单里确有本平台入口时才算受支持。
++    if native_allowed() {
++        let entry = manifest.as_ref().and_then(native_entry);
++        let fallback = manifest.is_none() && !pack.entry.ends_with(".wasm");
++        if entry.is_some() || fallback {
++            return PackSupportState::Supported;
++        }
++    }
++    PackSupportState::LegacyUnsupported
+ }
+ 
+ pub(super) fn legacy_reason(pack: &InstalledPack) -> Option<String> {

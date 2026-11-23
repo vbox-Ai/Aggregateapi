@@ -1,0 +1,15 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/wasm/qoder_umid/discovery.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/wasm/qoder_umid/discovery.rs
+index c8496c0..a576a1e 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/wasm/qoder_umid/discovery.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/wasm/qoder_umid/discovery.rs
+@@ -1,7 +1,9 @@
+ use std::path::{Path, PathBuf};
+ 
+ pub(super) fn roots() -> Vec<PathBuf> {
+-    let mut roots = Vec::new();
++    // iOS 上三个 cfg 分支（windows / macos / linux）全不成立，Vec::new() 推不出元素类型，
++    // 上游没为 iOS 编过这个 crate（E0282）。显式标注即可，不改变任何平台的实际行为。
++    let mut roots: Vec<PathBuf> = Vec::new();
+     for name in ["Qoder", "Qoder CN"] {
+         #[cfg(windows)] {
+             roots.extend(registry(name));

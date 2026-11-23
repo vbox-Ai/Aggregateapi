@@ -19,9 +19,14 @@ on:
         default: "false"
   push:
     branches: [main]
+    # 只动文档 / 新补丁集 / 工作流本身的提交不触发全平台构建（构建很贵，这些改动
+    # 也不改变产物）；验证编译请用 compile-check.yml，要出包请 workflow_dispatch。
     paths-ignore:
       - 'docs/**'
       - '**.md'
+      - 'agent2api-universal/patches-3.5.0-beta.7/**'
+      - 'scripts/gen-plugin-catalog.py'
+      - '.github/**'
 
 # 推送与手动派发**分属不同并发组**：新提交只取消旧的推送构建，绝不动正在跑的手动构建
 # 组名里带 event_name —— 同一组里只要有新 run 进来就会取消在跑的那个；
