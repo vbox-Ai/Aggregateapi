@@ -73,7 +73,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          for p in agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
+          for p in agent2api-universal/patches-3.5.0-beta.7/0013-index-cache.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff; do
             echo "== apply $p"
@@ -160,7 +161,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          for p in agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
+          for p in agent2api-universal/patches-3.5.0-beta.7/0013-index-cache.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0029-native-pack-backend.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0030-self-hosted-catalog.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff; do
             git -C Agent2API apply --3way "$(pwd)/$p"

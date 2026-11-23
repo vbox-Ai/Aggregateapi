@@ -17,8 +17,8 @@
 | `0029-native-pack-backend.diff` | 新写。恢复原生提供商插件包后端（默认关闭，env 放行） | 干净 beta.7 上 7/7 文件可应用 |
 | `0030-self-hosted-catalog.diff` | 新写。自建插件目录（目录源可配、原生平台放行、签名策略可关），**须在 0029 之后** | 干净 beta.7 上按 0029→0030 顺序 4/4 可应用 |
 | `0031-ios-target-build-fixes.diff` | 新写。修上游 `aarch64-apple-ios` 目标的编译失败（E0282） | 打上后 iOS target `cargo check` 通过 |
-| `0013-index-cache.diff` | 按 beta.7 的 `script/distribution.rs` 手写重写 | 干净 beta.7 上可应用 |
-| `0021-remote-outbound-channel.diff` | 3 路合并忠实 rebase（只做原补丁的增删） | 干净 beta.7 上可应用 |
+| `0013-index-cache.diff` | 按 beta.7 的 `script/distribution.rs` 手写重写 | 已纳入编译门（与 0029/0030/0031 同批跑） |
+| `review_only/0021-remote-outbound-channel.WIP.diff` | 自动 rebase **不可用**：重复贴了整段 `Host` 结构体与 `write_for_run`，`mod.rs` 花括号净 +4 | 隔离，需人工重写后再入 |
 
 ## 怎么用
 
@@ -29,7 +29,7 @@ for p in agent2api-universal/patches-3.5.0-beta.7/00{29,30,31}-*.diff; do
 done
 ```
 
-顺序：`0029` → `0030` → `0031`。前两条有依赖关系，`0031` 独立。
+顺序：`0013` → `0029` → `0030` → `0031`。`0029`/`0030` 有依赖关系，`0013`/`0031` 独立。
 
 ## 编译状态（CI 实测）
 
