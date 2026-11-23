@@ -161,6 +161,22 @@ jobs:
           ls -d out/packlib/pack_host   # daemon 的 path 依赖要能找到这个 crate
 
       # 守护进程：用我们自己的 bin 目标（上游已删 headless bin）
+      - name: 对齐 ios-ffi 依赖（libc 跟随上游 Cargo.lock）
+        working-directory: agent2api-ios/ios-ffi
+        run: |
+          set -euo pipefail
+          # ios-ffi 没有自己的 Cargo.lock，会全新解析依赖。新版 libc 调整了 apple 分支的
+          # cfg 划分，sysinfo 0.37.2 在 iOS 目标上会找不到 proc_pidinfo / PROC_PIDLISTFDS /
+          # proc_fdinfo，daemon 构建直接失败。钉到上游 server workspace 锁定的同一版本。
+          cargo generate-lockfile >/dev/null 2>&1 || true
+          LOCK="$GITHUB_WORKSPACE/Agent2API/desktop-tauri/src-tauri/Cargo.lock"
+          LIBC=$(awk '/^name = "libc"$/{found=1} found && /^version = /{gsub(/[",]/,""); print $3; exit}' "$LOCK")
+          echo "上游锁定的 libc：${LIBC:-（未取到）}"
+          if [ -n "${LIBC:-}" ]; then
+            cargo update -p libc --precise "$LIBC" || echo "WARN: libc 未能钉到 $LIBC"
+          fi
+          grep -A2 '^name = "libc"$' Cargo.lock | head -3
+
       - name: 编网关守护进程（Mach-O，launchd 用）
         working-directory: agent2api-ios/ios-ffi
         env:
