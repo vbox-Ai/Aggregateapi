@@ -43,6 +43,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   UPSTREAM_REPO: https://github.com/aimod-cc/Agent2API.git
+  # 补丁是对着某个具体版本写的：默认 pin 住；要跟新版本就把这里换掉（补丁得同步重生成）。
+  UPSTREAM_TAG: v3.5.0-beta.7
   IOS_DEPLOY: "15.0"
 
 jobs:
@@ -86,7 +88,7 @@ jobs:
           # 对齐"官方最新发布"而不是 main 的浮动头：拉 tag 并切到最新 v* 版本。
           # main 上可能有未发布的提交，官方 release 一定对应某个 tag。
           git -C Agent2API fetch --tags --depth 64 >/dev/null 2>&1 || true
-          TAG="$(git -C Agent2API tag -l 'v*' --sort=-v:refname | head -1)"
+          TAG="${UPSTREAM_TAG:-$(git -C Agent2API tag -l 'v*' --sort=-v:refname | head -1)}"
           if [ -n "$TAG" ]; then
             if git -C Agent2API fetch --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 \
                && git -C Agent2API checkout -q "refs/tags/$TAG" 2>/dev/null; then
@@ -102,7 +104,10 @@ jobs:
       - name: 打补丁（插件宿主闸门 + 能力表端点）
         run: |
           set -euo pipefail
-          for p in agent2api-universal/patches/*.diff; do
+          PATCH_DIR=agent2api-universal/patches-3.5.0-beta.7
+          [ -d "$PATCH_DIR" ] || PATCH_DIR=agent2api-universal/patches
+          echo "== 补丁目录：$PATCH_DIR"
+          for p in "$PATCH_DIR"/*.diff; do
             echo "== apply $p"
             if ! git -C Agent2API apply --3way "$(pwd)/$p"; then
               echo "❌ 补丁未应用：${p}（上游已变，需要重新生成这个补丁）"
@@ -111,7 +116,9 @@ jobs:
             echo "   ✅ 已应用"
           done
           # 复核关键改动确实落地（不靠"看起来成功"）
-          grep -R "vbox-Ai/Aggregateapi" Agent2API/desktop-tauri/src-tauri/server/src | head -5
+          # 复核新补丁的关键符号确实落地（不靠"看起来成功"）
+          grep -n "fn native_allowed" Agent2API/desktop-tauri/src-tauri/server/src/server/core/plugin_host/support.rs
+          grep -n "fn custom_source_allowed" Agent2API/desktop-tauri/src-tauri/server/src/server/core/update/website.rs
           echo "== C 方案：插件进程改为 daemon 自身 --serve-pack"
           python3 scripts/patch-inproc.py Agent2API || echo "WARN: inproc 补丁未应用"
 
@@ -119,9 +126,12 @@ jobs:
       - name: 对齐插件版本（>= 网关版本）
         run: |
           set -euo pipefail
-          TAG=$(git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' \
-                | sed 's#.*refs/tags/##' \
-                | python3 scripts/latest-tag.py || true)
+          TAG="${UPSTREAM_TAG:-}"
+          if [ -z "$TAG" ]; then
+            TAG=$(git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' \
+                  | sed 's#.*refs/tags/##' \
+                  | python3 scripts/latest-tag.py || true)
+          fi
           echo "上游最新 tag：${TAG:-（未取到）}"
           python3 scripts/align-plugin-version.py --min-version "${TAG:-v0.0.0}"
 
@@ -363,9 +373,12 @@ jobs:
       - name: 对齐插件版本（>= 网关版本）
         run: |
           set -euo pipefail
-          TAG=$(git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' \
-                | sed 's#.*refs/tags/##' \
-                | python3 scripts/latest-tag.py || true)
+          TAG="${UPSTREAM_TAG:-}"
+          if [ -z "$TAG" ]; then
+            TAG=$(git ls-remote --tags --refs "$UPSTREAM_REPO" 'v*' \
+                  | sed 's#.*refs/tags/##' \
+                  | python3 scripts/latest-tag.py || true)
+          fi
           echo "上游最新 tag：${TAG:-（未取到）}"
           python3 scripts/align-plugin-version.py --min-version "${TAG:-v0.0.0}"
 
@@ -720,9 +733,12 @@ jobs:
       - name: 读插件版本前先对齐（与 ios/plugins 作业同一规则）
         run: |
           set -euo pipefail
-          TAG=$(git ls-remote --tags --refs "https://github.com/aimod-cc/Agent2API.git" 'v*' \
-                | sed 's#.*refs/tags/##' \
-                | python3 scripts/latest-tag.py || true)
+          TAG="${UPSTREAM_TAG:-}"
+          if [ -z "$TAG" ]; then
+            TAG=$(git ls-remote --tags --refs "https://github.com/aimod-cc/Agent2API.git" 'v*' \
+                  | sed 's#.*refs/tags/##' \
+                  | python3 scripts/latest-tag.py || true)
+          fi
           python3 scripts/align-plugin-version.py --min-version "${TAG:-v0.0.0}"
 
       - name: 读取版本号与构建号
