@@ -105,9 +105,16 @@ jobs:
         run: |
           set -euo pipefail
           PATCH_DIR=agent2api-universal/patches-3.5.0-beta.7
-          [ -d "$PATCH_DIR" ] || PATCH_DIR=agent2api-universal/patches
-          echo "== 补丁目录：$PATCH_DIR"
-          for p in "$PATCH_DIR"/*.diff; do
+          if [ -d "$PATCH_DIR" ]; then
+            # 只打「编译门验证过」的三条：0029 原生后端 → 0030 自建目录 → 0031 iOS 编译修复。
+            # 目录里的 0013 / 0021 尚未进编译门（0021 打上会让 plugin_host/mod.rs 括号不配对），
+            # 不参与出包；等它们各自跑绿再逐个加进来。
+            PATCHES="$PATCH_DIR/0029-native-pack-backend.diff $PATCH_DIR/0030-self-hosted-catalog.diff $PATCH_DIR/0031-ios-target-build-fixes.diff"
+          else
+            PATCHES=$(ls agent2api-universal/patches/*.diff)
+          fi
+          echo "== 补丁：$PATCHES"
+          for p in $PATCHES; do
             echo "== apply $p"
             if ! git -C Agent2API apply --3way "$(pwd)/$p"; then
               echo "❌ 补丁未应用：${p}（上游已变，需要重新生成这个补丁）"
