@@ -31,6 +31,18 @@ done
 
 顺序：`0013` → `0029` → `0030` → `0031`。`0029`/`0030` 有依赖关系，`0013`/`0031` 独立。
 
+## 0021 为什么被隔离
+
+`review_only/0021-remote-outbound-channel.WIP.diff` 是**自动 rebase 的产物，不可用**：
+
+| hunk | 问题 |
+|---|---|
+| `@-260 +40/-0` | 把整个 `pub struct Host { … }` 又贴了一遍（beta.7 本来就有，且字段已加 `wasm`/`embedded`） |
+| `@-631 +6` 与 `@-666 +40` | 两处都新增 `write_for_run`，重复定义 |
+| 结果 | 本地应用后 `plugin_host/mod.rs` 花括号净 **+4** → `mismatched closing delimiter`，整库编不过 |
+
+重写它要按 beta.7 的 `Host`（含 `wasm::Embedded`）重排"远端出向通道"，属于 P1（脚本插件远端宿主桥）的一部分，单独做。
+
 ## 编译状态（CI 实测）
 
 `compile-check` 工作流（`.github/workflows/compile-check.yml`）在 `porting/3.5.0-beta.7` 分支上跑，
@@ -40,6 +52,10 @@ done
 |---|---|---|
 | `cargo check -p agent2api-server`（x86_64-linux） | exit 0 | **exit 0**（36.99s 增量） |
 | `cargo check -p agent2api-server --target aarch64-apple-ios`（macos-15） | **E0282 编不过**（上游 bug） | **exit 0**（58.08s） |
+
+出包实测：`build` **run #468 = success**，iOS 作业全绿，13 处补丁应用全 `cleanly`，
+产物 `ios` 206 MB（4 个 deb + 2 个 ipa + daemon + supervisor + plist）。当前清单：
+`0013 → 0029 → 0030 → 0031`。
 
 - iOS 那条基线失败是上游问题：`wasm/qoder_umid/discovery.rs:4` 的 `let mut roots = Vec::new()`，
   在 `target_os = "ios"` 时 windows/macos/linux 三个 `cfg` 分支全不成立，推不出元素类型。`0031` 显式标注 `Vec<PathBuf>`。
