@@ -106,9 +106,9 @@ jobs:
           set -euo pipefail
           PATCH_DIR=agent2api-universal/patches-3.5.0-beta.7
           if [ -d "$PATCH_DIR" ]; then
-            # 只打「编译门验证过」的条目：0013 → 0029 → 0030 → 0031 → 0032（宿主源码端点）→ 0033（远端宿主桥）。
+            # 只打「编译门验证过」的条目：0013 → 0029 → 0030 → 0031 → 0032（宿主源码端点）→ 0033/0034（远端宿主桥）。
             # 0021 已隔离到 review_only/（自动 rebase 产出了重复的 Host 结构体与 write_for_run，括号不配对）。
-            PATCHES="$PATCH_DIR/0013-index-cache.diff $PATCH_DIR/0029-native-pack-backend.diff $PATCH_DIR/0030-self-hosted-catalog.diff $PATCH_DIR/0031-ios-target-build-fixes.diff $PATCH_DIR/0032-host-source-endpoint.diff $PATCH_DIR/0033-remote-host-bridge.diff"
+            PATCHES="$PATCH_DIR/0013-index-cache.diff $PATCH_DIR/0029-native-pack-backend.diff $PATCH_DIR/0030-self-hosted-catalog.diff $PATCH_DIR/0031-ios-target-build-fixes.diff $PATCH_DIR/0032-host-source-endpoint.diff $PATCH_DIR/0033-remote-host-bridge.diff $PATCH_DIR/0034-remote-host-rest.diff"
           else
             PATCHES=$(ls agent2api-universal/patches/*.diff)
           fi
