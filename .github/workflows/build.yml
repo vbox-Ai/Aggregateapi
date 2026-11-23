@@ -350,6 +350,22 @@ jobs:
           cp agent2api-ios/daemon/*.plist "$GITHUB_WORKSPACE/out/ios/" || true
           ls -lh "$GITHUB_WORKSPACE/out/ios"
 
+      - name: 校验 deb 里的关键环境变量与预置插件
+        run: |
+          set -euo pipefail
+          DEB=$(ls out/ios/Agent2API-*-rootless-iphoneos-arm64.deb | head -1)
+          echo "== 解包 $DEB"
+          rm -rf /tmp/debcheck && mkdir -p /tmp/debcheck
+          dpkg-deb -x "$DEB" /tmp/debcheck
+          PL=$(find /tmp/debcheck -name 'com.chiyu.agent2api.plist' | head -1)
+          echo "plist: $PL"
+          grep -E 'AGENT2API_ALLOW_NATIVE_PACKS|AGENT2API_ALLOW_EXEC|AGENT2API_PROXY_HOME|AGENT2API_PROXY_PORT' "$PL" || true
+          echo "packs(pack.json 数量): $(find /tmp/debcheck -name pack.json | wc -l | tr -d ' ')"
+          echo "packs 目录: $PL" >/dev/null
+          # 硬性校验：没有 ALLOW_NATIVE_PACKS 就等于预置插件全废
+          grep -q 'AGENT2API_ALLOW_NATIVE_PACKS' "$PL" || { echo "::error::plist 缺少 AGENT2API_ALLOW_NATIVE_PACKS"; exit 1; }
+          test "$(find /tmp/debcheck -name pack.json | wc -l | tr -d ' ')" -ge 1 || { echo "::error::deb 里没有预置插件包"; exit 1; }
+
       - name: 上传 iOS 产物
         uses: actions/upload-artifact@v4
         with:
