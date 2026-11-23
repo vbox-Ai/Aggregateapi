@@ -35,10 +35,10 @@ index 6778304..607d9ae 100644
  pub mod plugin_helpers;
 diff --git a/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
 new file mode 100644
-index 0000000..e17f4dd
+index 0000000..cc342a6
 --- /dev/null
 +++ b/desktop-tauri/src-tauri/server/src/server/api/plugin_host.rs
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,175 @@
 +//! 脚本插件宿主源码的 HTTP 面（阶段 0：iOS 上由手机本地运行宿主时取用）。
 +//!
 +//! ── 为什么由网关提供，而不是手机自带一份 ──────────────────────
@@ -214,5 +214,3 @@ index 0000000..e17f4dd
 +    }
 +    ok_json(json!({ "ok": true }))
 +}
-+
-+
