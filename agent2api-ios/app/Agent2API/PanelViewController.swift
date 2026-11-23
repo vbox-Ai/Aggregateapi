@@ -104,7 +104,10 @@ final class PanelViewController: UIViewController {
         guard key != lastStatusKey else { return }   // 状态没变 → 不重新显示
         lastStatusKey = key
 
-        statusBar.isHidden = false
+        // 操作者要求移除底栏上方的状态胶囊（现在用不着了）：状态文本仍写进
+        // statusFullText，但不再把胶囊顶到界面上。整段显示/配色/自动收起逻辑保留，
+        // 想恢复只需把这一行改回 statusBar.isHidden = false。
+        statusBar.isHidden = true
         if autoHide {
             scheduleStatusAutoHide()
         } else {
