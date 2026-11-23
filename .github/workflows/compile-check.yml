@@ -10,7 +10,7 @@ on:
         description: "上游 tag（默认 v3.5.0-beta.7）"
         default: "v3.5.0-beta.7"
   push:
-    branches: [porting/3.5.0-beta.7]
+    branches: [porting/3.5.0-beta.7, main]
     paths:
       - 'agent2api-universal/patches-3.5.0-beta.7/**'
       - 'scripts/gen-plugin-catalog.py'
