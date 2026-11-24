@@ -106,7 +106,7 @@ final class PanelViewController: UIViewController {
 
         // 操作者要求移除底栏上方的状态胶囊（现在用不着了）：状态文本仍写进
         // statusFullText，但不再把胶囊顶到界面上。整段显示/配色/自动收起逻辑保留，
-        // 想恢复只需把这一行改回 statusBar.isHidden = false。
+        // 想恢复只需把这一行改回 statusBar.isHidden = true  // 状态胶囊已移除（操作者要求）。
         statusBar.isHidden = true
         if autoHide {
             scheduleStatusAutoHide()
@@ -475,7 +475,7 @@ final class PanelViewController: UIViewController {
                 let bytes = Int(body.split(separator: " ") .dropFirst(2).first ?? "0") ?? 0
                 if bytes > 200 { return }
             }
-            self.statusBar.isHidden = false
+            self.statusBar.isHidden = true  // 状态胶囊已移除（操作者要求）
             self.showDiagnosticsPage()
         }
     }
@@ -766,7 +766,7 @@ final class PanelViewController: UIViewController {
         activationStartedAt = now
         needsReloadAfterActivation = true
 
-        statusBar.isHidden = false
+        statusBar.isHidden = true  // 状态胶囊已移除（操作者要求）
         statusLabel.text = "正在启动网关…\nSupervisor 127.0.0.1:\(supervisorPort)"
         supervisorRequest(path: "start", timeout: 25) { [weak self] ok in
             DispatchQueue.main.async {
@@ -864,7 +864,7 @@ final class PanelViewController: UIViewController {
             DispatchQueue.main.async {
                 guard let self else { return }
                 // 网关正常就收起状态条（它只是排障用的），异常或页面报错时才显示
-                self.statusBar.isHidden = ok && self.jsErrors.isEmpty
+                self.statusBar.isHidden = true  // 状态胶囊已移除
                 if ok {
                     self.isActivating = false
                     self.activationStartedAt = nil
@@ -881,7 +881,7 @@ final class PanelViewController: UIViewController {
                 }
                 if !ok {
                     if self.isActivating {
-                        self.statusBar.isHidden = false
+                        self.statusBar.isHidden = true  // 状态胶囊已移除（操作者要求）
                         self.statusLabel.text =
                             "正在启动网关…\nSupervisor 127.0.0.1:\(self.supervisorPort)"
                         return
@@ -1012,7 +1012,7 @@ extension PanelViewController: WKScriptMessageHandler {
             let text = String(describing: message.body)
             jsErrors.append(text)
             if jsErrors.count > 6 { jsErrors.removeFirst() }
-            statusBar.isHidden = false
+            statusBar.isHidden = true  // 状态胶囊已移除（操作者要求）
             statusLabel.text = summary + "\n— JS —\n" + jsErrors.joined(separator: "\n")
             return
         }
@@ -1125,7 +1125,7 @@ extension PanelViewController: WKScriptMessageHandler {
 
     private func reportSupervisorError(op: String, id: String, message: String) {
         jsErrors.append("supervisor \(op) 失败：\(message)")
-        statusBar.isHidden = false
+        statusBar.isHidden = true  // 状态胶囊已移除（操作者要求）
         statusLabel.text = summary + "\n— supervisor —\n" + jsErrors.joined(separator: "\n")
         deliverSupervisorResult(op: op, id: id, ok: false, payload: message)
     }
@@ -1227,7 +1227,7 @@ extension PanelViewController {
 
     private func reportFileError(_ message: String) {
         jsErrors.append("导出失败：\(message)")
-        statusBar.isHidden = false
+        statusBar.isHidden = true  // 状态胶囊已移除（操作者要求）
         statusLabel.text = summary + "\n— 导出 —\n" + jsErrors.joined(separator: "\n")
     }
 }

@@ -147,6 +147,9 @@ write_plist() {
     <!-- 0029：恢复原生提供商插件包后端。预置的 pack 是 aarch64-apple-ios 的 Mach-O，
          没有这个开关网关会按 LEGACY_REASON 拒载（面板显示「已加载 0 家」）。 -->
     <key>AGENT2API_ALLOW_NATIVE_PACKS</key><string>1</string>
+    <key>AGENT2API_PLUGIN_CATALOG_URL</key><string>https://raw.githubusercontent.com/vbox-Ai/Aggregateapi/main/catalog.json</string>
+    <key>AGENT2API_PLUGIN_ASSET_ORIGINS</key><string>https://github.com</string>
+    <key>AGENT2API_ALLOW_UNSIGNED_PLUGINS</key><string>1</string>
     <key>AGENT2API_INPROC</key><string>1</string>
     <key>AGENT2API_ALLOW_UNSIGNED_PLUGIN_INSTALL</key><string>1</string>
     <key>AGENT2API_DEPLOY</key><string>ios</string>

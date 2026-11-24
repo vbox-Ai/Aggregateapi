@@ -1,0 +1,69 @@
+{
+ "schema": 1,
+ "plugins": [
+  {
+   "id": "agent2api-providers",
+   "name": "agent2api-providers",
+   "description": "34 家提供商（原生 Mach-O）",
+   "order": 10,
+   "category": "official",
+   "providers": [],
+   "icon": null,
+   "detail": {
+    "protocol": 1,
+    "homepage": "",
+    "release": {
+     "repo": "vbox-Ai/Aggregateapi",
+     "tag": "v{version}",
+     "asset": "{id}-{version}-{target}.zip"
+    }
+   },
+   "release": {
+    "tag_name": "v3.5.0-beta.7",
+    "name": "v3.5.0-beta.7",
+    "prerelease": false,
+    "published_at": "2026-11-24T00:07:19Z",
+    "body": "",
+    "assets": [
+     {
+      "name": "agent2api-providers-3.5.0-beta.7-aarch64-unknown-linux-gnu.zip",
+      "size": 11925777,
+      "browser_download_url": "https://github.com/vbox-Ai/Aggregateapi/releases/download/ios-20261124-b485/agent2api-providers-3.5.0-beta.7-aarch64-unknown-linux-gnu.zip"
+     }
+    ]
+   }
+  },
+  {
+   "id": "agent2api-web-providers",
+   "name": "agent2api-web-providers",
+   "description": "4 家网页提供商（原生 Mach-O）",
+   "order": 10,
+   "category": "official",
+   "providers": [],
+   "icon": null,
+   "detail": {
+    "protocol": 1,
+    "homepage": "",
+    "release": {
+     "repo": "vbox-Ai/Aggregateapi",
+     "tag": "v{version}",
+     "asset": "{id}-{version}-{target}.zip"
+    }
+   },
+   "release": {
+    "tag_name": "v3.5.0-beta.7",
+    "name": "v3.5.0-beta.7",
+    "prerelease": false,
+    "published_at": "2026-11-24T00:07:19Z",
+    "body": "",
+    "assets": [
+     {
+      "name": "agent2api-web-providers-3.5.0-beta.7-aarch64-unknown-linux-gnu.zip",
+      "size": 3483308,
+      "browser_download_url": "https://github.com/vbox-Ai/Aggregateapi/releases/download/ios-20261124-b485/agent2api-web-providers-3.5.0-beta.7-aarch64-unknown-linux-gnu.zip"
+     }
+    ]
+   }
+  }
+ ]
+}
