@@ -79,7 +79,8 @@ jobs:
                    agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0032-host-source-endpoint.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0033-remote-host-bridge.diff \
-                   agent2api-universal/patches-3.5.0-beta.7/0034-remote-host-rest.diff; do
+                   agent2api-universal/patches-3.5.0-beta.7/0034-remote-host-rest.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0035-remote-runtime.diff; do
             echo "== apply $p"
             git -C Agent2API apply --3way "$(pwd)/$p"
           done
@@ -170,7 +171,8 @@ jobs:
                    agent2api-universal/patches-3.5.0-beta.7/0031-ios-target-build-fixes.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0032-host-source-endpoint.diff \
                    agent2api-universal/patches-3.5.0-beta.7/0033-remote-host-bridge.diff \
-                   agent2api-universal/patches-3.5.0-beta.7/0034-remote-host-rest.diff; do
+                   agent2api-universal/patches-3.5.0-beta.7/0034-remote-host-rest.diff \
+                   agent2api-universal/patches-3.5.0-beta.7/0035-remote-runtime.diff; do
             git -C Agent2API apply --3way "$(pwd)/$p"
           done
 

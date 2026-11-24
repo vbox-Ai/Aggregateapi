@@ -1,0 +1,1603 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs
+index d27f3cd..cc97d2e 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/bun.rs
+@@ -1,414 +1,429 @@
+-use std::io;
+-use std::path::{Path, PathBuf};
+-use std::process::{ExitStatus, Stdio};
+-use std::sync::{Mutex, OnceLock};
+-use std::time::Duration;
+-
+-use serde_json::{json, Value};
+-use tokio::io::{AsyncRead, AsyncReadExt};
+-
+-use super::super::process::{self, ExitReport};
+-
+-pub const VERSION: &str = "1.4.2";
+-const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+-const OUTPUT_BYTES: usize = 8192;
+-
+-fn last_error() -> &'static Mutex<Option<String>> {
+-    static ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+-    ERROR.get_or_init(|| Mutex::new(None))
+-}
+-
+-fn asset() -> Result<(&'static str, &'static str), String> {
+-    let musl = cfg!(target_env = "musl")
+-        || (cfg!(target_os = "linux")
+-            && std::fs::read_dir("/lib").ok().is_some_and(|entries| {
+-                entries
+-                    .flatten()
+-                    .any(|entry| entry.file_name().to_string_lossy().starts_with("ld-musl-"))
+-            }));
+-    match (std::env::consts::OS, std::env::consts::ARCH, musl) {
+-        ("windows", "x86_64", _) => Ok((
+-            "bun-windows-x64-baseline",
+-            "78c221c2376f79731ccf4e4af0b3bb46d81fefa3296c5abee09ad8a1b21e68c6",
+-        )),
+-        ("windows", "aarch64", _) => Ok((
+-            "bun-windows-aarch64",
+-            "a7a16b876a305fd1029c66dbd27007b4f6112ae896532f675878731a21e50cfd",
+-        )),
+-        ("macos", "x86_64", _) => Ok((
+-            "bun-darwin-x64",
+-            "80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012",
+-        )),
+-        ("macos", "aarch64", _) => Ok((
+-            "bun-darwin-aarch64",
+-            "90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f",
+-        )),
+-        ("linux", "x86_64", false) => Ok((
+-            "bun-linux-x64-baseline",
+-            "c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f",
+-        )),
+-        ("linux", "aarch64", false) => Ok((
+-            "bun-linux-aarch64",
+-            "54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7",
+-        )),
+-        ("linux", "x86_64", true) => Ok((
+-            "bun-linux-x64-musl-baseline",
+-            "76e1db84e98f22f78de0a87e309bfbbf297732847f9720db36750646c85c8c18",
+-        )),
+-        ("linux", "aarch64", true) => Ok((
+-            "bun-linux-aarch64-musl",
+-            "71760b6c8ea30623b81a4907cb815d48e2ea266f2e73e751534a44a0607950df",
+-        )),
+-        _ => Err("Bun 暂无适用于当前系统与处理器的运行时".into()),
+-    }
+-}
+-
+-fn executable() -> &'static str {
+-    if cfg!(windows) {
+-        "bun.exe"
+-    } else {
+-        "bun"
+-    }
+-}
+-fn installed() -> Result<PathBuf, String> {
+-    Ok(crate::server::config::config_dir()
+-        .join("runtimes")
+-        .join("bun")
+-        .join(VERSION)
+-        .join(asset()?.0)
+-        .join(executable()))
+-}
+-
+-pub fn snapshot() -> Value {
+-    match installed() {
+-        Ok(path) => {
+-            let error = last_error().lock().ok().and_then(|saved| saved.clone());
+-            json!({ "version": VERSION, "installed": path.is_file(), "path": path, "downloaded": true, "error": error })
+-        }
+-        Err(error) => json!({ "version": VERSION, "installed": false, "error": error }),
+-    }
+-}
+-
+-pub async fn ensure() -> Result<PathBuf, String> {
+-    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+-    let _guard = LOCK
+-        .get_or_init(|| tokio::sync::Mutex::new(()))
+-        .lock()
+-        .await;
+-    let path = installed()?;
+-    if path.is_file() {
+-        validate(&path).await?;
+-        return Ok(path);
+-    }
+-    let (target, checksum) = asset()?;
+-    super::operations::stage("runtime", "正在下载 Bun 运行时");
+-    let url =
+-        format!("https://agent2api.dev/downloads/runtimes/bun/{VERSION}/{target}.zip");
+-    let bytes = super::download::bytes(&url, 200 * 1024 * 1024, Some(checksum)).await?;
+-    let destination = path.clone();
+-    tokio::task::spawn_blocking(move || extract(&bytes, target, &destination))
+-        .await
+-        .map_err(|error| format!("安装 Bun 任务中断：{error}"))??;
+-    validate(&path).await?;
+-    Ok(path)
+-}
+-
+-async fn validate(path: &Path) -> Result<(), String> {
+-    let result = probe(path).await;
+-    if let Ok(mut saved) = last_error().lock() {
+-        *saved = result.as_ref().err().cloned();
+-    }
+-    if let Err(error) = &result {
+-        process::event(
+-            "error",
+-            error,
+-            json!({
+-                "source": "plugin", "component": "bun", "action": "runtime_check",
+-                "version": VERSION, "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+-                "detail": error,
+-            }),
+-        );
+-    }
+-    result
+-}
+-
+-async fn probe(path: &Path) -> Result<(), String> {
+-    let mut command = tokio::process::Command::new(path);
+-    command
+-        .arg("--version")
+-        .stdin(Stdio::null())
+-        .stdout(Stdio::piped())
+-        .stderr(Stdio::piped())
+-        .kill_on_drop(true)
+-        .env_remove("BUN_OPTIONS")
+-        .env_remove("NODE_OPTIONS")
+-        .env("DO_NOT_TRACK", "1");
+-    #[cfg(windows)]
+-    command.creation_flags(0x0800_0000);
+-    let mut child = command.spawn().map_err(|error| {
+-        diagnostic(
+-            "Bun 运行时未能启动",
+-            path,
+-            &format!("系统错误：{error}"),
+-            spawn_hint(&error, path),
+-            &[],
+-            &[],
+-        )
+-    })?;
+-    let stdout_pipe = child.stdout.take();
+-    let stderr_pipe = child.stderr.take();
+-    let mut stdout = Vec::new();
+-    let mut stderr = Vec::new();
+-    let result = tokio::time::timeout(STARTUP_TIMEOUT, async {
+-        tokio::try_join!(
+-            child.wait(),
+-            capture(stdout_pipe, &mut stdout),
+-            capture(stderr_pipe, &mut stderr),
+-        )
+-    })
+-    .await;
+-    match result {
+-        Err(_) => {
+-            let report = process::reap(&mut child, Duration::ZERO).await;
+-            Err(diagnostic(
+-                "Bun 启动检查超时（15 秒）",
+-                path,
+-                &report.description(),
+-                "检查未按时完成；请结合下面的输出排查运行环境，不能据此判断为下载失败。",
+-                &stdout,
+-                &stderr,
+-            ))
+-        }
+-        Ok(Err(error)) => {
+-            let report = process::reap(&mut child, Duration::ZERO).await;
+-            Err(diagnostic(
+-                "Bun 启动检查未完成",
+-                path,
+-                &format!("{error}；{}", report.description()),
+-                "读取运行时输出或等待进程退出时发生错误。",
+-                &stdout,
+-                &stderr,
+-            ))
+-        }
+-        Ok(Ok((status, (), ()))) => {
+-            let report = ExitReport {
+-                status: Some(status),
+-                ..ExitReport::default()
+-            };
+-            if !status.success() {
+-                return Err(diagnostic(
+-                    "Bun 运行时启动后异常退出",
+-                    path,
+-                    &report.description(),
+-                    exit_hint(status, &stderr),
+-                    &stdout,
+-                    &stderr,
+-                ));
+-            }
+-            if stdout.len() > OUTPUT_BYTES || String::from_utf8_lossy(&stdout).trim() != VERSION {
+-                return Err(diagnostic(
+-                    "Bun 版本检查未通过",
+-                    path,
+-                    &report.description(),
+-                    "进程正常退出，但版本输出与预期不一致；请检查运行时文件是否被替换。",
+-                    &stdout,
+-                    &stderr,
+-                ));
+-            }
+-            Ok(())
+-        }
+-    }
+-}
+-
+-async fn capture<R: AsyncRead + Unpin>(pipe: Option<R>, output: &mut Vec<u8>) -> io::Result<()> {
+-    let Some(mut pipe) = pipe else { return Ok(()) };
+-    let mut chunk = [0u8; 2048];
+-    loop {
+-        let count = pipe.read(&mut chunk).await?;
+-        if count == 0 {
+-            return Ok(());
+-        }
+-        // 达到保留上限后仍排空管道，避免子进程因输出堵塞而被误判为超时。
+-        let keep = count.min((OUTPUT_BYTES + 1).saturating_sub(output.len()));
+-        output.extend_from_slice(&chunk[..keep]);
+-    }
+-}
+-
+-fn diagnostic(
+-    title: &str,
+-    path: &Path,
+-    status: &str,
+-    hint: &str,
+-    stdout: &[u8],
+-    stderr: &[u8],
+-) -> String {
+-    let target = asset().map(|(target, _)| target).unwrap_or("未知");
+-    let mut lines = vec![
+-        title.to_string(),
+-        format!(
+-            "运行环境：{} / {}；预期 Bun {VERSION}；下载版本：{target}",
+-            std::env::consts::OS,
+-            std::env::consts::ARCH
+-        ),
+-        format!(
+-            "检查命令：{} --version",
+-            process::redact(&path.to_string_lossy())
+-        ),
+-        format!("退出详情：{}", process::redact(status)),
+-    ];
+-    if !hint.is_empty() {
+-        lines.push(hint.to_string());
+-    }
+-    for (label, bytes) in [
+-        ("错误输出（stderr，已脱敏）", stderr),
+-        ("标准输出（stdout，已脱敏）", stdout),
+-    ] {
+-        let text = output_summary(bytes);
+-        lines.push(format!(
+-            "{label}：\n{}",
+-            if text.is_empty() {
+-                "（无输出）"
+-            } else {
+-                &text
+-            }
+-        ));
+-    }
+-    lines.join("\n")
+-}
+-
+-fn output_summary(bytes: &[u8]) -> String {
+-    let raw = String::from_utf8_lossy(&bytes[..bytes.len().min(OUTPUT_BYTES)]);
+-    let mut private_key = false;
+-    let safe = raw
+-        .lines()
+-        .map(|line| {
+-            let start = line.contains("-----BEGIN") && line.contains("PRIVATE KEY-----");
+-            let end = line.contains("-----END") && line.contains("PRIVATE KEY-----");
+-            if start || private_key {
+-                private_key = !end;
+-                "[私钥内容已隐藏]".to_string()
+-            } else {
+-                process::redact(line)
+-            }
+-        })
+-        .collect::<Vec<_>>()
+-        .join("\n");
+-    let mut summary = safe.chars().take(1600).collect::<String>();
+-    if bytes.len() > OUTPUT_BYTES || safe.chars().count() > 1600 {
+-        summary.push_str("\n[其余输出已省略]");
+-    }
+-    summary.trim().to_string()
+-}
+-
+-fn spawn_hint(error: &io::Error, path: &Path) -> &'static str {
+-    match error.kind() {
+-        io::ErrorKind::PermissionDenied => {
+-            #[cfg(unix)]
+-            {
+-                "系统拒绝执行 Bun；请检查运行时文件的执行权限、挂载目录是否禁止执行（noexec）及系统安全策略。"
+-            }
+-            #[cfg(not(unix))]
+-            {
+-                "系统拒绝执行 Bun；请检查运行时文件的访问权限及安全软件拦截记录。"
+-            }
+-        }
+-        io::ErrorKind::NotFound if path.is_file() => {
+-            "运行时文件存在，但系统无法加载它；请检查动态加载器及系统兼容性，不一定是下载文件丢失。"
+-        }
+-        io::ErrorKind::NotFound => "运行时文件或所在目录已不存在；请检查文件是否被移走或清理。",
+-        _ => {
+-            #[cfg(unix)]
+-            if error.raw_os_error() == Some(libc::ENOEXEC) {
+-                return "系统无法识别运行时文件格式；请核对系统与处理器架构及文件完整性。";
+-            }
+-            #[cfg(windows)]
+-            if matches!(error.raw_os_error(), Some(193 | 216)) {
+-                return "运行时文件格式或处理器架构与当前 Windows 不兼容。";
+-            }
+-            "请保留系统错误和运行环境信息；目前无法确定具体原因。"
+-        }
+-    }
+-}
+-
+-fn exit_hint(status: ExitStatus, stderr: &[u8]) -> &'static str {
+-    #[cfg(target_arch = "x86_64")]
+-    if !std::is_x86_feature_detected!("sse4.2") {
+-        return "当前运行环境未提供 SSE4.2，低于 Bun 的最低 CPU 要求；虚拟机用户还需核对分配的 CPU 能力。";
+-    }
+-    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+-    if (stderr.contains("glibc_") || stderr.contains("glibcxx_")) && stderr.contains("not found") {
+-        return "系统库版本不满足运行时要求；具体缺少的版本见错误输出。Docker 用户需检查容器内部的系统库。";
+-    }
+-    if stderr.contains("error while loading shared libraries")
+-        || stderr.contains("error loading shared library")
+-        || stderr.contains("library not loaded:")
+-    {
+-        return "动态库加载失败；请按错误输出核对具体库名，不要仅凭此提示安装不相关的依赖。";
+-    }
+-    #[cfg(unix)]
+-    {
+-        use std::os::unix::process::ExitStatusExt;
+-        match status.signal() {
+-            Some(libc::SIGILL) => return "进程收到 SIGILL（非法指令）；可能涉及 CPU／虚拟化兼容性或运行时自身崩溃，仅凭信号不能确定原因。",
+-            Some(libc::SIGKILL) => return "进程被 SIGKILL 强制结束；请核对主机或容器日志，不能仅凭此信号认定为内存不足。",
+-            Some(libc::SIGSEGV) => return "进程收到 SIGSEGV（内存访问异常）；这是运行时崩溃，不等于系统内存不足。",
+-            Some(libc::SIGABRT) => return "进程收到 SIGABRT（异常终止）；请结合错误输出确认原因。",
+-            _ => {}
+-        }
+-    }
+-    #[cfg(windows)]
+-    match status.code().map(|code| code as u32) {
+-        Some(0xC000001D) => return "Windows 报告非法指令；请结合 CPU／虚拟化环境及错误输出排查，也可能是运行时自身崩溃。",
+-        Some(0xC0000135) => return "Windows 报告缺少运行所需的 DLL；请结合错误输出和系统事件日志确认具体组件。",
+-        Some(0xC000007B) => return "Windows 报告程序或依赖库格式无效；请核对文件完整性与处理器架构。",
+-        Some(0xC0000005) => return "Windows 报告内存访问异常；这是运行时崩溃，不等于系统内存不足。",
+-        _ => {}
+-    }
+-    "请结合退出详情和错误输出排查；尚不能判断是系统环境问题还是 Bun 自身故障。"
+-}
+-
+-fn extract(bytes: &[u8], target: &str, destination: &Path) -> Result<(), String> {
+-    use std::io::{Read, Write};
+-    let mut zip =
+-        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|error| error.to_string())?;
+-    let expected = format!("{target}/{}", executable());
+-    let mut file = zip
+-        .by_name(&expected)
+-        .map_err(|_| "Bun 下载包缺少当前平台入口".to_string())?;
+-    if file.size() > 300 * 1024 * 1024
+-        || file.is_dir()
+-        || file
+-            .unix_mode()
+-            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+-    {
+-        return Err("Bun 下载包入口无效".into());
+-    }
+-    let directory = destination.parent().ok_or("Bun 安装路径无效")?;
+-    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+-    let mut temporary =
+-        tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
+-    let copied = std::io::copy(
+-        &mut file.by_ref().take(300 * 1024 * 1024 + 1),
+-        &mut temporary,
+-    )
+-    .map_err(|error| error.to_string())?;
+-    if copied > 300 * 1024 * 1024 {
+-        return Err("Bun 入口超过大小限制".into());
+-    }
+-    temporary
+-        .flush()
+-        .and_then(|()| temporary.as_file().sync_all())
+-        .map_err(|error| error.to_string())?;
+-    #[cfg(unix)]
+-    {
+-        use std::os::unix::fs::PermissionsExt;
+-        temporary
+-            .as_file()
+-            .set_permissions(std::fs::Permissions::from_mode(0o755))
+-            .map_err(|error| error.to_string())?;
+-    }
+-    temporary
+-        .persist_noclobber(destination)
+-        .map_err(|error| error.to_string())?;
+-    Ok(())
+-}
++use std::io;
++use std::path::{Path, PathBuf};
++use std::process::{ExitStatus, Stdio};
++use std::sync::{Mutex, OnceLock};
++use std::time::Duration;
++
++use serde_json::{json, Value};
++use tokio::io::{AsyncRead, AsyncReadExt};
++
++use super::super::process::{self, ExitReport};
++
++pub const VERSION: &str = "1.4.2";
++const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
++const OUTPUT_BYTES: usize = 8192;
++
++fn last_error() -> &'static Mutex<Option<String>> {
++    static ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
++    ERROR.get_or_init(|| Mutex::new(None))
++}
++
++fn asset() -> Result<(&'static str, &'static str), String> {
++    let musl = cfg!(target_env = "musl")
++        || (cfg!(target_os = "linux")
++            && std::fs::read_dir("/lib").ok().is_some_and(|entries| {
++                entries
++                    .flatten()
++                    .any(|entry| entry.file_name().to_string_lossy().starts_with("ld-musl-"))
++            }));
++    match (std::env::consts::OS, std::env::consts::ARCH, musl) {
++        ("windows", "x86_64", _) => Ok((
++            "bun-windows-x64-baseline",
++            "78c221c2376f79731ccf4e4af0b3bb46d81fefa3296c5abee09ad8a1b21e68c6",
++        )),
++        ("windows", "aarch64", _) => Ok((
++            "bun-windows-aarch64",
++            "a7a16b876a305fd1029c66dbd27007b4f6112ae896532f675878731a21e50cfd",
++        )),
++        ("macos", "x86_64", _) => Ok((
++            "bun-darwin-x64",
++            "80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012",
++        )),
++        ("macos", "aarch64", _) => Ok((
++            "bun-darwin-aarch64",
++            "90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f",
++        )),
++        ("linux", "x86_64", false) => Ok((
++            "bun-linux-x64-baseline",
++            "c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f",
++        )),
++        ("linux", "aarch64", false) => Ok((
++            "bun-linux-aarch64",
++            "54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7",
++        )),
++        ("linux", "x86_64", true) => Ok((
++            "bun-linux-x64-musl-baseline",
++            "76e1db84e98f22f78de0a87e309bfbbf297732847f9720db36750646c85c8c18",
++        )),
++        ("linux", "aarch64", true) => Ok((
++            "bun-linux-aarch64-musl",
++            "71760b6c8ea30623b81a4907cb815d48e2ea266f2e73e751534a44a0607950df",
++        )),
++        _ => Err("Bun 暂无适用于当前系统与处理器的运行时".into()),
++    }
++}
++
++fn executable() -> &'static str {
++    if cfg!(windows) {
++        "bun.exe"
++    } else {
++        "bun"
++    }
++}
++fn installed() -> Result<PathBuf, String> {
++    Ok(crate::server::config::config_dir()
++        .join("runtimes")
++        .join("bun")
++        .join(VERSION)
++        .join(asset()?.0)
++        .join(executable()))
++}
++
++pub fn snapshot() -> Value {
++    match installed() {
++        Ok(path) => {
++            let error = last_error().lock().ok().and_then(|saved| saved.clone());
++            json!({ "version": VERSION, "installed": path.is_file(), "path": path, "downloaded": true, "error": error })
++        }
++        Err(error) => {
++            // 本平台没有 Bun 资产（iOS：asset() 落进 `_` 分支）时，宿主改由手机 Worker 承担。
++            // 这不是故障 —— 若仍把 error 顶给界面，插件页会一直挂红框「Bun 暂无适用于当前
++            // 系统与处理器的运行时」，Magpie 的安装入口也会因此被判成不可用。
++            if asset().is_err() {
++                json!({
++                    "version": "remote-worker",
++                    "installed": true,
++                    "remote": true,
++                    "downloaded": false,
++                    "error": Value::Null,
++                })
++            } else {
++                json!({ "version": VERSION, "installed": false, "error": error })
++            }
++        }
++    }
++}
++
++pub async fn ensure() -> Result<PathBuf, String> {
++    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
++    let _guard = LOCK
++        .get_or_init(|| tokio::sync::Mutex::new(()))
++        .lock()
++        .await;
++    let path = installed()?;
++    if path.is_file() {
++        validate(&path).await?;
++        return Ok(path);
++    }
++    let (target, checksum) = asset()?;
++    super::operations::stage("runtime", "正在下载 Bun 运行时");
++    let url =
++        format!("https://agent2api.dev/downloads/runtimes/bun/{VERSION}/{target}.zip");
++    let bytes = super::download::bytes(&url, 200 * 1024 * 1024, Some(checksum)).await?;
++    let destination = path.clone();
++    tokio::task::spawn_blocking(move || extract(&bytes, target, &destination))
++        .await
++        .map_err(|error| format!("安装 Bun 任务中断：{error}"))??;
++    validate(&path).await?;
++    Ok(path)
++}
++
++async fn validate(path: &Path) -> Result<(), String> {
++    let result = probe(path).await;
++    if let Ok(mut saved) = last_error().lock() {
++        *saved = result.as_ref().err().cloned();
++    }
++    if let Err(error) = &result {
++        process::event(
++            "error",
++            error,
++            json!({
++                "source": "plugin", "component": "bun", "action": "runtime_check",
++                "version": VERSION, "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
++                "detail": error,
++            }),
++        );
++    }
++    result
++}
++
++async fn probe(path: &Path) -> Result<(), String> {
++    let mut command = tokio::process::Command::new(path);
++    command
++        .arg("--version")
++        .stdin(Stdio::null())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::piped())
++        .kill_on_drop(true)
++        .env_remove("BUN_OPTIONS")
++        .env_remove("NODE_OPTIONS")
++        .env("DO_NOT_TRACK", "1");
++    #[cfg(windows)]
++    command.creation_flags(0x0800_0000);
++    let mut child = command.spawn().map_err(|error| {
++        diagnostic(
++            "Bun 运行时未能启动",
++            path,
++            &format!("系统错误：{error}"),
++            spawn_hint(&error, path),
++            &[],
++            &[],
++        )
++    })?;
++    let stdout_pipe = child.stdout.take();
++    let stderr_pipe = child.stderr.take();
++    let mut stdout = Vec::new();
++    let mut stderr = Vec::new();
++    let result = tokio::time::timeout(STARTUP_TIMEOUT, async {
++        tokio::try_join!(
++            child.wait(),
++            capture(stdout_pipe, &mut stdout),
++            capture(stderr_pipe, &mut stderr),
++        )
++    })
++    .await;
++    match result {
++        Err(_) => {
++            let report = process::reap(&mut child, Duration::ZERO).await;
++            Err(diagnostic(
++                "Bun 启动检查超时（15 秒）",
++                path,
++                &report.description(),
++                "检查未按时完成；请结合下面的输出排查运行环境，不能据此判断为下载失败。",
++                &stdout,
++                &stderr,
++            ))
++        }
++        Ok(Err(error)) => {
++            let report = process::reap(&mut child, Duration::ZERO).await;
++            Err(diagnostic(
++                "Bun 启动检查未完成",
++                path,
++                &format!("{error}；{}", report.description()),
++                "读取运行时输出或等待进程退出时发生错误。",
++                &stdout,
++                &stderr,
++            ))
++        }
++        Ok(Ok((status, (), ()))) => {
++            let report = ExitReport {
++                status: Some(status),
++                ..ExitReport::default()
++            };
++            if !status.success() {
++                return Err(diagnostic(
++                    "Bun 运行时启动后异常退出",
++                    path,
++                    &report.description(),
++                    exit_hint(status, &stderr),
++                    &stdout,
++                    &stderr,
++                ));
++            }
++            if stdout.len() > OUTPUT_BYTES || String::from_utf8_lossy(&stdout).trim() != VERSION {
++                return Err(diagnostic(
++                    "Bun 版本检查未通过",
++                    path,
++                    &report.description(),
++                    "进程正常退出，但版本输出与预期不一致；请检查运行时文件是否被替换。",
++                    &stdout,
++                    &stderr,
++                ));
++            }
++            Ok(())
++        }
++    }
++}
++
++async fn capture<R: AsyncRead + Unpin>(pipe: Option<R>, output: &mut Vec<u8>) -> io::Result<()> {
++    let Some(mut pipe) = pipe else { return Ok(()) };
++    let mut chunk = [0u8; 2048];
++    loop {
++        let count = pipe.read(&mut chunk).await?;
++        if count == 0 {
++            return Ok(());
++        }
++        // 达到保留上限后仍排空管道，避免子进程因输出堵塞而被误判为超时。
++        let keep = count.min((OUTPUT_BYTES + 1).saturating_sub(output.len()));
++        output.extend_from_slice(&chunk[..keep]);
++    }
++}
++
++fn diagnostic(
++    title: &str,
++    path: &Path,
++    status: &str,
++    hint: &str,
++    stdout: &[u8],
++    stderr: &[u8],
++) -> String {
++    let target = asset().map(|(target, _)| target).unwrap_or("未知");
++    let mut lines = vec![
++        title.to_string(),
++        format!(
++            "运行环境：{} / {}；预期 Bun {VERSION}；下载版本：{target}",
++            std::env::consts::OS,
++            std::env::consts::ARCH
++        ),
++        format!(
++            "检查命令：{} --version",
++            process::redact(&path.to_string_lossy())
++        ),
++        format!("退出详情：{}", process::redact(status)),
++    ];
++    if !hint.is_empty() {
++        lines.push(hint.to_string());
++    }
++    for (label, bytes) in [
++        ("错误输出（stderr，已脱敏）", stderr),
++        ("标准输出（stdout，已脱敏）", stdout),
++    ] {
++        let text = output_summary(bytes);
++        lines.push(format!(
++            "{label}：\n{}",
++            if text.is_empty() {
++                "（无输出）"
++            } else {
++                &text
++            }
++        ));
++    }
++    lines.join("\n")
++}
++
++fn output_summary(bytes: &[u8]) -> String {
++    let raw = String::from_utf8_lossy(&bytes[..bytes.len().min(OUTPUT_BYTES)]);
++    let mut private_key = false;
++    let safe = raw
++        .lines()
++        .map(|line| {
++            let start = line.contains("-----BEGIN") && line.contains("PRIVATE KEY-----");
++            let end = line.contains("-----END") && line.contains("PRIVATE KEY-----");
++            if start || private_key {
++                private_key = !end;
++                "[私钥内容已隐藏]".to_string()
++            } else {
++                process::redact(line)
++            }
++        })
++        .collect::<Vec<_>>()
++        .join("\n");
++    let mut summary = safe.chars().take(1600).collect::<String>();
++    if bytes.len() > OUTPUT_BYTES || safe.chars().count() > 1600 {
++        summary.push_str("\n[其余输出已省略]");
++    }
++    summary.trim().to_string()
++}
++
++fn spawn_hint(error: &io::Error, path: &Path) -> &'static str {
++    match error.kind() {
++        io::ErrorKind::PermissionDenied => {
++            #[cfg(unix)]
++            {
++                "系统拒绝执行 Bun；请检查运行时文件的执行权限、挂载目录是否禁止执行（noexec）及系统安全策略。"
++            }
++            #[cfg(not(unix))]
++            {
++                "系统拒绝执行 Bun；请检查运行时文件的访问权限及安全软件拦截记录。"
++            }
++        }
++        io::ErrorKind::NotFound if path.is_file() => {
++            "运行时文件存在，但系统无法加载它；请检查动态加载器及系统兼容性，不一定是下载文件丢失。"
++        }
++        io::ErrorKind::NotFound => "运行时文件或所在目录已不存在；请检查文件是否被移走或清理。",
++        _ => {
++            #[cfg(unix)]
++            if error.raw_os_error() == Some(libc::ENOEXEC) {
++                return "系统无法识别运行时文件格式；请核对系统与处理器架构及文件完整性。";
++            }
++            #[cfg(windows)]
++            if matches!(error.raw_os_error(), Some(193 | 216)) {
++                return "运行时文件格式或处理器架构与当前 Windows 不兼容。";
++            }
++            "请保留系统错误和运行环境信息；目前无法确定具体原因。"
++        }
++    }
++}
++
++fn exit_hint(status: ExitStatus, stderr: &[u8]) -> &'static str {
++    #[cfg(target_arch = "x86_64")]
++    if !std::is_x86_feature_detected!("sse4.2") {
++        return "当前运行环境未提供 SSE4.2，低于 Bun 的最低 CPU 要求；虚拟机用户还需核对分配的 CPU 能力。";
++    }
++    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
++    if (stderr.contains("glibc_") || stderr.contains("glibcxx_")) && stderr.contains("not found") {
++        return "系统库版本不满足运行时要求；具体缺少的版本见错误输出。Docker 用户需检查容器内部的系统库。";
++    }
++    if stderr.contains("error while loading shared libraries")
++        || stderr.contains("error loading shared library")
++        || stderr.contains("library not loaded:")
++    {
++        return "动态库加载失败；请按错误输出核对具体库名，不要仅凭此提示安装不相关的依赖。";
++    }
++    #[cfg(unix)]
++    {
++        use std::os::unix::process::ExitStatusExt;
++        match status.signal() {
++            Some(libc::SIGILL) => return "进程收到 SIGILL（非法指令）；可能涉及 CPU／虚拟化兼容性或运行时自身崩溃，仅凭信号不能确定原因。",
++            Some(libc::SIGKILL) => return "进程被 SIGKILL 强制结束；请核对主机或容器日志，不能仅凭此信号认定为内存不足。",
++            Some(libc::SIGSEGV) => return "进程收到 SIGSEGV（内存访问异常）；这是运行时崩溃，不等于系统内存不足。",
++            Some(libc::SIGABRT) => return "进程收到 SIGABRT（异常终止）；请结合错误输出确认原因。",
++            _ => {}
++        }
++    }
++    #[cfg(windows)]
++    match status.code().map(|code| code as u32) {
++        Some(0xC000001D) => return "Windows 报告非法指令；请结合 CPU／虚拟化环境及错误输出排查，也可能是运行时自身崩溃。",
++        Some(0xC0000135) => return "Windows 报告缺少运行所需的 DLL；请结合错误输出和系统事件日志确认具体组件。",
++        Some(0xC000007B) => return "Windows 报告程序或依赖库格式无效；请核对文件完整性与处理器架构。",
++        Some(0xC0000005) => return "Windows 报告内存访问异常；这是运行时崩溃，不等于系统内存不足。",
++        _ => {}
++    }
++    "请结合退出详情和错误输出排查；尚不能判断是系统环境问题还是 Bun 自身故障。"
++}
++
++fn extract(bytes: &[u8], target: &str, destination: &Path) -> Result<(), String> {
++    use std::io::{Read, Write};
++    let mut zip =
++        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|error| error.to_string())?;
++    let expected = format!("{target}/{}", executable());
++    let mut file = zip
++        .by_name(&expected)
++        .map_err(|_| "Bun 下载包缺少当前平台入口".to_string())?;
++    if file.size() > 300 * 1024 * 1024
++        || file.is_dir()
++        || file
++            .unix_mode()
++            .is_some_and(|mode| mode & 0o170000 == 0o120000)
++    {
++        return Err("Bun 下载包入口无效".into());
++    }
++    let directory = destination.parent().ok_or("Bun 安装路径无效")?;
++    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
++    let mut temporary =
++        tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
++    let copied = std::io::copy(
++        &mut file.by_ref().take(300 * 1024 * 1024 + 1),
++        &mut temporary,
++    )
++    .map_err(|error| error.to_string())?;
++    if copied > 300 * 1024 * 1024 {
++        return Err("Bun 入口超过大小限制".into());
++    }
++    temporary
++        .flush()
++        .and_then(|()| temporary.as_file().sync_all())
++        .map_err(|error| error.to_string())?;
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::PermissionsExt;
++        temporary
++            .as_file()
++            .set_permissions(std::fs::Permissions::from_mode(0o755))
++            .map_err(|error| error.to_string())?;
++    }
++    temporary
++        .persist_noclobber(destination)
++        .map_err(|error| error.to_string())?;
++    Ok(())
++}
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/dependencies.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/dependencies.rs
+index 560db15..2841d7c 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/dependencies.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/dependencies.rs
+@@ -1,62 +1,80 @@
+-use std::path::Path;
+-use std::process::Stdio;
+-use std::time::Duration;
+-
+-use serde_json::Value;
+-
+-/// 清单里明确声明的入口（exports / main），不含任何猜测出来的兜底路径。
+-pub(super) fn declared_entries(package: &Value) -> Vec<String> {
+-    fn pick(value: &Value) -> Option<&str> {
+-        value.as_str().or_else(|| ["import", "default", "node", "require", "bun"].iter()
+-            .find_map(|key| value.get(*key).and_then(pick)))
+-    }
+-    [package.get("exports").and_then(|exports| exports.get("./server")).and_then(pick), package["main"].as_str(),
+-        package.get("exports").and_then(|exports| exports.get(".")).and_then(pick), package.get("exports").and_then(pick)]
+-        .into_iter().flatten().map(str::to_string).collect()
+-}
+-
+-pub(super) fn entries(package: &Value) -> Vec<String> {
+-    let mut paths = declared_entries(package);
+-    paths.extend(["index.ts", "index.tsx", "index.js", "index.mjs", "index.cjs"].iter().map(|path| path.to_string()));
+-    paths
+-}
+-
+-pub(super) async fn install(package: &super::storage::Package, executable: &Path) -> Result<(), String> {
+-    let directory = super::storage::directory(package)?;
+-    let manifest: Value = serde_json::from_slice(&std::fs::read(directory.join("package.json")).map_err(|error| error.to_string())?)
+-        .map_err(|_| "插件清单无法解析")?;
+-    if !["dependencies", "optionalDependencies", "peerDependencies"].iter().any(|key| manifest[*key].as_object().is_some_and(|items| !items.is_empty())) {
+-        return Ok(());
+-    }
+-    if directory.join(".agent2api-dependencies").is_file() { return Ok(()); }
+-    super::operations::stage("dependencies", "正在安装提供商插件依赖（不执行安装脚本）");
+-    let temporary = tempfile::tempdir_in(super::root()).map_err(|error| error.to_string())?;
+-    let mut dependency_manifest = serde_json::Map::new();
+-    dependency_manifest.insert("name".into(), Value::String("agent2api-provider-dependencies".into()));
+-    dependency_manifest.insert("private".into(), Value::Bool(true));
+-    for key in ["dependencies", "optionalDependencies", "peerDependencies", "peerDependenciesMeta", "overrides", "resolutions"] {
+-        if let Some(value) = manifest.get(key) { dependency_manifest.insert(key.into(), value.clone()); }
+-    }
+-    super::storage::atomic_write(&temporary.path().join("package.json"), &serde_json::to_vec(&dependency_manifest).map_err(|error| error.to_string())?)?;
+-    super::storage::atomic_write(&temporary.path().join("bunfig.toml"), b"env = false\n[install]\nregistry = \"https://registry.npmjs.org\"\n")?;
+-    let mut command = tokio::process::Command::new(executable);
+-    command.args(["install", "--production", "--ignore-scripts", "--no-progress", "--no-env-file"])
+-        .current_dir(temporary.path()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
+-    #[cfg(windows)]
+-    command.creation_flags(0x0800_0000);
+-    for (key, _) in std::env::vars_os() {
+-        let upper = key.to_string_lossy().to_ascii_uppercase();
+-        if upper.contains("TOKEN") || upper.contains("SECRET") || upper.contains("PASSWORD") || upper.contains("API_KEY")
+-            || matches!(upper.as_str(), "NODE_OPTIONS" | "BUN_OPTIONS" | "NPM_CONFIG_USERCONFIG") { command.env_remove(key); }
+-    }
+-    let status = tokio::time::timeout(Duration::from_secs(180), command.status()).await
+-        .map_err(|_| "插件依赖安装超时，未加载插件")?.map_err(|error| format!("插件依赖安装失败：{error}"))?;
+-    if !status.success() { return Err("插件依赖安装失败；请检查 npm 网络、依赖版本和平台支持".into()); }
+-    let modules = temporary.path().join("node_modules");
+-    if modules.is_dir() {
+-        let target = directory.join("node_modules");
+-        if target.exists() { return Err("插件包已包含 node_modules，未覆盖已有依赖".into()); }
+-        std::fs::rename(modules, target).map_err(|error| format!("保存插件依赖失败：{error}"))?;
+-    }
+-    super::storage::atomic_write(&directory.join(".agent2api-dependencies"), b"ignore-scripts\n")
+-}
++use std::path::Path;
++use std::process::Stdio;
++use std::time::Duration;
++
++use serde_json::Value;
++
++/// 清单里明确声明的入口（exports / main），不含任何猜测出来的兜底路径。
++pub(super) fn declared_entries(package: &Value) -> Vec<String> {
++    fn pick(value: &Value) -> Option<&str> {
++        value.as_str().or_else(|| ["import", "default", "node", "require", "bun"].iter()
++            .find_map(|key| value.get(*key).and_then(pick)))
++    }
++    [package.get("exports").and_then(|exports| exports.get("./server")).and_then(pick), package["main"].as_str(),
++        package.get("exports").and_then(|exports| exports.get(".")).and_then(pick), package.get("exports").and_then(pick)]
++        .into_iter().flatten().map(str::to_string).collect()
++}
++
++pub(super) fn entries(package: &Value) -> Vec<String> {
++    let mut paths = declared_entries(package);
++    paths.extend(["index.ts", "index.tsx", "index.js", "index.mjs", "index.cjs"].iter().map(|path| path.to_string()));
++    paths
++}
++
++/// 这支插件**是否真的需要解析依赖**。
++///
++/// ── 为什么单独抽出来 ──────────────────────────────────────────
++/// 阶段 0 的 iOS 形态里，网关侧可能**没有任何 JS 运行时**（bun.rs 的 asset() 没有 ios 分支）。
++/// 那时"要不要拒绝安装"完全取决于这个判定：Magpie dist 发布的是已构建产物
++/// （实测 `dependencies` 为空），没有运行时也能跑；真声明了依赖的包才必须拒绝。
++/// `install` 与 `operations` 共用这一份判定，避免两处各写一遍而分叉。
++pub(super) fn requires_install(package: &super::storage::Package) -> Result<bool, String> {
++    let directory = super::storage::directory(package)?;
++    let manifest: Value = serde_json::from_slice(&std::fs::read(directory.join("package.json")).map_err(|error| error.to_string())?)
++        .map_err(|_| "插件清单无法解析")?;
++    Ok(needs_dependencies(&manifest))
++}
++
++/// 判定本体：只看依赖字段是否**非空**（部署清单里的空对象不算需要装）
++fn needs_dependencies(manifest: &Value) -> bool {
++    ["dependencies", "optionalDependencies", "peerDependencies"].iter()
++        .any(|key| manifest[*key].as_object().is_some_and(|items| !items.is_empty()))
++}
++
++pub(super) async fn install(package: &super::storage::Package, executable: &Path) -> Result<(), String> {
++    let directory = super::storage::directory(package)?;
++    let manifest: Value = serde_json::from_slice(&std::fs::read(directory.join("package.json")).map_err(|error| error.to_string())?)
++        .map_err(|_| "插件清单无法解析")?;
++    if !needs_dependencies(&manifest) { return Ok(()); }
++    if directory.join(".agent2api-dependencies").is_file() { return Ok(()); }
++    super::operations::stage("dependencies", "正在安装提供商插件依赖（不执行安装脚本）");
++    let temporary = tempfile::tempdir_in(super::root()).map_err(|error| error.to_string())?;
++    let mut dependency_manifest = serde_json::Map::new();
++    dependency_manifest.insert("name".into(), Value::String("agent2api-provider-dependencies".into()));
++    dependency_manifest.insert("private".into(), Value::Bool(true));
++    for key in ["dependencies", "optionalDependencies", "peerDependencies", "peerDependenciesMeta", "overrides", "resolutions"] {
++        if let Some(value) = manifest.get(key) { dependency_manifest.insert(key.into(), value.clone()); }
++    }
++    super::storage::atomic_write(&temporary.path().join("package.json"), &serde_json::to_vec(&dependency_manifest).map_err(|error| error.to_string())?)?;
++    super::storage::atomic_write(&temporary.path().join("bunfig.toml"), b"env = false\n[install]\nregistry = \"https://registry.npmjs.org\"\n")?;
++    let mut command = tokio::process::Command::new(executable);
++    command.args(["install", "--production", "--ignore-scripts", "--no-progress", "--no-env-file"])
++        .current_dir(temporary.path()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
++    #[cfg(windows)]
++    command.creation_flags(0x0800_0000);
++    for (key, _) in std::env::vars_os() {
++        let upper = key.to_string_lossy().to_ascii_uppercase();
++        if upper.contains("TOKEN") || upper.contains("SECRET") || upper.contains("PASSWORD") || upper.contains("API_KEY")
++            || matches!(upper.as_str(), "NODE_OPTIONS" | "BUN_OPTIONS" | "NPM_CONFIG_USERCONFIG") { command.env_remove(key); }
++    }
++    let status = tokio::time::timeout(Duration::from_secs(180), command.status()).await
++        .map_err(|_| "插件依赖安装超时，未加载插件")?.map_err(|error| format!("插件依赖安装失败：{error}"))?;
++    if !status.success() { return Err("插件依赖安装失败；请检查 npm 网络、依赖版本和平台支持".into()); }
++    let modules = temporary.path().join("node_modules");
++    if modules.is_dir() {
++        let target = directory.join("node_modules");
++        if target.exists() { return Err("插件包已包含 node_modules，未覆盖已有依赖".into()); }
++        std::fs::rename(modules, target).map_err(|error| format!("保存插件依赖失败：{error}"))?;
++    }
++    super::storage::atomic_write(&directory.join(".agent2api-dependencies"), b"ignore-scripts\n")
++}
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
+index 9749fbe..b64abe3 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/operations.rs
+@@ -1,285 +1,318 @@
+-use std::sync::{atomic::{AtomicU64, Ordering}, Mutex, OnceLock};
+-use std::time::Duration;
+-
+-use serde_json::{json, Value};
+-
+-use super::storage::Registry;
+-use crate::server::core::account_store::plugin_accounts;
+-use crate::server::core::plugin_host;
+-
+-fn state() -> &'static Mutex<Value> {
+-    static STATE: OnceLock<Mutex<Value>> = OnceLock::new();
+-    STATE.get_or_init(|| Mutex::new(json!({ "active": false })))
+-}
+-
+-pub fn operation() -> Value {
+-    state()
+-        .lock()
+-        .map(|value| value.clone())
+-        .unwrap_or(Value::Null)
+-}
+-
+-pub fn stage(stage: &str, message: &str) {
+-    if let Ok(mut value) = state().lock() {
+-        value["stage"] = json!(stage);
+-        value["message"] = json!(message);
+-        value["received"] = json!(0);
+-    }
+-}
+-
+-pub fn download_progress(received: usize) {
+-    if let Ok(mut value) = state().lock() {
+-        value["received"] = json!(received);
+-    }
+-}
+-
+-pub(super) fn begin(action: &str, target: Value) -> Result<(), String> {
+-    let mut value = state().lock().map_err(|_| "脚本插件任务不可用")?;
+-    if value["active"] == true {
+-        return Err("已有脚本插件任务正在执行".into());
+-    }
+-    static SEQUENCE: AtomicU64 = AtomicU64::new(1);
+-    let started_at = crate::server::logging::now_ms();
+-    let operation_id = format!("{}-{}-{}", std::process::id(), started_at, SEQUENCE.fetch_add(1, Ordering::Relaxed));
+-    *value = json!({ "active": true, "action": action, "target": target, "stage": "starting", "received": 0,
+-        "operationId": operation_id, "startedAt": started_at, "error": null });
+-    Ok(())
+-}
+-
+-pub(super) fn finished(result: Result<(), String>) {
+-    super::icons::wake(false);
+-    // 装了／更了／卸了之后可更新状态必须重算：自动检查的间隔是 6 小时，不强制的话
+-    // 刚更新完的插件会顶着一小时前的旧结论继续显示「可更新」（点进去才发现没有）。
+-    super::updates::wake(true);
+-    if let Ok(mut value) = state().lock() {
+-        value["active"] = json!(false);
+-        value["updatedAt"] = json!(crate::server::logging::now_ms());
+-        value["stage"] = json!(if result.is_ok() { "done" } else { "failed" });
+-        value["error"] = json!(result.err());
+-    }
+-}
+-
+-pub fn install(
+-    name: String, version: String, trusted: bool, expected_id: Option<String>,
+-) -> Result<Value, String> {
+-    if !trusted {
+-        return Err("安装脚本插件前必须确认信任来源；脚本并非操作系统沙箱".into());
+-    }
+-    let source = super::source::InstallSource::parse(&name, &version)?;
+-    if let Some(id) = &expected_id {
+-        if !super::storage::read()?.packages.iter().any(|package| &package.id == id) {
+-            return Err("待更新的脚本插件不存在".into());
+-        }
+-    }
+-    let mut target = match &source {
+-        super::source::InstallSource::Local { path } => json!({ "source": format!("file:{}", path.display()) }),
+-        super::source::InstallSource::Npm { name, version } => json!({
+-            "id": super::packages::package_id(name), "name": name, "source": name, "version": version,
+-        }),
+-        super::source::InstallSource::Magpie { name, version } => json!({
+-            "id": super::packages::package_id(name), "name": name, "source": format!("magpie:{name}"), "version": version,
+-        }),
+-        super::source::InstallSource::Github { repository, reference } => json!({
+-            "source": format!("github:{repository}"), "version": reference,
+-        }),
+-    };
+-    if let Some(id) = &expected_id { target["id"] = json!(id); }
+-    begin("install", target)?;
+-    crate::spawn_task(async move {
+-        let result = async {
+-            let executable = super::bun::ensure().await?;
+-            let mut package = source.download().await?;
+-            super::dependencies::install(&package, &executable).await?;
+-            if expected_id.as_ref().is_some_and(|id| id != &package.id) {
+-                return Err("下载的脚本插件包名与待更新插件不一致，未替换原插件".into());
+-            }
+-            if let Ok(mut value) = state().lock() {
+-                value["target"]["id"] = json!(package.id);
+-                value["target"]["name"] = json!(package.name);
+-                value["target"]["version"] = json!(package.version);
+-            }
+-            let before = super::storage::read()?;
+-            let mut after = before.clone();
+-            if let Some(previous) = after.packages.iter_mut().find(|item| item.id == package.id) {
+-                package.enabled = previous.enabled;
+-                package.installed_at = previous.installed_at;
+-                package.providers = previous.providers.clone();
+-                package.options = previous.options.clone();
+-                package.provider_options = previous.provider_options.clone();
+-                package.settings_schema = previous.settings_schema.clone();
+-                package.provider_aliases = previous.provider_aliases.clone();
+-                package.disabled_providers = previous.disabled_providers.clone();
+-                *previous = package;
+-            } else {
+-                if let Some(aliases) = after.identities.get(&package.id) {
+-                    package.provider_aliases = aliases.clone();
+-                    package.providers = aliases.values().cloned().collect();
+-                }
+-                if after.packages.len() >= 64 {
+-                    return Err("最多安装 64 个脚本插件".into());
+-                }
+-                after.packages.push(package);
+-            }
+-            switch(before, after, executable, None).await
+-        }
+-        .await;
+-        finished(result);
+-    });
+-    Ok(operation())
+-}
+-
+-pub fn change(
+-    id: String,
+-    action: String,
+-    enabled: Option<bool>,
+-    provider: Option<String>,
+-) -> Result<Value, String> {
+-    let before = super::storage::read()?;
+-    let mut after = before.clone();
+-    let package = after
+-        .packages
+-        .iter_mut()
+-        .find(|package| package.id == id)
+-        .ok_or("脚本插件不存在")?;
+-    let target = json!({ "id": package.id, "name": package.name, "version": package.version });
+-    match action.as_str() {
+-        "reload" => {
+-            if !package.enabled { return Err("插件已停用，请先启用后再重新加载".into()); }
+-        }
+-        "enable" => package.enabled = enabled.ok_or("缺少启停状态")?,
+-        "checkin" => return Err("签到及附带任务已默认允许，请在签到中心管理执行计划".into()),
+-        "provider" => {
+-            let provider = provider
+-                .filter(|provider| package.providers.contains(provider))
+-                .ok_or("提供商不属于该脚本插件")?;
+-            package.disabled_providers.retain(|id| id != &provider);
+-            if !enabled.ok_or("缺少启停状态")? {
+-                package.disabled_providers.push(provider);
+-            }
+-        }
+-        "remove" => {
+-            let aliases = if package.provider_aliases.is_empty() {
+-                package.providers.iter().map(|id| (id.clone(), id.clone())).collect()
+-            } else { package.provider_aliases.clone() };
+-            if !aliases.is_empty() { after.identities.insert(id.clone(), aliases); }
+-            after.packages.retain(|package| package.id != id);
+-        },
+-        _ => return Err("未知的脚本插件操作".into()),
+-    }
+-    begin(&action, target)?;
+-    crate::spawn_task(async move {
+-        let result = async {
+-            let executable = if after.packages.iter().any(|package| package.enabled) {
+-                super::bun::ensure().await?
+-            } else {
+-                std::path::PathBuf::new()
+-            };
+-            switch(before, after, executable, (action == "reload").then_some(id.as_str())).await
+-        }
+-        .await;
+-        finished(result);
+-    });
+-    Ok(operation())
+-}
+-
+-pub(super) async fn switch(
+-    mut before: Registry,
+-    mut after: Registry,
+-    executable: std::path::PathBuf,
+-    retry: Option<&str>,
+-) -> Result<(), String> {
+-    let store = plugin_accounts::shared().ok_or("账号库尚未就绪")?;
+-    let _mutation = plugin_host::operations::mutation_guard().await;
+-    if let Some(id) = retry {
+-        let current = super::storage::read()?;
+-        if !current.packages.iter().any(|package| package.id == id && package.enabled) {
+-            return Err("插件已停用或移除，未重新加载".into());
+-        }
+-        if plugin_host::startup::status(id).is_some_and(|status| status.phase.pending()) {
+-            return Err("插件仍在加载，请等待当前启动完成".into());
+-        }
+-        if plugin_host::startup::status(id).is_some_and(|status| status.phase == plugin_host::startup::Phase::Ready) {
+-            return Ok(());
+-        }
+-        before = current.clone();
+-        after = current;
+-    }
+-    let current = super::storage::read()?;
+-    if serde_json::to_value(&current).map_err(|error| error.to_string())? != serde_json::to_value(&before).map_err(|error| error.to_string())? {
+-        return Err("插件配置已被其他操作修改，请重新操作".into());
+-    }
+-    let mut ids = super::runtime::all_ids(&before);
+-    ids.extend(super::runtime::all_ids(&after));
+-    let hosts: Vec<_> = super::runtime::host().into_iter().collect();
+-    stage("waiting", "等待脚本插件的在途请求和登录完成");
+-    let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
+-    let guard = loop {
+-        if let Some(guard) = plugin_host::registry::SwitchGuard::begin(&hosts, ids.clone()) {
+-            break guard;
+-        }
+-        if tokio::time::Instant::now() >= deadline {
+-            return Err("脚本插件仍有在途任务，未中断请求；请稍后重试".into());
+-        }
+-        tokio::time::sleep(Duration::from_millis(500)).await;
+-    };
+-    // 切换保护已经取得；在停止、发现新清单或任何登记发布之前关闭已知旧归属。
+-    super::runtime::revoke_ownership_sources(&before);
+-    super::runtime::revoke_ownership_sources(&after);
+-    let before_ids = ids.clone();
+-    stage("loading", "正在加载脚本插件");
+-    let old_executable = hosts.first().map(|host| host.options.exe.clone());
+-    plugin_host::runtime::shutdown_packs(&[super::HOST_ID.to_string()]).await?;
+-    super::transport::clear();
+-    guard.clear_adapters();
+-    let result = async {
+-        let prepared = super::runtime::prepare(&store, &mut after, executable).await?;
+-        if let Some(failed) = after
+-            .packages
+-            .iter()
+-            .find(|package| package.enabled && package.error.is_some())
+-        {
+-            return Err(failed
+-                .error
+-                .clone()
+-                .unwrap_or_else(|| "脚本插件加载失败".into()));
+-        }
+-        // prepare可能发现新provider；磁盘登记本身已可被归属查询观察，必须先撤销再写盘。
+-        super::runtime::revoke_ownership_sources(&after);
+-        super::storage::save(&after)?;
+-        if let Err(error) = super::runtime::activate(&after, prepared) {
+-            super::runtime::revoke_ownership_sources(&after);
+-            super::runtime::revoke_ownership_sources(&before);
+-            super::storage::save(&before)?;
+-            return Err(error);
+-        }
+-        Ok(())
+-    }
+-    .await;
+-    if let Err(error) = result {
+-        // 包括prepare/写盘失败与内存发布失败；恢复原配置不恢复旧来源，也不重发回执。
+-        super::runtime::revoke_ownership_sources(&after);
+-        super::runtime::revoke_ownership_sources(&before);
+-        stage("restoring", "正在恢复原有脚本插件");
+-        plugin_host::runtime::shutdown_packs(&[super::HOST_ID.to_string()]).await?;
+-        super::transport::clear();
+-        for id in super::runtime::all_ids(&after).difference(&before_ids) {
+-            plugin_host::registry::remove(id);
+-        }
+-        super::runtime::clear_owners();
+-        guard.clear_adapters();
+-        if let Some(executable) = old_executable {
+-            let mut restored = before;
+-            if let Err(recovery) =
+-                super::runtime::start_registry(&store, &mut restored, executable).await
+-            {
+-                return Err(format!("{error}；恢复原脚本插件失败：{recovery}"));
+-            }
+-        }
+-        return Err(format!("{error}；原安装记录已保留"));
+-    }
+-    drop(guard);
+-    crate::server::core::providers::catalog::invalidate();
+-    crate::server::core::checkin_schedules::extend_plugin_providers_once();
+-    plugin_host::schedules::wake();
+-    Ok(())
+-}
++use std::sync::{atomic::{AtomicU64, Ordering}, Mutex, OnceLock};
++use std::time::Duration;
++
++use serde_json::{json, Value};
++
++use super::storage::Registry;
++use crate::server::core::account_store::plugin_accounts;
++use crate::server::core::plugin_host;
++
++fn state() -> &'static Mutex<Value> {
++    static STATE: OnceLock<Mutex<Value>> = OnceLock::new();
++    STATE.get_or_init(|| Mutex::new(json!({ "active": false })))
++}
++
++pub fn operation() -> Value {
++    state()
++        .lock()
++        .map(|value| value.clone())
++        .unwrap_or(Value::Null)
++}
++
++pub fn stage(stage: &str, message: &str) {
++    if let Ok(mut value) = state().lock() {
++        value["stage"] = json!(stage);
++        value["message"] = json!(message);
++        value["received"] = json!(0);
++    }
++}
++
++pub fn download_progress(received: usize) {
++    if let Ok(mut value) = state().lock() {
++        value["received"] = json!(received);
++    }
++}
++
++pub(super) fn begin(action: &str, target: Value) -> Result<(), String> {
++    let mut value = state().lock().map_err(|_| "脚本插件任务不可用")?;
++    if value["active"] == true {
++        return Err("已有脚本插件任务正在执行".into());
++    }
++    static SEQUENCE: AtomicU64 = AtomicU64::new(1);
++    let started_at = crate::server::logging::now_ms();
++    let operation_id = format!("{}-{}-{}", std::process::id(), started_at, SEQUENCE.fetch_add(1, Ordering::Relaxed));
++    *value = json!({ "active": true, "action": action, "target": target, "stage": "starting", "received": 0,
++        "operationId": operation_id, "startedAt": started_at, "error": null });
++    Ok(())
++}
++
++pub(super) fn finished(result: Result<(), String>) {
++    super::icons::wake(false);
++    // 装了／更了／卸了之后可更新状态必须重算：自动检查的间隔是 6 小时，不强制的话
++    // 刚更新完的插件会顶着一小时前的旧结论继续显示「可更新」（点进去才发现没有）。
++    super::updates::wake(true);
++    if let Ok(mut value) = state().lock() {
++        value["active"] = json!(false);
++        value["updatedAt"] = json!(crate::server::logging::now_ms());
++        value["stage"] = json!(if result.is_ok() { "done" } else { "failed" });
++        value["error"] = json!(result.err());
++    }
++}
++
++pub fn install(
++    name: String, version: String, trusted: bool, expected_id: Option<String>,
++) -> Result<Value, String> {
++    if !trusted {
++        return Err("安装脚本插件前必须确认信任来源；脚本并非操作系统沙箱".into());
++    }
++    let source = super::source::InstallSource::parse(&name, &version)?;
++    if let Some(id) = &expected_id {
++        if !super::storage::read()?.packages.iter().any(|package| &package.id == id) {
++            return Err("待更新的脚本插件不存在".into());
++        }
++    }
++    let mut target = match &source {
++        super::source::InstallSource::Local { path } => json!({ "source": format!("file:{}", path.display()) }),
++        super::source::InstallSource::Npm { name, version } => json!({
++            "id": super::packages::package_id(name), "name": name, "source": name, "version": version,
++        }),
++        super::source::InstallSource::Magpie { name, version } => json!({
++            "id": super::packages::package_id(name), "name": name, "source": format!("magpie:{name}"), "version": version,
++        }),
++        super::source::InstallSource::Github { repository, reference } => json!({
++            "source": format!("github:{repository}"), "version": reference,
++        }),
++    };
++    if let Some(id) = &expected_id { target["id"] = json!(id); }
++    begin("install", target)?;
++    crate::spawn_task(async move {
++        let result = async {
++            // **先下载**：这一步不需要运行时（Magpie dist 发布的已是构建产物）。
++            // 原来是 `bun::ensure()` 在前、下载在后 —— iOS 上第一步就失败，包从未下载过。
++            let mut package = source.download().await?;
++            // 取运行时**不再等于装不上**：没有运行时时，只有"确实声明了依赖"的包才拒绝。
++            // `executable` 的类型必须是 **PathBuf**（不是 Option）：下面第 120 行的
++            // `switch(before, after, executable, None)` 与 reload 那条路都要它；
++            // 没有运行时时用空路径占位 —— 与源码里原有的写法一致（见 switch 调用处的 else 分支）。
++            let executable = match super::bun::ensure().await.ok() {
++                Some(executable) => {
++                    super::dependencies::install(&package, &executable).await?;
++                    executable
++                }
++                None => {
++                    if super::dependencies::requires_install(&package)? {
++                        return Err("这支插件声明了依赖，需要先解析才能运行；当前平台没有可用的脚本运行时。请在桌面端安装，或等待把它适配到本平台。".into());
++                    }
++                    std::path::PathBuf::new()
++                }
++            };
++            if expected_id.as_ref().is_some_and(|id| id != &package.id) {
++                return Err("下载的脚本插件包名与待更新插件不一致，未替换原插件".into());
++            }
++            if let Ok(mut value) = state().lock() {
++                value["target"]["id"] = json!(package.id);
++                value["target"]["name"] = json!(package.name);
++                value["target"]["version"] = json!(package.version);
++            }
++            let before = super::storage::read()?;
++            let mut after = before.clone();
++            if let Some(previous) = after.packages.iter_mut().find(|item| item.id == package.id) {
++                package.enabled = previous.enabled;
++                package.installed_at = previous.installed_at;
++                package.providers = previous.providers.clone();
++                package.options = previous.options.clone();
++                package.provider_options = previous.provider_options.clone();
++                package.settings_schema = previous.settings_schema.clone();
++                package.provider_aliases = previous.provider_aliases.clone();
++                package.disabled_providers = previous.disabled_providers.clone();
++                *previous = package;
++            } else {
++                if let Some(aliases) = after.identities.get(&package.id) {
++                    package.provider_aliases = aliases.clone();
++                    package.providers = aliases.values().cloned().collect();
++                }
++                if after.packages.len() >= 64 {
++                    return Err("最多安装 64 个脚本插件".into());
++                }
++                after.packages.push(package);
++            }
++            switch(before, after, executable, None).await
++        }
++        .await;
++        finished(result);
++    });
++    Ok(operation())
++}
++
++pub fn change(
++    id: String,
++    action: String,
++    enabled: Option<bool>,
++    provider: Option<String>,
++) -> Result<Value, String> {
++    let before = super::storage::read()?;
++    let mut after = before.clone();
++    let package = after
++        .packages
++        .iter_mut()
++        .find(|package| package.id == id)
++        .ok_or("脚本插件不存在")?;
++    let target = json!({ "id": package.id, "name": package.name, "version": package.version });
++    match action.as_str() {
++        "reload" => {
++            if !package.enabled { return Err("插件已停用，请先启用后再重新加载".into()); }
++        }
++        "enable" => package.enabled = enabled.ok_or("缺少启停状态")?,
++        "checkin" => return Err("签到及附带任务已默认允许，请在签到中心管理执行计划".into()),
++        "provider" => {
++            let provider = provider
++                .filter(|provider| package.providers.contains(provider))
++                .ok_or("提供商不属于该脚本插件")?;
++            package.disabled_providers.retain(|id| id != &provider);
++            if !enabled.ok_or("缺少启停状态")? {
++                package.disabled_providers.push(provider);
++            }
++        }
++        "remove" => {
++            let aliases = if package.provider_aliases.is_empty() {
++                package.providers.iter().map(|id| (id.clone(), id.clone())).collect()
++            } else { package.provider_aliases.clone() };
++            if !aliases.is_empty() { after.identities.insert(id.clone(), aliases); }
++            after.packages.retain(|package| package.id != id);
++        },
++        _ => return Err("未知的脚本插件操作".into()),
++    }
++    begin(&action, target)?;
++    crate::spawn_task(async move {
++        let result = async {
++            // 与 install 同一套：没有运行时时，只有"确实声明了依赖且处于启用状态"的包才拒绝。
++            let executable = if after.packages.iter().any(|package| package.enabled) {
++                match super::bun::ensure().await {
++                    Ok(executable) => executable,
++                    Err(_) => {
++                        let mut blocked = None;
++                        for package in after.packages.iter().filter(|package| package.enabled) {
++                            if super::dependencies::requires_install(package).unwrap_or(false) {
++                                blocked = Some(package.id.clone());
++                                break;
++                            }
++                        }
++                        match blocked {
++                            Some(id) => return Err(format!(
++                                "脚本插件「{id}」声明了依赖，需要先解析才能运行；当前平台没有可用的脚本运行时。请在桌面端安装，或等待适配到本平台。")),
++                            None => std::path::PathBuf::new(),
++                        }
++                    }
++                }
++            } else {
++                std::path::PathBuf::new()
++            };
++            switch(before, after, executable, (action == "reload").then_some(id.as_str())).await
++        }
++        .await;
++        finished(result);
++    });
++    Ok(operation())
++}
++
++pub(super) async fn switch(
++    mut before: Registry,
++    mut after: Registry,
++    executable: std::path::PathBuf,
++    retry: Option<&str>,
++) -> Result<(), String> {
++    let store = plugin_accounts::shared().ok_or("账号库尚未就绪")?;
++    let _mutation = plugin_host::operations::mutation_guard().await;
++    if let Some(id) = retry {
++        let current = super::storage::read()?;
++        if !current.packages.iter().any(|package| package.id == id && package.enabled) {
++            return Err("插件已停用或移除，未重新加载".into());
++        }
++        if plugin_host::startup::status(id).is_some_and(|status| status.phase.pending()) {
++            return Err("插件仍在加载，请等待当前启动完成".into());
++        }
++        if plugin_host::startup::status(id).is_some_and(|status| status.phase == plugin_host::startup::Phase::Ready) {
++            return Ok(());
++        }
++        before = current.clone();
++        after = current;
++    }
++    let current = super::storage::read()?;
++    if serde_json::to_value(&current).map_err(|error| error.to_string())? != serde_json::to_value(&before).map_err(|error| error.to_string())? {
++        return Err("插件配置已被其他操作修改，请重新操作".into());
++    }
++    let mut ids = super::runtime::all_ids(&before);
++    ids.extend(super::runtime::all_ids(&after));
++    let hosts: Vec<_> = super::runtime::host().into_iter().collect();
++    stage("waiting", "等待脚本插件的在途请求和登录完成");
++    let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
++    let guard = loop {
++        if let Some(guard) = plugin_host::registry::SwitchGuard::begin(&hosts, ids.clone()) {
++            break guard;
++        }
++        if tokio::time::Instant::now() >= deadline {
++            return Err("脚本插件仍有在途任务，未中断请求；请稍后重试".into());
++        }
++        tokio::time::sleep(Duration::from_millis(500)).await;
++    };
++    // 切换保护已经取得；在停止、发现新清单或任何登记发布之前关闭已知旧归属。
++    super::runtime::revoke_ownership_sources(&before);
++    super::runtime::revoke_ownership_sources(&after);
++    let before_ids = ids.clone();
++    stage("loading", "正在加载脚本插件");
++    let old_executable = hosts.first().map(|host| host.options.exe.clone());
++    plugin_host::runtime::shutdown_packs(&[super::HOST_ID.to_string()]).await?;
++    super::transport::clear();
++    guard.clear_adapters();
++    let result = async {
++        let prepared = super::runtime::prepare(&store, &mut after, executable).await?;
++        if let Some(failed) = after
++            .packages
++            .iter()
++            .find(|package| package.enabled && package.error.is_some())
++        {
++            return Err(failed
++                .error
++                .clone()
++                .unwrap_or_else(|| "脚本插件加载失败".into()));
++        }
++        // prepare可能发现新provider；磁盘登记本身已可被归属查询观察，必须先撤销再写盘。
++        super::runtime::revoke_ownership_sources(&after);
++        super::storage::save(&after)?;
++        if let Err(error) = super::runtime::activate(&after, prepared) {
++            super::runtime::revoke_ownership_sources(&after);
++            super::runtime::revoke_ownership_sources(&before);
++            super::storage::save(&before)?;
++            return Err(error);
++        }
++        Ok(())
++    }
++    .await;
++    if let Err(error) = result {
++        // 包括prepare/写盘失败与内存发布失败；恢复原配置不恢复旧来源，也不重发回执。
++        super::runtime::revoke_ownership_sources(&after);
++        super::runtime::revoke_ownership_sources(&before);
++        stage("restoring", "正在恢复原有脚本插件");
++        plugin_host::runtime::shutdown_packs(&[super::HOST_ID.to_string()]).await?;
++        super::transport::clear();
++        for id in super::runtime::all_ids(&after).difference(&before_ids) {
++            plugin_host::registry::remove(id);
++        }
++        super::runtime::clear_owners();
++        guard.clear_adapters();
++        if let Some(executable) = old_executable {
++            let mut restored = before;
++            if let Err(recovery) =
++                super::runtime::start_registry(&store, &mut restored, executable).await
++            {
++                return Err(format!("{error}；恢复原脚本插件失败：{recovery}"));
++            }
++        }
++        return Err(format!("{error}；原安装记录已保留"));
++    }
++    drop(guard);
++    crate::server::core::providers::catalog::invalidate();
++    crate::server::core::checkin_schedules::extend_plugin_providers_once();
++    plugin_host::schedules::wake();
++    Ok(())
++}
