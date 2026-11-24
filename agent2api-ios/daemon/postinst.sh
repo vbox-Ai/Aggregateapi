@@ -150,6 +150,7 @@ write_plist() {
     <key>AGENT2API_PLUGIN_CATALOG_URL</key><string>https://raw.githubusercontent.com/vbox-Ai/Aggregateapi/main/catalog.json</string>
     <key>AGENT2API_PLUGIN_ASSET_ORIGINS</key><string>https://github.com</string>
     <key>AGENT2API_ALLOW_UNSIGNED_PLUGINS</key><string>1</string>
+    <key>AGENT2API_MAGPIE_BASE</key><string>https://raw.githubusercontent.com/magpie-community/plugins/dist</string>
     <key>AGENT2API_INPROC</key><string>1</string>
     <key>AGENT2API_ALLOW_UNSIGNED_PLUGIN_INSTALL</key><string>1</string>
     <key>AGENT2API_DEPLOY</key><string>ios</string>

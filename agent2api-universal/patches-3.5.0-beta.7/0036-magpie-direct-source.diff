@@ -1,0 +1,207 @@
+diff --git a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+index 7afe021..4f211ec 100644
+--- a/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
++++ b/desktop-tauri/src-tauri/server/src/server/core/plugin_host/script/distribution.rs
+@@ -1,78 +1,124 @@
+-use serde_json::Value;
+-
+-use super::storage::{Package, PackageSource};
+-
+-const INDEX_URL: &str = super::website::DISTRIBUTION;
+-const LEGACY_INDEX_URL: &str = super::website::LEGACY_DISTRIBUTION;
+-const INDEX_LIMIT: usize = 16 * 1024 * 1024;
+-
+-/// 官方分发索引（`dist` 分支的 `index.json`）：下载与「检查更新」共用一份读法。
+-/// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
+-///
+-/// 只缓存**解析并校验过**的值，TTL 10 分钟；刷新目录时清空，保证「手动刷新」
+-/// 永远是新鲜数据。
+-static INDEX_CACHE: std::sync::Mutex<Option<(i64, Value)>> = std::sync::Mutex::new(None);
+-const INDEX_CACHE_TTL_MS: i64 = 10 * 60 * 1000;
+-
+-pub(super) fn invalidate_index_cache() {
+-    if let Ok(mut cache) = INDEX_CACHE.lock() {
+-        *cache = None;
+-    }
+-}
+-
+-pub(super) async fn index() -> Result<Value, String> {
+-    let now = crate::server::logging::now_ms();
+-    if let Ok(cache) = INDEX_CACHE.lock() {
+-        if let Some((at, cached)) = cache.as_ref() {
+-            if now.saturating_sub(*at) < INDEX_CACHE_TTL_MS {
+-                return Ok(cached.clone());
+-            }
+-        }
+-    }
+-    let bytes = super::website::bytes_with_fallback(INDEX_URL, LEGACY_INDEX_URL, INDEX_LIMIT).await?;
+-    let index: Value = serde_json::from_slice(&bytes).map_err(|_| "Magpie 社区索引无法解析")?;
+-    if index["version"].as_u64() != Some(1) {
+-        return Err("Magpie 社区分发索引版本暂不兼容".into());
+-    }
+-    if let Ok(mut cache) = INDEX_CACHE.lock() {
+-        *cache = Some((now, index.clone()));
+-    }
+-    Ok(index)
+-}
+-
+-pub(super) async fn download(name: &str, selector: &str) -> Result<Package, String> {
+-    super::operations::stage("package", "正在读取 Magpie 社区分发索引");
+-    let index = index().await?;
+-    let package = index["packages"].get(name).ok_or("Magpie 社区分发源没有这个插件")?;
+-    let version = if selector.is_empty() || selector == "latest" {
+-        package["latest"].as_str().ok_or("Magpie 插件缺少最新版本")?
+-    } else {
+-        selector
+-    };
+-    if version.is_empty() || !super::source::valid_version(version) {
+-        return Err("Magpie 插件版本无效".into());
+-    }
+-    let release = package["versions"].get(version).ok_or("Magpie 社区分发源没有这个版本")?;
+-    if release["manifest"]["name"].as_str() != Some(name)
+-        || release["manifest"]["version"].as_str() != Some(version)
+-    {
+-        return Err("Magpie 分发索引的插件身份不一致".into());
+-    }
+-    let file = release["file"].as_str().ok_or("Magpie 插件缺少下载文件")?;
+-    let filename = file.strip_prefix("tgz/").ok_or("Magpie 插件下载地址不属于受控分发目录")?;
+-    if filename.is_empty() || filename.len() > 240 || filename.starts_with('.')
+-        || filename.contains("..") || !filename.ends_with(".tgz")
+-        || !filename.bytes().all(|ch| ch.is_ascii_alphanumeric() || b"-_.".contains(&ch))
+-    {
+-        return Err("Magpie 插件下载文件名无效".into());
+-    }
+-    let integrity = release["integrity"].as_str().filter(|value| {
+-        value.starts_with("sha512-") && !value.chars().any(char::is_whitespace)
+-    }).ok_or("Magpie 插件缺少 SHA-512 完整性校验值")?;
+-    super::operations::stage("package", "正在下载 Magpie 社区脚本插件");
+-    let download_url = super::website::url("magpie-file", &[("file", file)])?;
+-    let archive = super::download::github_bytes(&download_url, super::packages::MAX_PACKAGE_BYTES).await?;
+-    super::packages::verify_integrity(&archive, integrity)?;
+-    let source = PackageSource::Magpie { file: file.into(), integrity: integrity.into() };
+-    super::packages::store_archive(archive, Some((name.into(), version.into())), Some(source)).await
+-}
++use serde_json::Value;
++
++use super::storage::{Package, PackageSource};
++
++const INDEX_URL: &str = super::website::DISTRIBUTION;
++const LEGACY_INDEX_URL: &str = super::website::LEGACY_DISTRIBUTION;
++const INDEX_LIMIT: usize = 16 * 1024 * 1024;
++
++/// 自建 Magpie 源（`AGENT2API_MAGPIE_BASE`）。
++///
++/// 设成 `https://raw.githubusercontent.com/magpie-community/plugins/dist` 时，索引与
++/// tgz 都直连 GitHub，绕开官网与 CDN 中转 —— 越狱机访问 `agent2api.dev` 经常在
++/// 「正在读取 Magpie 社区分发索引」这一步卡到超时。不设则完全走官方链路。
++fn magpie_base() -> Option<String> {
++    std::env::var("AGENT2API_MAGPIE_BASE")
++        .ok()
++        .map(|value| value.trim().trim_end_matches('/').to_string())
++        .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
++}
++
++/// 直连抓字节（任意主机）：带 UA、状态码与大小上限，不经过 `website::convert`。
++async fn direct_bytes(url: &str, limit: usize) -> Result<Vec<u8>, String> {
++    use crate::server::core::update::client;
++    use futures::StreamExt;
++    let headers = vec![("User-Agent".to_string(), "Agent2API-magpie".to_string())];
++    let response = client::fetch_public(url, &headers, Some(45_000)).await?;
++    if !response.status().is_success() {
++        return Err(format!("Magpie 源返回 HTTP {}", response.status().as_u16()));
++    }
++    if response.content_length().is_some_and(|length| length > limit as u64) {
++        return Err("Magpie 资源超过允许大小".into());
++    }
++    let mut out = Vec::new();
++    let mut stream = response.bytes_stream();
++    while let Some(chunk) = stream.next().await {
++        let chunk = chunk.map_err(|error| format!("读取 Magpie 资源失败：{error}"))?;
++        if out.len().saturating_add(chunk.len()) > limit {
++            return Err("Magpie 资源超过允许大小".into());
++        }
++        out.extend_from_slice(&chunk);
++    }
++    Ok(out)
++}
++
++/// 官方分发索引（`dist` 分支的 `index.json`）：下载与「检查更新」共用一份读法。
++/// 索引缓存：目录刷新刚拉过一次，紧接着的安装不该再下这 2.9 MB。
++///
++/// 只缓存**解析并校验过**的值，TTL 10 分钟；刷新目录时清空，保证「手动刷新」
++/// 永远是新鲜数据。
++static INDEX_CACHE: std::sync::Mutex<Option<(i64, Value)>> = std::sync::Mutex::new(None);
++const INDEX_CACHE_TTL_MS: i64 = 10 * 60 * 1000;
++
++pub(super) fn invalidate_index_cache() {
++    if let Ok(mut cache) = INDEX_CACHE.lock() {
++        *cache = None;
++    }
++}
++
++pub(super) async fn index() -> Result<Value, String> {
++    let now = crate::server::logging::now_ms();
++    if let Ok(cache) = INDEX_CACHE.lock() {
++        if let Some((at, cached)) = cache.as_ref() {
++            if now.saturating_sub(*at) < INDEX_CACHE_TTL_MS {
++                return Ok(cached.clone());
++            }
++        }
++    }
++    let bytes = match magpie_base() {
++        Some(base) => direct_bytes(&format!("{base}/index.json"), INDEX_LIMIT).await?,
++        None => super::website::bytes_with_fallback(INDEX_URL, LEGACY_INDEX_URL, INDEX_LIMIT).await?,
++    };
++    let index: Value = serde_json::from_slice(&bytes).map_err(|_| "Magpie 社区索引无法解析")?;
++    if index["version"].as_u64() != Some(1) {
++        return Err("Magpie 社区分发索引版本暂不兼容".into());
++    }
++    if let Ok(mut cache) = INDEX_CACHE.lock() {
++        *cache = Some((now, index.clone()));
++    }
++    Ok(index)
++}
++
++pub(super) async fn download(name: &str, selector: &str) -> Result<Package, String> {
++    super::operations::stage("package", "正在读取 Magpie 社区分发索引");
++    let index = index().await?;
++    let package = index["packages"].get(name).ok_or("Magpie 社区分发源没有这个插件")?;
++    let version = if selector.is_empty() || selector == "latest" {
++        package["latest"].as_str().ok_or("Magpie 插件缺少最新版本")?
++    } else {
++        selector
++    };
++    if version.is_empty() || !super::source::valid_version(version) {
++        return Err("Magpie 插件版本无效".into());
++    }
++    let release = package["versions"].get(version).ok_or("Magpie 社区分发源没有这个版本")?;
++    if release["manifest"]["name"].as_str() != Some(name)
++        || release["manifest"]["version"].as_str() != Some(version)
++    {
++        return Err("Magpie 分发索引的插件身份不一致".into());
++    }
++    let file = release["file"].as_str().ok_or("Magpie 插件缺少下载文件")?;
++    let filename = file.strip_prefix("tgz/").ok_or("Magpie 插件下载地址不属于受控分发目录")?;
++    if filename.is_empty() || filename.len() > 240 || filename.starts_with('.')
++        || filename.contains("..") || !filename.ends_with(".tgz")
++        || !filename.bytes().all(|ch| ch.is_ascii_alphanumeric() || b"-_.".contains(&ch))
++    {
++        return Err("Magpie 插件下载文件名无效".into());
++    }
++    let integrity = release["integrity"].as_str().filter(|value| {
++        value.starts_with("sha512-") && !value.chars().any(char::is_whitespace)
++    }).ok_or("Magpie 插件缺少 SHA-512 完整性校验值")?;
++    super::operations::stage("package", "正在下载 Magpie 社区脚本插件");
++    let archive = match magpie_base() {
++        Some(base) => {
++            direct_bytes(&format!("{base}/{file}"), super::packages::MAX_PACKAGE_BYTES).await?
++        }
++        None => {
++            let download_url = super::website::url("magpie-file", &[("file", file)])?;
++            super::download::github_bytes(&download_url, super::packages::MAX_PACKAGE_BYTES).await?
++        }
++    };
++    super::packages::verify_integrity(&archive, integrity)?;
++    let source = PackageSource::Magpie { file: file.into(), integrity: integrity.into() };
++    super::packages::store_archive(archive, Some((name.into(), version.into())), Some(source)).await
++}

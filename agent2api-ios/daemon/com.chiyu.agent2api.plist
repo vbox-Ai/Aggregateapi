@@ -41,6 +41,9 @@
 		<string>https://github.com</string>
 		<key>AGENT2API_ALLOW_UNSIGNED_PLUGINS</key>
 		<string>1</string>
+		<!-- Magpie 脚本插件：索引与 tgz 直连 GitHub，绕开官网/CDN 中转（手机上常超时） -->
+		<key>AGENT2API_MAGPIE_BASE</key>
+		<string>https://raw.githubusercontent.com/magpie-community/plugins/dist</string>
 		<key>AGENT2API_INPROC</key>
 		<string>1</string>
 		<key>AGENT2API_ALLOW_UNSIGNED_PLUGIN_INSTALL</key>
